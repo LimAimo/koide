@@ -18,6 +18,14 @@ import { pairFromLocation } from "./services/pairing.js";
 import { settingsStore, saveSettings, applyTheme } from "./services/store.js";
 import { loadServedPacks } from "./animations/diffusion/packs.js";
 
+// Native shells should behave like apps, not zoomable web pages.
+if (runtime.kind === "native") {
+  document.addEventListener("touchmove", (event) => {
+    if (event.touches?.length > 1) event.preventDefault();
+  }, { passive: false });
+  document.addEventListener("gesturestart", (event) => event.preventDefault(), { passive: false });
+}
+
 function boot() {
   applyTheme();
   settingsStore.subscribe(applyTheme);
