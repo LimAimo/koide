@@ -159,7 +159,7 @@ impl ProfileStore {
             }
         }
         out.insert("id".into(), Value::String(id.to_owned()));
-        out.entry("name".into())
+        out.entry("name")
             .or_insert_with(|| Value::String(id.to_owned()));
         out.insert("kind".into(), Value::String(kind.to_owned()));
         if out.get("endpoint").and_then(Value::as_str).unwrap_or("").is_empty() {
@@ -168,7 +168,7 @@ impl ProfileStore {
         if out.get("model").and_then(Value::as_str).is_none() {
             out.insert("model".into(), Value::String(default_model));
         }
-        out.entry("tool_calling".into()).or_insert(Value::Bool(true));
+        out.entry("tool_calling").or_insert(Value::Bool(true));
 
         let mut profiles: Vec<Value> = self
             .profiles()
