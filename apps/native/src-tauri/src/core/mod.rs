@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use agent::AgentState;
 use conversation::ConversationStore;
+use agent::AgentState;
+use conversation::ConversationStore;
 use provider::{list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
@@ -74,6 +76,11 @@ impl NativeCore {
             .ok_or_else(|| RuntimeError::new("NO_WORKSPACE", "请先打开一个项目文件夹"))
     }
 
+    fn conversation_store(&self) -> Result<ConversationStore, RuntimeError> {
+        let key = self.ws()?.storage_key();
+        ConversationStore::new(self.data_dir.join("conversations").join(key))
+    }
+
     fn conversations(&self) -> Result<&ConversationStore, RuntimeError> {
         self.conversations
             .as_ref()
@@ -112,6 +119,45 @@ impl NativeCore {
                 let (profile, key) = self.profiles.get(req_str(&params, "id")?)?;
                 Ok(json!({"ok": true, "reply": test_profile(&profile, key.as_deref())?}))
             }
+            "conv.list" => Ok(json!({"conversations": self.conversation_store()?.list()?})),
+            "conv.get" => self.conversation_store()?.get(req_str(&params, "id")?),
+            "conv.delete" => {
+                self.conversation_store()?.delete(req_str(&params, "id")?)?;
+                Ok(json!({}))
+            }
+            "agent.start" => {
+                let mode = params.get("mode").and_then(Value::as_str).unwrap_or("chat");
+                if mode != "chat" {
+                    return Err(RuntimeError::new(
+                        "MIGRATION_PENDING",
+                        format!("Native Core 的「{mode}」模式仍在迁移；alpha.5 当前先开放纯聊天模式"),
+                    )
+                    .with_data(json!({"mode": mode, "available_modes": ["chat"]})));
+                }
+                let goal = req_str(&params, "goal")?.to_owned();
+                let profile_id = req_str(&params, "profile")?.to_owned();
+                let reasoning = params
+                    .get("reasoning")
+                    .and_then(Value::as_str)
+                    .unwrap_or("auto")
+                    .to_owned();
+                let conversation_id = params
+                    .get("conversation_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let (profile, key) = self.profiles.get(&profile_id)?;
+                let store = self.conversation_store()?;
+                self.agent.start_chat(
+                    app.clone(),
+                    store,
+                    profile,
+                    key,
+                    goal,
+                    conversation_id,
+                    reasoning,
+                )
+            }
+            "agent.stop" => Ok(json!({"stopped": self.agent.stop()})),
             "workspace.open" => {
                 let path = req_str(&params, "path")?;
                 let ws = Workspace::open(path, &self.data_dir)?;
