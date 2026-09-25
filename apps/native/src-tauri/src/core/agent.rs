@@ -75,7 +75,7 @@ impl AgentState {
             };
 
             let mut messages = store.messages(&conversation)?;
-            messages.push(json!({"role": "user", "content": goal}));
+            messages.push(json!({"role": "user", "content": goal.clone()}));
 
             let task_id = unique_id("task-");
             if let Ok(mut slot) = self.task_id.lock() {
@@ -105,12 +105,12 @@ impl AgentState {
         emit(
             &app,
             "agent.started",
-            json!({"task_id": task_id, "goal": goal, "mode": "chat"}),
+            json!({"task_id": task_id.clone(), "goal": goal.clone(), "mode": "chat"}),
         );
         emit(
             &app,
             "agent.status",
-            json!({"task_id": return_task, "state": "thinking", "detail": ""}),
+            json!({"task_id": return_task.clone(), "state": "thinking", "detail": ""}),
         );
 
         thread::spawn(move || {
@@ -118,15 +118,15 @@ impl AgentState {
                 emit(
                     &app,
                     "agent.done",
-                    json!({"task_id": task_id, "status": status, "summary": summary}),
+                    json!({"task_id": task_id.clone(), "status": status, "summary": summary.clone()}),
                 );
                 emit(
                     &app,
                     "agent.status",
                     json!({
-                        "task_id": task_id,
+                        "task_id": task_id.clone(),
                         "state": if status == "error" { "error" } else if status == "stopped" { "stopped" } else { "idle" },
-                        "detail": if status == "error" { summary } else { String::new() }
+                        "detail": if status == "error" { summary.clone() } else { String::new() }
                     }),
                 );
                 running.store(false, Ordering::SeqCst);
@@ -138,7 +138,7 @@ impl AgentState {
             if cancel.load(Ordering::SeqCst) {
                 let _ = store.append(
                     &conversation,
-                    vec![json!({"role":"user","text":goal,"ts":now_secs()}), json!({"role":"note","text":"任务已停止","task_id":task_id,"status":"stopped","ts":now_secs()})],
+                    vec![json!({"role":"user","text":goal.clone(),"ts":now_secs()}), json!({"role":"note","text":"任务已停止","task_id":task_id.clone(),"status":"stopped","ts":now_secs()})],
                 );
                 finish("stopped", "已由你停止".into());
                 return;
@@ -160,15 +160,15 @@ impl AgentState {
                     emit(
                         &app,
                         "agent.message",
-                        json!({"task_id": task_id, "delta": answer}),
+                        json!({"task_id": task_id.clone(), "delta": answer.clone()}),
                     );
-                    emit(&app, "agent.turn_end", json!({"task_id": task_id}));
+                    emit(&app, "agent.turn_end", json!({"task_id": task_id.clone()}));
                     let _ = store.append(
                         &conversation,
                         vec![
                             json!({"role":"user","text":goal,"ts":now_secs()}),
-                            json!({"role":"assistant","text":answer,"ts":now_secs()}),
-                            json!({"role":"note","text":"任务完成","task_id":task_id,"status":"done","ts":now_secs()})
+                            json!({"role":"assistant","text":answer.clone(),"ts":now_secs()}),
+                            json!({"role":"note","text":"任务完成","task_id":task_id.clone(),"status":"done","ts":now_secs()})
                         ],
                     );
                     finish("done", answer);
@@ -177,17 +177,17 @@ impl AgentState {
                     emit(
                         &app,
                         "agent.message",
-                        json!({"task_id": task_id, "delta": format!("\n\n{}", error.message)}),
+                        json!({"task_id": task_id.clone(), "delta": format!("\n\n{}", error.message)}),
                     );
                     emit(&app, "agent.turn_end", json!({"task_id": task_id}));
                     let _ = store.append(
                         &conversation,
                         vec![
                             json!({"role":"user","text":goal,"ts":now_secs()}),
-                            json!({"role":"note","text":"任务失败","task_id":task_id,"status":"error","ts":now_secs()})
+                            json!({"role":"note","text":"任务失败","task_id":task_id.clone(),"status":"error","ts":now_secs()})
                         ],
                     );
-                    finish("error", error.message);
+                    finish("error", error.message.clone());
                 }
             }
         });
