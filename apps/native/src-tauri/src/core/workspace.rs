@@ -167,6 +167,10 @@ impl Workspace {
         self.canonical_root.clone()
     }
 
+    pub(crate) fn checkpoint_handle(&self) -> CheckpointStore {
+        self.checkpoints.clone()
+    }
+
     pub fn storage_key(&self) -> String {
         let key = sha256_hex(self.canonical_root.to_string_lossy().as_bytes());
         key[..16].to_owned()
