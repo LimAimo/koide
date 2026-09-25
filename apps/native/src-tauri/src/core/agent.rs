@@ -1,6 +1,5 @@
 use crate::core::checkpoint::CheckpointStore;
 use crate::core::conversation::ConversationStore;
-use crate::core::id::unique_id;
 use crate::core::policy::check_read_path;
 use crate::core::provider::{agent_turn, chat_complete, ToolCall};
 use crate::core::RuntimeError;
@@ -14,7 +13,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 const MAX_TOOL_ROUNDS: usize = 12;
@@ -130,7 +129,7 @@ impl AgentState {
             *slot = Some(task_id.clone());
         }
 
-        let result = (|| {
+        let result: Result<(String, Vec<Value>), RuntimeError> = (|| {
             let conversation = match conversation_id {
                 Some(id) => {
                     store.get(&id)?;
