@@ -163,6 +163,10 @@ impl Workspace {
         })
     }
 
+    pub fn root_path(&self) -> PathBuf {
+        self.canonical_root.clone()
+    }
+
     pub fn storage_key(&self) -> String {
         let key = sha256_hex(self.canonical_root.to_string_lossy().as_bytes());
         key[..16].to_owned()
