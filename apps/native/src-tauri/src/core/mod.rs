@@ -1,6 +1,7 @@
 mod checkpoint;
 mod crypto;
 mod id;
+mod provider;
 mod trash;
 mod workspace;
 
@@ -8,9 +9,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
+use provider::{list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "0.8.0-alpha.3";
+pub const VERSION: &str = "0.8.0-alpha.4";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
@@ -42,11 +44,13 @@ struct RuntimeEvent<'a> {
 pub struct NativeCore {
     data_dir: PathBuf,
     workspace: Option<Workspace>,
+    profiles: ProfileStore,
 }
 
 impl NativeCore {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
+            profiles: ProfileStore::new(data_dir.clone()),
             data_dir,
             workspace: None,
         }
@@ -70,6 +74,30 @@ impl NativeCore {
     ) -> Result<Value, RuntimeError> {
         match method {
             "hello" => Ok(self.hello()),
+            "profiles.list" => Ok(json!({"profiles": self.profiles.list_public()})),
+            "profiles.save" => {
+                let profile = params.get("profile").ok_or_else(|| RuntimeError::new("BAD_PROFILE", "缺少 profile"))?;
+                let saved = self.profiles.save(profile, params.get("api_key").and_then(Value::as_str))?;
+                Self::emit(app, "profiles.changed", json!({"profiles": self.profiles.list_public()}));
+                Ok(saved)
+            }
+            "profiles.delete" => {
+                self.profiles.delete(req_str(&params, "id")?)?;
+                Self::emit(app, "profiles.changed", json!({"profiles": self.profiles.list_public()}));
+                Ok(json!({}))
+            }
+            "profiles.models" => {
+                let (profile, key) = self.profiles.resolve(
+                    params.get("id").and_then(Value::as_str),
+                    params.get("profile"),
+                    params.get("api_key").and_then(Value::as_str),
+                )?;
+                Ok(json!({"models": list_models(&profile, key.as_deref())?}))
+            }
+            "profiles.test" => {
+                let (profile, key) = self.profiles.get(req_str(&params, "id")?)?;
+                Ok(json!({"ok": true, "reply": test_profile(&profile, key.as_deref())?}))
+            }
             "workspace.open" => {
                 let path = req_str(&params, "path")?;
                 let ws = Workspace::open(path, &self.data_dir)?;
@@ -269,8 +297,8 @@ impl NativeCore {
                 "modes": ["strict", "manual", "ai", "autonomous"],
                 "tool_settings_options": []
             },
-            "profiles": [],
-            "presets": {},
+            "profiles": self.profiles.list_public(),
+            "presets": presets(),
             "agent": {"running": false, "task_id": null},
             "approvals": [],
             "questions": [],
@@ -278,7 +306,7 @@ impl NativeCore {
             "recent": [],
             "native_migration": {
                 "phase": "C",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test"]
             },
             "data_dir": self.data_dir
         })
