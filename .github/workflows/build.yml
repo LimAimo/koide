@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: diffusion-build-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CI: "true"
 
