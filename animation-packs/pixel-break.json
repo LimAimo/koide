@@ -1,0 +1,24 @@
+{
+  "id": "pixel-break",
+  "name": "像素碎裂",
+  "version": 1,
+  "move": { "duration": 420, "easing": "steps(8)", "stagger": 180 },
+  "groupMove": { "duration": 520, "easing": "steps(10)", "stagger": 140 },
+  "delete": {
+    "duration": 480, "easing": "steps(6)", "stagger": 220, "drift": { "x": [-14, 14], "y": [-20, 14] },
+    "keyframes": [
+      { "opacity": 1, "transform": "translate({sx}px,{sy}px) scale(1)" },
+      { "opacity": 0.7, "transform": "translate({ex}px,{ey}px) scale(.8)" },
+      { "opacity": 0, "transform": "translate({ex}px,{ey}px) scale(.4)" }
+    ]
+  },
+  "insert": {
+    "duration": 480, "easing": "steps(6)", "stagger": 260, "drift": { "x": [-14, 14], "y": [-14, 20] },
+    "keyframes": [
+      { "opacity": 0, "transform": "translate({sx}px,{sy}px) scale(.4)" },
+      { "opacity": 0.7, "transform": "translate({sx}px,{sy}px) scale(.8)" },
+      { "opacity": 1, "transform": "translate({ex}px,{ey}px) scale(1)" }
+    ]
+  },
+  "transform": { "duration": 420, "easing": "steps(8)", "stagger": 120 }
+}

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+node_modules/
+dist/
+apps/web/vendor/
+.diffusion-tmp-*
+.DS_Store
+apps/native/src-tauri/target/
+apps/native/src-tauri/gen/
+*.keystore

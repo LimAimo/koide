@@ -1,0 +1,24 @@
+{
+  "id": "scanline",
+  "name": "扫描线",
+  "version": 1,
+  "move": { "duration": 480, "easing": "cubic-bezier(.2,.8,.2,1)", "stagger": 260 },
+  "groupMove": { "duration": 560, "easing": "cubic-bezier(.2,.8,.2,1)", "stagger": 200 },
+  "delete": {
+    "duration": 380, "easing": "ease-in", "stagger": 300, "drift": { "x": [0, 0], "y": [-10, -4] },
+    "keyframes": [
+      { "opacity": 1, "filter": "brightness(1)", "transform": "translate({sx}px,{sy}px)", "textShadow": "0 0 8px var(--dfx-delete)" },
+      { "opacity": 0.9, "filter": "brightness(2)", "transform": "translate({sx}px,{sy}px) scale(1.02)" },
+      { "opacity": 0, "filter": "brightness(1)", "transform": "translate({ex}px,{ey}px) scale(.98)", "textShadow": "0 0 0px transparent" }
+    ]
+  },
+  "insert": {
+    "duration": 460, "easing": "ease-out", "stagger": 340, "drift": { "x": [0, 0], "y": [6, 10] },
+    "keyframes": [
+      { "opacity": 0, "filter": "brightness(2.2)", "transform": "translate({sx}px,{sy}px)", "textShadow": "0 0 12px var(--dfx-insert)" },
+      { "opacity": 1, "filter": "brightness(1.6)", "transform": "translate({ex}px,{ey}px)" },
+      { "opacity": 1, "filter": "brightness(1)", "transform": "translate({ex}px,{ey}px)", "textShadow": "0 0 0px transparent" }
+    ]
+  },
+  "transform": { "duration": 480, "easing": "ease-in-out", "stagger": 200 }
+}

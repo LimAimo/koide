@@ -1,0 +1,24 @@
+{
+  "name": "diffusion-ide",
+  "version": "0.8.0-alpha.2",
+  "private": true,
+  "type": "module",
+  "description": "Diffusion IDE：正在从 Python Bridge 迁移到跨平台 Rust Native Core。",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "start": "python3 bridge/main.py --open",
+    "build": "pnpm -r --if-present run build",
+    "build:cm6": "pnpm --filter @diffusion/editor-cm6 run build",
+    "watch:cm6": "pnpm --filter @diffusion/editor-cm6 run watch",
+    "test": "bash tests/run-all.sh",
+    "test:web": "node --test tests/web/",
+    "test:bridge": "python3 -m unittest tests.bridge.test_workspace tests.bridge.test_e2e tests.bridge.test_providers tests.bridge.test_git tests.bridge.test_extras",
+    "native:dev": "pnpm --filter @diffusion/native dev",
+    "native:build": "pnpm --filter @diffusion/native build",
+    "android:build": "pnpm --filter @diffusion/native android:build"
+  }
+}

@@ -1,0 +1,126 @@
+/* Layout modes are set by JS on #app: mode-wide (>=900px), mode-land (narrow landscape), mode-port (portrait phone). */
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--surface); }
+
+.appbar {
+  flex: none; display: flex; align-items: center; gap: 2px; height: calc(56px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 6px 0;
+  background: var(--surface); z-index: 20;
+}
+.appbar .title { flex: none; max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 500; padding: 0 6px; }
+.appbar .spacer { flex: 1; min-width: 4px; }
+
+/* status capsule: width morphs between states */
+.capsule {
+  display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 10px; max-width: 46vw; min-width: 0;
+  border-radius: var(--r-full); background: var(--surface-2); color: var(--on-surface-variant); font-size: 13px; font-weight: 500; overflow: hidden; white-space: nowrap;
+  transition: background .3s, color .3s;
+}
+.capsule .txt { overflow: hidden; text-overflow: ellipsis; }
+.capsule .glyph { width: 10px; height: 10px; border-radius: 50%; background: var(--outline); flex: none; }
+.capsule[data-state="thinking"], .capsule[data-state="reading"], .capsule[data-state="searching"],
+.capsule[data-state="editing"], .capsule[data-state="running"], .capsule[data-state="working"] { background: var(--primary-container); color: var(--on-primary-container); }
+.capsule[data-state="thinking"] .glyph, .capsule[data-state="reading"] .glyph, .capsule[data-state="searching"] .glyph,
+.capsule[data-state="editing"] .glyph, .capsule[data-state="running"] .glyph, .capsule[data-state="working"] .glyph { background: var(--primary); animation: pulse 1s ease-in-out infinite; }
+.capsule[data-state="waiting_approval"] { background: color-mix(in oklab, var(--warn) 24%, var(--surface-2)); color: var(--on-surface); }
+.capsule[data-state="waiting_approval"] .glyph { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+.capsule[data-state="error"] { background: var(--error-container); color: var(--on-surface); }
+.capsule[data-state="error"] .glyph { background: var(--error); }
+.capsule[data-state="online"] .glyph { background: var(--ok); }
+.capsule[data-state="offline"] .glyph { background: var(--outline); }
+
+.work { flex: 1; min-height: 0; position: relative; display: grid; }
+.editor-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); position: relative; }
+.files { background: var(--surface-1); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.files-head { flex: none; display: flex; align-items: center; gap: 4px; height: 48px; padding: 0 8px 0 16px; font-weight: 500; }
+.files-head .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree { flex: 1; overflow: auto; padding: 0 8px 24px; overscroll-behavior: contain; }
+.resizer { position: relative; cursor: col-resize; touch-action: none; background: var(--outline-variant); width: 1px; }
+.resizer::before { content: ""; position: absolute; inset: 0 -8px; }
+.resizer:hover, .resizer.dragging { background: var(--primary); width: 3px; margin: 0 -1px; }
+
+/* wide: files | editor | AI */
+#app.mode-wide .work { grid-template-columns: var(--files-w, 264px) 1px minmax(0, 1fr) 1px var(--ai-w, 380px); }
+#app.mode-wide .menu-btn { display: none; }
+#app.mode-wide .ai { border-radius: 0; }
+#app.mode-wide .grip { display: none; }
+
+/* narrow landscape: editor | AI, files in a drawer */
+#app.mode-land .work { grid-template-columns: minmax(0, 1fr) 1px var(--ai-w, 340px); }
+#app.mode-land .files { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(84vw, 300px); transform: translateX(-102%); transition: transform .3s var(--ease-decel); box-shadow: var(--shadow); padding-top: env(safe-area-inset-top); }
+#app.mode-land .resizer.r1 { display: none; }
+#app.mode-land .grip { display: none; }
+
+/* portrait: single column, AI is a draggable bottom sheet, files in a drawer */
+#app.mode-port .work { grid-template-columns: minmax(0, 1fr); }
+#app.mode-port .files { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(84vw, 320px); transform: translateX(-102%); transition: transform .3s var(--ease-decel); box-shadow: var(--shadow); padding-top: env(safe-area-inset-top); }
+#app.mode-port .resizer { display: none; }
+#app.mode-port .ai {
+  position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; height: var(--sheet-h, 30dvh); border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: 0 -4px 24px oklch(0 0 0 / .35); transition: height .34s var(--ease-decel), border-radius .3s; will-change: height;
+}
+#app.mode-port .ai.dragging { transition: none; }
+#app.mode-port .ai.full { border-radius: 0; }
+#app.mode-port { --ce-bottom: calc(var(--sheet-h, 30dvh) + 60px); }
+
+/* mode switches animate the grid instead of re-building the page */
+#app .work { transition: grid-template-columns .3s var(--ease-decel); }
+.drawer-scrim { position: fixed; inset: 0; z-index: 35; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .25s; }
+#app.files-open .files { transform: translateX(0) !important; }
+#app.files-open .drawer-scrim { opacity: 1; pointer-events: auto; }
+#app.files-dragging .files { transition: none !important; }
+#app.files-dragging .drawer-scrim { transition: none; }
+
+.grip { flex: none; display: flex; justify-content: center; padding: 10px 0 6px; touch-action: none; cursor: grab; }
+.grip span { width: 36px; height: 4px; border-radius: 2px; background: var(--outline); opacity: .7; transition: width .2s, opacity .2s; }
+.ai.dragging .grip span { width: 52px; opacity: 1; }
+
+/* ---- file tree ---------------------------------------------------------------------------------------- */
+.node > .row {
+  position: relative; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 8px 0 calc(8px + var(--depth, 0) * 14px);
+  border-radius: var(--r-sm); user-select: none; -webkit-user-select: none; cursor: pointer; overflow: hidden; touch-action: manipulation;
+}
+.node > .row::after { content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity .15s; pointer-events: none; }
+.node > .row:active::after { opacity: .12; }
+@media (hover: hover) { .node > .row:hover::after { opacity: .06; } }
+.node.selected > .row { background: var(--secondary-container); color: var(--on-secondary-container); }
+.row .chev { width: 18px; height: 18px; display: grid; place-items: center; transition: transform .22s var(--ease-emph); color: var(--on-surface-variant); }
+.node.open > .row .chev { transform: rotate(90deg); }
+.row .chev.none { visibility: hidden; }
+.row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .ftype { width: 10px; height: 10px; border-radius: 3px; flex: none; background: hsl(var(--ext-h, 210) 60% 55%); }
+.row .fold-ico { color: var(--primary); }
+.row .ai-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--primary); animation: pulse 1s ease-in-out infinite; }
+.row .agent-badge { font-size: 11px; color: var(--primary); }
+.kids { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .26s var(--ease-emph); }
+.node.open > .kids { grid-template-rows: 1fr; }
+.kids > .inner { overflow: hidden; min-height: 0; }
+.node.enter { animation: row-in .28s var(--ease-decel); }
+.node.exit { animation: row-out .22s var(--ease-accel) forwards; }
+@keyframes row-in { from { opacity: 0; transform: translateX(-8px); max-height: 0; } to { max-height: 40px; } }
+@keyframes row-out { to { opacity: 0; transform: translateX(10px); max-height: 0; } }
+.tree-empty { padding: 16px; color: var(--on-surface-variant); }
+
+/* no project open: the start screen owns the whole area */
+#app.no-ws .files, #app.no-ws .ai, #app.no-ws .resizer { display: none; }
+#app.no-ws .work { grid-template-columns: minmax(0, 1fr) !important; }
+#app.no-ws .menu-btn { display: none; }
+
+/* Desktop panel visibility controls: file tree and AI can be independently hidden. */
+.panel-files-toggle { display: none; }
+#app.mode-wide .panel-files-toggle { display: inline-flex; }
+#app.mode-wide.files-hidden .files,
+#app.mode-wide.files-hidden .resizer.r1 { display: none; }
+#app.mode-wide.files-hidden .work { grid-template-columns: minmax(0, 1fr) 1px var(--ai-w, 380px); }
+#app.mode-wide.files-hidden.ai-hidden .work { grid-template-columns: minmax(0, 1fr); }
+
+/* The editor + desktop terminal form the centre column of the IDE. */
+.center-stack { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.center-stack > .editor-pane { flex: 1 1 auto; min-height: 0; }
+.terminal-dock { flex: 0 0 clamp(190px, 32vh, 340px); min-height: 0; border-top: 1px solid var(--outline-variant); background: var(--surface-1); overflow: hidden; }
+.terminal-dock[hidden] { display: none !important; }
+.terminal-dock-head { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; font-size: 12px; font-weight: 600; color: var(--on-surface-variant); }
+.terminal-dock-head .spacer { flex: 1; }
+.terminal-dock-body { height: calc(100% - 36px); min-height: 0; padding: 0 8px 8px; }
+.terminal-dock .term { height: 100%; min-height: 0; gap: 5px; }
+.terminal-dock .term-screen { min-height: 72px; }
+.terminal-dock .term-keys { display: none; }
+#app:not(.mode-wide) .terminal-dock { display: none !important; }

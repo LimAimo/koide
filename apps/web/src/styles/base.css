@@ -1,0 +1,180 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--surface); color: var(--on-surface);
+  font: 400 14px/20px var(--font-ui); letter-spacing: .1px;
+  overflow: hidden; overscroll-behavior: none; -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;      /* no default tap flash; state layers below replace it */
+}
+button, input, select, textarea { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent; }
+button { background: none; border: 0; padding: 0; cursor: pointer; touch-action: manipulation; }
+h1, h2, h3, p { margin: 0; }
+.icon { flex: none; display: block; }
+[hidden] { display: none !important; }
+
+/* Accessible custom focus ring: visible for keyboard users, invisible for touch */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: var(--r-xs); }
+
+/* ---- buttons -------------------------------------------------------------------------------- */
+.btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 20px; border-radius: var(--r-full);
+  font-weight: 500; letter-spacing: .1px; overflow: hidden;
+  transition: background .2s var(--ease-emph), box-shadow .2s, transform .12s var(--ease-emph);
+}
+.btn:active { transform: scale(.97); }
+.btn.filled { background: var(--primary); color: var(--on-primary); }
+.btn.tonal { background: var(--secondary-container); color: var(--on-secondary-container); }
+.btn.outlined { border: 1px solid var(--outline); color: var(--primary); }
+.btn.text { color: var(--primary); padding: 0 12px; }
+.btn.danger.filled { background: var(--error); color: var(--on-error); }
+.btn.danger.text, .btn.danger.outlined { color: var(--error); }
+.btn.small { min-height: 32px; padding: 0 14px; font-size: 13px; }
+.btn[disabled] { opacity: .38; pointer-events: none; }
+.btn::after, .icon-btn::after, .menu-item::after, .row-btn::after {      /* MD3 state layer */
+  content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity .15s; pointer-events: none;
+}
+@media (hover: hover) { .btn:hover::after, .icon-btn:hover::after, .menu-item:hover::after, .row-btn:hover::after { opacity: .08; } }
+.btn:active::after, .icon-btn:active::after, .menu-item:active::after, .row-btn:active::after { opacity: .14; }
+
+.icon-btn {
+  position: relative; width: 40px; height: 40px; flex: none; border-radius: var(--r-full);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--on-surface-variant); overflow: hidden;
+}
+.icon-btn.active { background: var(--secondary-container); color: var(--on-secondary-container); }
+
+/* ---- text fields ------------------------------------------------------------------------------ */
+.text-field, select.text-field, textarea.text-field {
+  width: 100%; min-height: 44px; padding: 10px 14px; border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--outline-variant); color: var(--on-surface);
+  transition: border-color .15s, box-shadow .15s, height .2s var(--ease-emph);
+  -webkit-appearance: none; appearance: none;
+}
+.text-field:focus { border-color: var(--primary); box-shadow: none; }
+select.text-field {
+  padding-right: 36px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--on-surface-variant) 50%), linear-gradient(135deg, var(--on-surface-variant) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 14px) 50%; background-size: 6px 6px; background-repeat: no-repeat;
+}
+.field { display: grid; gap: 6px; font-size: 12px; color: var(--on-surface-variant); }
+.field .text-field { font-size: 14px; }
+
+/* ---- switch (real thumb travel) ---------------------------------------------------------------- */
+.switch { position: relative; flex: none; width: 52px; height: 32px; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; z-index: 2; cursor: pointer; }
+.switch .track { position: absolute; inset: 0; border-radius: 16px; background: var(--surface-3); border: 2px solid var(--outline); transition: background .2s, border-color .2s; }
+.switch .thumb {
+  position: absolute; top: 50%; left: 8px; width: 16px; height: 16px; border-radius: 50%; background: var(--outline);
+  transform: translateY(-50%); transition: left .28s var(--ease-emph), width .18s, height .18s, background .2s;
+}
+.switch input:checked ~ .track { background: var(--primary); border-color: var(--primary); }
+.switch input:checked ~ .thumb { left: 24px; width: 24px; height: 24px; background: var(--on-primary); }
+.switch input:active ~ .thumb { width: 28px; height: 28px; }
+.switch input:checked:active ~ .thumb { left: 22px; }
+.switch input:focus-visible ~ .track { outline: none; border-color: var(--primary); }
+
+/* ---- slider (continuous drag, thumb grows while dragging) ----------------------------------------- */
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 32px; background: transparent; margin: 0; touch-action: pan-y; }
+input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--primary) var(--pct, 50%), var(--surface-3) var(--pct, 50%)); }
+input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--surface-3); }
+input[type="range"]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--primary); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -7px; border-radius: 50%; background: var(--primary); border: 0; transition: transform .15s var(--ease-emph); }
+input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--primary); border: 0; }
+input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.22); box-shadow: none; }
+input[type="range"]:focus-visible { outline-offset: 0; }
+
+/* ---- segmented control ------------------------------------------------------------------------------- */
+.segmented { display: inline-flex; border: 1px solid var(--outline); border-radius: var(--r-full); overflow: hidden; }
+.segmented button { position: relative; min-height: 36px; padding: 0 14px; font-size: 13px; font-weight: 500; color: var(--on-surface); transition: background .2s, color .2s; }
+.segmented button + button { border-left: 1px solid var(--outline); }
+.segmented button[aria-pressed="true"] { background: var(--secondary-container); color: var(--on-secondary-container); }
+
+/* ---- scrim / sheet / dialog / menu ---------------------------------------------------------------------- */
+#overlay-root { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
+#overlay-root > * { pointer-events: auto; }
+.scrim { position: fixed; inset: 0; background: var(--scrim); opacity: 0; transition: opacity .25s; }
+.scrim.in { opacity: 1; }
+
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; max-height: 88dvh; display: flex; flex-direction: column;
+  background: var(--surface-1); border-radius: var(--r-xl) var(--r-xl) 0 0; box-shadow: var(--shadow);
+  transform: translateY(102%); transition: transform .32s var(--ease-decel);
+  max-width: 640px; margin: 0 auto; padding-bottom: env(safe-area-inset-bottom);
+}
+.sheet.tall { height: 88dvh; }
+.sheet.in { transform: translateY(0); }
+.sheet.dragging { transition: none; }
+.sheet-handle { flex: none; display: flex; justify-content: center; padding: 12px 0 8px; touch-action: none; cursor: grab; }
+.sheet-handle span { width: 32px; height: 4px; border-radius: 2px; background: var(--outline); opacity: .6; }
+.sheet-title { padding: 0 24px 8px; font-size: 16px; line-height: 24px; font-weight: 500; }
+.sheet-body { overflow: auto; padding: 0 16px 16px; flex: 1; min-height: 0; overscroll-behavior: contain; }
+.sheet-footer { flex: none; padding: 8px 16px 16px; display: flex; gap: 8px; justify-content: flex-end; }
+
+.dialog {
+  position: fixed; left: 50%; top: 50%; width: min(88vw, 360px); padding: 24px; border-radius: var(--r-xl);
+  background: var(--surface-2); box-shadow: var(--shadow); opacity: 0; transform: translate(-50%, -46%) scale(.94);
+  transition: opacity .2s, transform .28s var(--ease-decel);
+}
+.dialog.in { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.dialog h2 { font-size: 22px; line-height: 28px; font-weight: 400; margin-bottom: 12px; }
+.dialog-body { color: var(--on-surface-variant); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+
+.menu { display: grid; }
+.menu-item { position: relative; display: flex; align-items: center; gap: 16px; min-height: 52px; padding: 0 12px; border-radius: var(--r-md); text-align: left; overflow: hidden; }
+.menu-item.danger { color: var(--error); }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 200; max-width: min(90vw, 420px);
+  padding: 12px 20px; border-radius: var(--r-md); background: var(--on-surface); color: var(--surface);
+  transform: translate(-50%, 24px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .3s var(--ease-decel);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+.spinner { display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--outline-variant); border-top-color: var(--primary); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--r-full); font-size: 11px; font-weight: 500; background: var(--surface-3); color: var(--on-surface-variant); }
+.pill.warn { background: color-mix(in oklab, var(--warn) 22%, transparent); color: var(--warn); }
+.pill.danger { background: var(--error-container); color: var(--error); }
+.muted { color: var(--on-surface-variant); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+/* IDE 风格：滚动能力保留，但全局不显示滚动条（触摸、滚轮、触控板仍可滚动）。 */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* Bottom sheets always expose an explicit close affordance; Android Back remains available too. */
+.sheet-heading { flex: none; display: flex; align-items: center; min-height: 44px; padding: 0 12px 8px 24px; gap: 8px; }
+.sheet-heading .sheet-title { flex: 1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-heading .sheet-close { flex: none; }
+.model-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.model-field > .text-field { flex: 1; min-width: 0; }
+.model-field > .model-fetch { flex: none; white-space: nowrap; }
+
+/* ---- 表单边界统一 -------------------------------------------------------------------------------
+   所有可输入控件只保留自身的一层边框。浏览器/全局键盘焦点环不能再叠成第二层，也不使用泛光。 */
+input:focus, input:focus-visible, textarea:focus, textarea:focus-visible, select:focus, select:focus-visible,
+.text-field:focus, .text-field:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+input, textarea, select { box-shadow: none; }
+textarea.text-field {
+  box-sizing: border-box;
+  min-width: 100%; max-width: 100%;
+  resize: vertical;
+  overflow: auto;
+  max-height: min(60dvh, 560px);
+}
+/* Chromium / Android 可定制 resize 把手；Firefox 使用系统把手，但仍被 max-width 锁在容器内。 */
+textarea.text-field::-webkit-resizer {
+  background:
+    linear-gradient(135deg, transparent 0 46%, var(--outline) 47% 53%, transparent 54% 66%, var(--outline) 67% 73%, transparent 74%);
+  border-radius: 0 0 var(--r-sm) 0;
+}
+input[type="range"]::-webkit-slider-thumb { box-shadow: none !important; }
+input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.22); box-shadow: none !important; }

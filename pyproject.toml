@@ -1,0 +1,16 @@
+[project]
+name = "diffusion-ide"
+version = "0.7.0"
+description = "Diffusion IDE: a local-first AI IDE where code visibly reorganises itself (Bridge)."
+requires-python = ">=3.10"
+dependencies = []          # standard library only, so it installs anywhere including Termux
+
+[project.scripts]
+diffusion-bridge = "bridge.main:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bridge*"]
