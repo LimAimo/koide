@@ -1,3 +1,4 @@
+use crate::core::checkpoint::CheckpointStore;
 use crate::core::conversation::ConversationStore;
 use crate::core::id::unique_id;
 use crate::core::policy::check_read_path;
@@ -5,14 +6,15 @@ use crate::core::provider::{agent_turn, chat_complete, ToolCall};
 use crate::core::RuntimeError;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    mpsc, Arc, Mutex,
 };
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 const MAX_TOOL_ROUNDS: usize = 12;
@@ -24,6 +26,18 @@ pub struct AgentState {
     running: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     task_id: Arc<Mutex<Option<String>>>,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApprovalDecision {
+    pub allow: bool,
+    pub scope: String,
+}
+
+struct PendingApproval {
+    payload: Value,
+    tx: mpsc::Sender<ApprovalDecision>,
 }
 
 impl AgentState {
@@ -32,6 +46,7 @@ impl AgentState {
             running: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             task_id: Arc::new(Mutex::new(None)),
+            approvals: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -51,6 +66,40 @@ impl AgentState {
         true
     }
 
+    pub fn pending_approvals(&self) -> Vec<Value> {
+        self.approvals
+            .lock()
+            .map(|pending| pending.values().map(|item| item.payload.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn respond_approval(
+        &self,
+        approval_id: &str,
+        allow: bool,
+        scope: &str,
+    ) -> Result<Value, RuntimeError> {
+        let pending = self
+            .approvals
+            .lock()
+            .map_err(|_| RuntimeError::new("LOCK_POISONED", "审批状态锁已损坏"))?
+            .remove(approval_id)
+            .ok_or_else(|| RuntimeError::new("NO_APPROVAL", "这个审批已经不存在或已经处理"))?;
+        let decision = ApprovalDecision {
+            allow,
+            scope: if scope == "session" { "session" } else { "once" }.to_owned(),
+        };
+        pending
+            .tx
+            .send(decision.clone())
+            .map_err(|_| RuntimeError::new("APPROVAL_CLOSED", "等待审批的任务已经结束"))?;
+        Ok(json!({
+            "approval_id": approval_id,
+            "allow": decision.allow,
+            "scope": decision.scope
+        }))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
@@ -63,6 +112,8 @@ impl AgentState {
         reasoning: String,
         mode: String,
         workspace_root: PathBuf,
+        task_id: String,
+        checkpoints: CheckpointStore,
     ) -> Result<Value, RuntimeError> {
         if !matches!(mode.as_str(), "chat" | "read") {
             return Err(RuntimeError::new(
@@ -75,6 +126,9 @@ impl AgentState {
             return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
         }
         self.cancel.store(false, Ordering::SeqCst);
+        if let Ok(mut slot) = self.task_id.lock() {
+            *slot = Some(task_id.clone());
+        }
 
         let result = (|| {
             let conversation = match conversation_id {
@@ -102,20 +156,17 @@ impl AgentState {
                 );
             }
 
-            let task_id = unique_id("task-");
-            if let Ok(mut slot) = self.task_id.lock() {
-                *slot = Some(task_id.clone());
-            }
-            Ok((conversation, task_id, messages))
+            Ok((conversation, messages))
         })();
 
-        let (conversation, task_id, messages) = match result {
+        let (conversation, messages) = match result {
             Ok(value) => value,
             Err(error) => {
                 self.running.store(false, Ordering::SeqCst);
                 if let Ok(mut slot) = self.task_id.lock() {
                     *slot = None;
                 }
+                let _ = checkpoints.finish_task(&task_id, "error", &error.message);
                 return Err(error);
             }
         };
@@ -139,6 +190,7 @@ impl AgentState {
 
         thread::spawn(move || {
             let finish = |status: &str, summary: String| {
+                let _ = checkpoints.finish_task(&task_id, status, &summary);
                 emit(
                     &app,
                     "agent.done",
@@ -169,6 +221,7 @@ impl AgentState {
                     messages,
                     &reasoning,
                     &workspace_root,
+                    &checkpoints,
                 )
             } else {
                 run_chat_mode(
@@ -267,6 +320,7 @@ fn run_read_mode(
     mut messages: Vec<Value>,
     reasoning: &str,
     workspace_root: &Path,
+    checkpoints: &CheckpointStore,
 ) -> Result<String, RuntimeError> {
     let tools = read_tool_specs();
     let mut visible = String::new();
@@ -330,7 +384,21 @@ fn run_read_mode(
 
             let result = execute_read_tool(workspace_root, &call);
             let (payload, state, summary, detail) = match result {
-                Ok(value) => (value, "done", "完成".to_owned(), String::new()),
+                Ok(value) => {
+                    let summary = match call.name.as_str() {
+                        "fs_read" => format!("{} 行", value.get("total_lines").and_then(Value::as_u64).unwrap_or(0)),
+                        "fs_list" => format!("{} 条结果", value.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
+                        "fs_search" => format!("{} 条结果", value.get("matches").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
+                        _ => "完成".to_owned(),
+                    };
+                    let _ = checkpoints.add_event(
+                        task_id,
+                        "read",
+                        &tool_title(&call),
+                        json!({"tool":call.name.clone(),"arguments":call.arguments.clone(),"summary":summary.clone()}),
+                    );
+                    (value, "done", summary, String::new())
+                },
                 Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE") => {
                     let code = error.code.clone();
                     let message = error.message.clone();
