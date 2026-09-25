@@ -1,7 +1,7 @@
 # Diffusion IDE
 
-> **0.8.0-alpha.3 · Native Core 可编译检查点**  
-> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。产品 UI 已经通过 Runtime API 与 Bridge 解耦，Rust Workspace 已接管本地文件读写、Patch、Trash、Checkpoint 与事务式大文件写入的主体；Android ARM64 Native Core 已真实通过离线 `cargo check`，Tauri Android 工程也已生成。完整计划见 `docs/NATIVE_CORE_SPEC.md`，当前迁移进度见 `docs/MIGRATION_STATUS.md`。
+> **0.8.0-alpha.4 · Native Provider 接通检查点**  
+> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。产品 UI 已经通过 Runtime API 与 Bridge 解耦，Rust Workspace 已接管本地文件读写、Patch、Trash、Checkpoint 与事务式大文件写入的主体；Native Provider Profiles、模型列表与连接测试也已开始由 Rust Core 直接处理。Android / Windows 构建已经迁移到 GitHub Actions，并会在双平台成功后自动发布 prerelease。完整计划见 `docs/NATIVE_CORE_SPEC.md`，当前迁移进度见 `docs/MIGRATION_STATUS.md`。
 >
 > **这个 alpha 还没有完成 Python 删除线。** 旧 Bridge 仍作为迁移期兼容实现和回归测试基准存在；不要把它理解为最终架构。原生构建说明见 `docs/NATIVE_BUILD.md`。
 
