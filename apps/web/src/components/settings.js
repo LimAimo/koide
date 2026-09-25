@@ -124,7 +124,7 @@ function editProfile(p, rerender) {
       const models = r.models || [];
       if (!models.length) { toast("服务商没有返回可选择的模型"); return; }
       openMenu(`选择模型（${models.length}）`, models.map((m) => ({ label: m, icon: "spark", onClick: () => { f.model.value = m; } })));
-    } catch (e) { toast(`获取模型失败：${e.message}`); }
+    } catch (e) { toast(`获取模型失败：${e?.message || String(e || "未知错误")}`); }
     finally { modelPick.disabled = false; modelPick.textContent = old; }
   } }, "自动获取");
   const modelCtl = h("div", { class: "model-field" }, f.model, modelPick);
