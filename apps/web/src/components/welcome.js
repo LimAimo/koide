@@ -4,6 +4,7 @@
 import { h, icon, iconButton, clear, toast } from "./dom.js";
 import { openSheet, openMenu } from "./overlays.js";
 import { runtime, state, openWorkspace, initConnection, openScratch, demoDiffusion } from "../services/app.js";
+import { importDirectoryAsWorkspace } from "./transfer.js";
 
 export function openFolderPicker() {
   const list = h("div", { class: "menu" });
@@ -12,7 +13,20 @@ export function openFolderPicker() {
   const openBtn = h("button", { class: "btn filled", type: "button", onclick: async () => {
     try { await openWorkspace(current); sheet.close(); } catch (e) { toast(e.message); }
   } }, "打开这个文件夹");
-  const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
+  const isAndroidNative = runtime.kind === "native" && state.get().hello?.platform === "android";
+  const importBtn = isAndroidNative ? h("button", {
+    class: "btn tonal",
+    type: "button",
+    onclick: async () => {
+      sheet.close();
+      try { await importDirectoryAsWorkspace(); }
+      catch (e) { toast(`导入文件夹失败：${e?.message || String(e)}`); }
+    },
+  }, icon("upload", 18), "从手机选择并导入文件夹") : null;
+  const hint = isAndroidNative
+    ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "Android 受分区存储限制：可打开 Diffusion 本地工作区，或从系统选择一个目录导入后直接编辑。")
+    : null;
+  const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, hint, importBtn, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
 
   async function go(path) {
     try {
