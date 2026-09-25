@@ -199,7 +199,7 @@ impl AgentState {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct RuntimeEvent {
     event: String,
     data: Value,
