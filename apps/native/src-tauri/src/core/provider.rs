@@ -445,3 +445,201 @@ pub fn test_profile(profile: &Value, api_key: Option<&str>) -> Result<String, Ru
     };
     Ok(reply.chars().take(80).collect())
 }
+
+
+/// One complete non-streaming chat turn used by the first Native Agent milestone.
+/// Tool calling is intentionally not accepted here yet: alpha.5 initially exposes only the honest
+/// "chat" mode, while read/edit/agent stay disabled until their native tool loop is migrated.
+pub fn chat_complete(
+    profile: &Value,
+    api_key: Option<&str>,
+    messages: &[Value],
+    reasoning: &str,
+) -> Result<String, RuntimeError> {
+    let endpoint = profile
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写接口地址"))?;
+    let model = profile
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写模型 ID"))?;
+    let kind = profile
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("openai_compatible");
+
+    let (url, mut body) = match kind {
+        "anthropic" => {
+            let mut system = Vec::new();
+            let mut out = Vec::new();
+            for message in messages {
+                let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+                if content.is_empty() {
+                    continue;
+                }
+                if role == "system" {
+                    system.push(content.to_owned());
+                } else {
+                    out.push(json!({
+                        "role": if role == "assistant" { "assistant" } else { "user" },
+                        "content": content
+                    }));
+                }
+            }
+            let mut body = json!({
+                "model": model,
+                "max_tokens": profile.pointer("/sampling/max_tokens").and_then(Value::as_u64).unwrap_or(8192),
+                "messages": out
+            });
+            if !system.is_empty() {
+                body["system"] = Value::String(system.join("\n\n"));
+            }
+            if reasoning == "on" {
+                body["thinking"] = json!({"type": "adaptive"});
+            }
+            (
+                format!("{}/messages", endpoint.trim_end_matches('/')),
+                body,
+            )
+        }
+        "gemini_native" => {
+            let mut contents = Vec::new();
+            let mut system = Vec::new();
+            for message in messages {
+                let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+                if content.is_empty() {
+                    continue;
+                }
+                if role == "system" {
+                    system.push(content.to_owned());
+                } else {
+                    contents.push(json!({
+                        "role": if role == "assistant" { "model" } else { "user" },
+                        "parts": [{"text": content}]
+                    }));
+                }
+            }
+            let mut body = json!({"contents": contents});
+            if !system.is_empty() {
+                body["systemInstruction"] = json!({"parts": [{"text": system.join("\n\n")}]});
+            }
+            (
+                format!(
+                    "{}/models/{}:generateContent",
+                    endpoint.trim_end_matches('/'),
+                    model.strip_prefix("models/").unwrap_or(model)
+                ),
+                body,
+            )
+        }
+        _ => {
+            let mut body = json!({
+                "model": model,
+                "messages": messages,
+                "stream": false
+            });
+            if let Some(sampling) = profile.get("sampling").and_then(Value::as_object) {
+                for (key, value) in sampling {
+                    if !value.is_null() {
+                        body[key] = value.clone();
+                    }
+                }
+            }
+
+            let lower_model = model.to_ascii_lowercase();
+            if matches!(reasoning, "on" | "off") {
+                let on = reasoning == "on";
+                match kind {
+                    "deepseek" => body["thinking"] = json!({"type": if on { "enabled" } else { "disabled" }}),
+                    "openrouter" => body["reasoning"] = json!({"enabled": on}),
+                    "gemini" => {
+                        body["reasoning_effort"] = Value::String(if on { "high" } else if lower_model.contains("pro") || lower_model.starts_with("gemini-3") { "minimal" } else { "none" }.into())
+                    }
+                    "openai" if lower_model.starts_with("o1")
+                        || lower_model.starts_with("o3")
+                        || lower_model.starts_with("o4")
+                        || lower_model.starts_with("gpt-5") =>
+                    {
+                        body["reasoning_effort"] = Value::String(if on { "medium" } else { "none" }.into())
+                    }
+                    "minimax" | "minimax_cn" => {
+                        body["thinking"] = json!({"type": if on { "adaptive" } else { "disabled" }})
+                    }
+                    _ => {}
+                }
+            }
+            if matches!(kind, "minimax" | "minimax_cn") {
+                body["reasoning_split"] = Value::Bool(true);
+            }
+            if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
+                for (key, value) in extra {
+                    body[key] = value.clone();
+                }
+            }
+            (
+                format!("{}/chat/completions", endpoint.trim_end_matches('/')),
+                body,
+            )
+        }
+    };
+
+    let resp = add_headers(client()?.post(url), profile, api_key, true)
+        .json(&body)
+        .send()
+        .map_err(|e| provider_error(format!("模型请求失败：{e}")))?;
+    let payload = response_json(resp)?;
+
+    let text = match kind {
+        "anthropic" => payload
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default(),
+        "gemini_native" => payload
+            .pointer("/candidates/0/content/parts")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default(),
+        _ => {
+            let content = payload.pointer("/choices/0/message/content");
+            match content {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|part| {
+                        part.get("text")
+                            .and_then(Value::as_str)
+                            .or_else(|| part.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            }
+        }
+    };
+
+    if text.trim().is_empty() {
+        return Err(provider_error(format!(
+            "模型返回成功，但没有可显示的文本：{}",
+            payload.to_string().chars().take(600).collect::<String>()
+        )));
+    }
+    Ok(text)
+}
