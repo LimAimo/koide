@@ -77,7 +77,18 @@ jobs:
         run: pnpm --filter @diffusion/native exec tauri android init
 
       - name: Build Android ARM64 APK
-        run: pnpm --filter @diffusion/native exec tauri android build --apk --target aarch64
+        run: pnpm --filter @diffusion/native exec tauri android build --debug --apk --target aarch64
+
+      - name: Verify Android APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find apps/native/src-tauri/gen/android apps/native/src-tauri/target -type f -name '*.apk' | head -1)"
+          if [ -z "${APK:-}" ]; then
+            echo "::error::No APK was generated"
+            exit 1
+          fi
+          apksigner verify --verbose "$APK"
 
       - name: Collect APK
         if: always()
