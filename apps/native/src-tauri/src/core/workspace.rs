@@ -516,6 +516,45 @@ impl Workspace {
         self.commit_bytes(raw, &p, content.as_bytes(), base_revision)
     }
 
+    pub(crate) fn write_bytes_protected(
+        &self,
+        raw: &str,
+        data: &[u8],
+        base_revision: Option<&str>,
+    ) -> Result<Mutation, RuntimeError> {
+        let p = self.resolve_for_write(raw)?;
+        self.commit_bytes(raw, &p, data, base_revision)
+    }
+
+    pub(crate) fn set_executable_protected(
+        &self,
+        raw: &str,
+        executable: bool,
+    ) -> Result<(), RuntimeError> {
+        let p = self.resolve_existing(raw)?;
+        if !p.is_file() {
+            return Err(RuntimeError::new("NOT_A_FILE", format!("{raw} 不是文件")));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = fs::metadata(&p).map_err(io_err("READ_FAILED", raw))?;
+            let mut mode = meta.permissions().mode();
+            if executable {
+                mode |= 0o111;
+            } else {
+                mode &= !0o111;
+            }
+            fs::set_permissions(&p, fs::Permissions::from_mode(mode))
+                .map_err(io_err("WRITE_FAILED", raw))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = executable;
+        }
+        Ok(())
+    }
+
     pub fn begin_write(
         &self,
         raw: &str,
