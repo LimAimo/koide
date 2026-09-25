@@ -3,12 +3,17 @@ name: Build Diffusion IDE
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "diffusion-ide-v*-native-source.zip"
-      - ".github/workflows/build.yml"
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
 
 permissions:
   contents: read
+
+env:
+  CI: "true"
 
 jobs:
   android:
@@ -17,23 +22,8 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout build repository
+      - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Select source archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          SOURCE_ZIP="$(find . -maxdepth 1 -type f -name 'diffusion-ide-v*-native-source.zip' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
-          if [ -z "${SOURCE_ZIP:-}" ]; then
-            echo "::error::No diffusion-ide-v*-native-source.zip exists in repository root."
-            exit 1
-          fi
-          mkdir -p _source
-          unzip -q "$SOURCE_ZIP" -d _source
-          PROJECT_DIR="$(find _source -mindepth 1 -maxdepth 1 -type d | head -1)"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Building source from $SOURCE_ZIP"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -46,7 +36,7 @@ jobs:
           version: "9.15.0"
           run_install: false
 
-      - name: Install Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -55,9 +45,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK/NDK components
+      - name: Install Android SDK and NDK
         shell: bash
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager             "platform-tools"             "platforms;android-36"             "build-tools;36.0.0"             "ndk;27.3.13750724"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.3.13750724" >> "$GITHUB_ENV"
@@ -71,16 +62,21 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "${{ env.PROJECT_DIR }}/apps/native/src-tauri -> target"
+          workspaces: "apps/native/src-tauri -> target"
+
+      - name: Cache pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
 
       - name: Install JavaScript dependencies
-        shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
         run: pnpm install --no-frozen-lockfile
 
+      - name: Initialize Android project
+        run: pnpm --filter @diffusion/native exec tauri android init
+
       - name: Build Android ARM64 APK
-        shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
         run: pnpm --filter @diffusion/native exec tauri android build --apk --target aarch64
 
       - name: Collect APK
@@ -88,8 +84,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts/android
-          find "$PROJECT_DIR/apps/native/src-tauri/gen/android" -type f -name "*.apk" -exec cp -v {} artifacts/android/ \; || true
-          find "$PROJECT_DIR/apps/native/src-tauri/target" -type f -name "*.apk" -exec cp -v {} artifacts/android/ \; || true
+          find apps/native/src-tauri/gen/android -type f -name "*.apk" -exec cp -v {} artifacts/android/ \; || true
+          find apps/native/src-tauri/target -type f -name "*.apk" -exec cp -v {} artifacts/android/ \; || true
           ls -lah artifacts/android || true
 
       - name: Upload Android artifact
@@ -106,24 +102,8 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout build repository
+      - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Select source archive
-        shell: pwsh
-        run: |
-          $zip = Get-ChildItem -Path . -Filter "diffusion-ide-v*-native-source.zip" |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if (-not $zip) {
-            Write-Error "No diffusion-ide-v*-native-source.zip exists in repository root."
-            exit 1
-          }
-          New-Item -ItemType Directory -Force -Path "_source" | Out-Null
-          Expand-Archive -Path $zip.FullName -DestinationPath "_source" -Force
-          $project = Get-ChildItem -Path "_source" -Directory | Select-Object -First 1
-          "PROJECT_DIR=$($project.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Building source from $($zip.Name)"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -144,16 +124,20 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "${{ env.PROJECT_DIR }}/apps/native/src-tauri -> target"
+          workspaces: "apps/native/src-tauri -> target"
+
+      - name: Cache pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
 
       - name: Install JavaScript dependencies
         shell: pwsh
-        working-directory: ${{ env.PROJECT_DIR }}
         run: pnpm install --no-frozen-lockfile
 
       - name: Build Windows x64
         shell: pwsh
-        working-directory: ${{ env.PROJECT_DIR }}
         run: pnpm --filter @diffusion/native exec tauri build --bundles nsis
 
       - name: Collect Windows binaries
@@ -161,7 +145,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "artifacts/windows" | Out-Null
-          $target = Join-Path $env:PROJECT_DIR "apps/native/src-tauri/target/release"
+          $target = "apps/native/src-tauri/target/release"
           if (Test-Path (Join-Path $target "diffusion-native.exe")) {
             Copy-Item (Join-Path $target "diffusion-native.exe") "artifacts/windows/Diffusion-IDE-portable.exe"
           }
