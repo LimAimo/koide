@@ -14,7 +14,7 @@ const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT: usize = 512 * 1024;
 const TMP_PREFIX: &str = ".diffusion-tmp-";
 
-pub fn browse_location(path: Option<&str>) -> Result<Value, RuntimeError> {
+pub fn browse_location(path: Option<&str>, app_data_dir: Option<&Path>) -> Result<Value, RuntimeError> {
     if path.is_none() || path == Some("__locations__") {
         let mut entries = Vec::new();
         #[cfg(windows)]
@@ -26,7 +26,30 @@ pub fn browse_location(path: Option<&str>) -> Result<Value, RuntimeError> {
                 }
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "android")]
+        {
+            if let Some(data_dir) = app_data_dir {
+                let workspaces = data_dir.join("workspaces");
+                fs::create_dir_all(&workspaces)
+                    .map_err(io_err("READ_FAILED", &workspaces.to_string_lossy()))?;
+                entries.push(json!({
+                    "name": "Diffusion 本地工作区",
+                    "path": workspaces.to_string_lossy()
+                }));
+            }
+
+            // Some devices expose Downloads as a normal readable directory; only advertise it
+            // when the app can actually enumerate it. Android scoped storage usually blocks this,
+            // so SAF remains the proper route for arbitrary shared folders.
+            for candidate in ["/storage/emulated/0/Download", "/sdcard/Download"] {
+                let p = PathBuf::from(candidate);
+                if p.is_dir() && fs::read_dir(&p).is_ok() {
+                    entries.push(json!({"name": "下载", "path": p.to_string_lossy()}));
+                    break;
+                }
+            }
+        }
+        #[cfg(all(not(windows), not(target_os = "android")))]
         {
             if let Some(home) = std::env::var_os("HOME") {
                 let home = PathBuf::from(home);
