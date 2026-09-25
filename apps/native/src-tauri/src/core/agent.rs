@@ -331,18 +331,26 @@ fn run_read_mode(
             let result = execute_read_tool(workspace_root, &call);
             let (payload, state, summary, detail) = match result {
                 Ok(value) => (value, "done", "完成".to_owned(), String::new()),
-                Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE") => (
-                    json!({"error":{"code":error.code,"message":error.message}}),
-                    "denied",
-                    "已拒绝".into(),
-                    error.message,
-                ),
-                Err(error) => (
-                    json!({"error":{"code":error.code,"message":error.message}}),
-                    "error",
-                    "失败".into(),
-                    error.message,
-                ),
+                Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE") => {
+                    let code = error.code.clone();
+                    let message = error.message.clone();
+                    (
+                        json!({"error":{"code":code,"message":message.clone()}}),
+                        "denied",
+                        "已拒绝".into(),
+                        message,
+                    )
+                }
+                Err(error) => {
+                    let code = error.code.clone();
+                    let message = error.message.clone();
+                    (
+                        json!({"error":{"code":code,"message":message.clone()}}),
+                        "error",
+                        "失败".into(),
+                        message,
+                    )
+                },
             };
 
             emit(
@@ -581,7 +589,7 @@ fn list_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Value>) -> Resu
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if matches!(name.as_str(), "node_modules" | "target" | ".gradle" | ".idea" | "__pycache__" | ".venv" | "venv") {
+        if matches!(name.as_str(), "node_modules" | "target" | ".git" | ".gradle" | ".idea" | "__pycache__" | ".venv" | "venv") {
             continue;
         }
         out.push(json!({
