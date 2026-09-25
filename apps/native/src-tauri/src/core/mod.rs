@@ -124,6 +124,9 @@ impl NativeCore {
                 "Native 对话压缩还在迁移中",
             )),
             "agent.start" => {
+                if self.agent.is_running() {
+                    return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
+                }
                 let mode = params.get("mode").and_then(Value::as_str).unwrap_or("chat");
                 if !matches!(mode, "chat" | "read") {
                     return Err(RuntimeError::new(
@@ -146,6 +149,13 @@ impl NativeCore {
                 let (profile, key) = self.profiles.get(&profile_id)?;
                 let store = self.conversations()?.clone();
                 let workspace_root = self.ws()?.root_path();
+                let checkpoints = self.ws()?.checkpoint_handle();
+                let checkpoint_task = checkpoints.start_task(&goal, mode)?;
+                let task_id = checkpoint_task
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "新建任务缺少 id"))?
+                    .to_owned();
                 self.agent.start(
                     app.clone(),
                     store,
@@ -156,9 +166,20 @@ impl NativeCore {
                     reasoning,
                     mode.to_owned(),
                     workspace_root,
+                    task_id,
+                    checkpoints,
                 )
             }
             "agent.stop" => Ok(json!({"stopped": self.agent.stop()})),
+            "approval.respond" => {
+                let result = self.agent.respond_approval(
+                    req_str(&params, "approval_id")?,
+                    params.get("allow").and_then(Value::as_bool).unwrap_or(false),
+                    params.get("scope").and_then(Value::as_str).unwrap_or("once"),
+                )?;
+                Self::emit(app, "approval.resolved", result.clone());
+                Ok(result)
+            },
             "workspace.open" => {
                 let path = req_str(&params, "path")?;
                 let ws = Workspace::open(path, &self.data_dir)?;
@@ -368,13 +389,13 @@ impl NativeCore {
             "presets": presets(),
             "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
             "agent_modes": ["chat", "read"],
-            "approvals": [],
+            "approvals": self.agent.pending_approvals(),
             "questions": [],
             "tools": [],
             "recent": [],
             "native_migration": {
                 "phase": "D-readonly",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "hard_policy.read"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "hard_policy.read", "approval.respond", "checkpoint.agent_lifecycle"]
             },
             "data_dir": self.data_dir
         })
