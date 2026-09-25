@@ -131,7 +131,7 @@ impl NativeCore {
                 Self::emit(app, "workspace.closed", json!({}));
                 Ok(json!({}))
             }
-            "workspace.browse" => browse_location(params.get("path").and_then(Value::as_str)),
+            "workspace.browse" => browse_location(params.get("path").and_then(Value::as_str), Some(&self.data_dir)),
             "workspace.remove_recent" => Ok(json!({})),
             "fs.read" => self.ws()?.read(req_str(&params, "path")?),
             "fs.hash" => self.ws()?.hash(req_str(&params, "path")?),
