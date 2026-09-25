@@ -128,12 +128,12 @@ impl NativeCore {
                     return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
                 }
                 let mode = params.get("mode").and_then(Value::as_str).unwrap_or("chat");
-                if !matches!(mode, "chat" | "read") {
+                if !matches!(mode, "chat" | "read" | "edit") {
                     return Err(RuntimeError::new(
                         "MIGRATION_PENDING",
-                        format!("Native Core 的「{mode}」模式仍在迁移；alpha.5 当前开放聊天和只读模式"),
+                        format!("Native Core 的「{mode}」模式仍在迁移；当前开放聊天、只读和编辑模式"),
                     )
-                    .with_data(json!({"mode": mode, "available_modes": ["chat", "read"]})));
+                    .with_data(json!({"mode": mode, "available_modes": ["chat", "read", "edit"]})));
                 }
                 let goal = req_str(&params, "goal")?.to_owned();
                 let profile_id = req_str(&params, "profile")?.to_owned();
@@ -166,6 +166,7 @@ impl NativeCore {
                     reasoning,
                     mode.to_owned(),
                     workspace_root,
+                    self.data_dir.clone(),
                     task_id,
                     checkpoints,
                 )
@@ -388,14 +389,14 @@ impl NativeCore {
             "profiles": self.profiles.list_public(),
             "presets": presets(),
             "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
-            "agent_modes": ["chat", "read"],
+            "agent_modes": ["chat", "read", "edit"],
             "approvals": self.agent.pending_approvals(),
             "questions": [],
             "tools": [],
             "recent": [],
             "native_migration": {
-                "phase": "D-readonly",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "hard_policy.read", "approval.respond", "checkpoint.agent_lifecycle"]
+                "phase": "E-edit",
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits"]
             },
             "data_dir": self.data_dir
         })
