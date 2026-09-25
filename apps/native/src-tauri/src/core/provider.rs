@@ -471,7 +471,7 @@ pub fn chat_complete(
         .and_then(Value::as_str)
         .unwrap_or("openai_compatible");
 
-    let (url, mut body) = match kind {
+    let (url, body) = match kind {
         "anthropic" => {
             let mut system = Vec::new();
             let mut out = Vec::new();
