@@ -10,7 +10,7 @@ on:
       - "**/*.md"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CI: "true"
@@ -150,3 +150,74 @@ jobs:
           path: artifacts/windows/*.exe
           if-no-files-found: error
           retention-days: 14
+
+
+  release:
+    name: Publish alpha Release
+    needs:
+      - android
+      - windows
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: diffusion-android-arm64
+          path: release/android
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: diffusion-windows-x64
+          path: release/windows
+
+      - name: Prepare release assets
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import json; print(json.load(open("apps/native/src-tauri/tauri.conf.json"))["version"])')"
+          TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
+          mkdir -p release-assets
+
+          APK="$(find release/android -type f -name '*.apk' | head -1)"
+          if [ -z "${APK:-}" ]; then
+            echo "::error::Android artifact did not contain an APK"
+            exit 1
+          fi
+          cp "$APK" "release-assets/Diffusion-IDE-${VERSION}-android-arm64.apk"
+
+          found_windows=0
+          while IFS= read -r -d '' EXE; do
+            found_windows=1
+            NAME="$(basename "$EXE")"
+            if [[ "${NAME,,}" == *portable* ]]; then
+              OUT="Diffusion-IDE-${VERSION}-windows-x64-portable.exe"
+            else
+              OUT="Diffusion-IDE-${VERSION}-windows-x64-setup.exe"
+            fi
+            cp "$EXE" "release-assets/$OUT"
+          done < <(find release/windows -type f -name '*.exe' -print0)
+
+          if [ "$found_windows" -eq 0 ]; then
+            echo "::error::Windows artifact did not contain an EXE"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          ls -lah release-assets
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        shell: bash
+        run: |
+          gh release create "$TAG" release-assets/*             --repo "$GITHUB_REPOSITORY"             --title "Diffusion IDE ${VERSION} · Build #${GITHUB_RUN_NUMBER}"             --notes "Automated alpha build from commit ${GITHUB_SHA}. This is a prerelease; the project remains in alpha until the native migration and known bugs are finished."             --prerelease
