@@ -17,7 +17,7 @@ use conversation::ConversationStore;
 use provider::{list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "0.8.0-alpha.5";
+pub const VERSION: &str = "0.8.0-alpha.6";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
