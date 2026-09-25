@@ -1,5 +1,5 @@
 *, *::before, *::after { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; touch-action: pan-x pan-y; }
 body {
   background: var(--surface); color: var(--on-surface);
   font: 400 14px/20px var(--font-ui); letter-spacing: .1px;
