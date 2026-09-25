@@ -8,6 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[derive(Clone)]
 pub struct CheckpointStore {
     base: PathBuf,
     blobs: PathBuf,
