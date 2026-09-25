@@ -62,6 +62,10 @@ fn write_json(path: &Path, value: &Value) -> Result<(), RuntimeError> {
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|e| io_error("无法序列化服务商配置", e))?;
     fs::write(&tmp, bytes).map_err(|e| io_error("无法写入服务商配置", e))?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| io_error("无法替换旧的服务商配置", e))?;
+    }
     fs::rename(&tmp, path).map_err(|e| io_error("无法替换服务商配置", e))
 }
 
@@ -294,7 +298,7 @@ fn add_headers(
     if let Some(headers) = profile.get("headers").and_then(Value::as_object) {
         for (name, value) in headers {
             if let Some(value) = value.as_str() {
-                req = req.header(name, value);
+                req = req.header(name.as_str(), value);
             }
         }
     }
