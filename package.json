@@ -1,6 +1,6 @@
 {
   "name": "diffusion-ide",
-  "version": "0.8.0-alpha.6",
+  "version": "0.8.0-alpha.7",
   "private": true,
   "type": "module",
   "description": "Diffusion IDE：正在从 Python Bridge 迁移到跨平台 Rust Native Core。",
