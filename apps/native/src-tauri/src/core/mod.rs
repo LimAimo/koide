@@ -1,4 +1,6 @@
+mod agent;
 mod checkpoint;
+mod conversation;
 mod crypto;
 mod id;
 mod provider;
@@ -9,10 +11,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
+use agent::AgentState;
+use conversation::ConversationStore;
 use provider::{list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "0.8.0-alpha.4";
+pub const VERSION: &str = "0.8.0-alpha.5";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
@@ -44,15 +48,19 @@ struct RuntimeEvent<'a> {
 pub struct NativeCore {
     data_dir: PathBuf,
     workspace: Option<Workspace>,
+    conversations: Option<ConversationStore>,
     profiles: ProfileStore,
+    agent: AgentState,
 }
 
 impl NativeCore {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             profiles: ProfileStore::new(data_dir.clone()),
+            agent: AgentState::new(),
             data_dir,
             workspace: None,
+            conversations: None,
         }
     }
 
@@ -62,6 +70,12 @@ impl NativeCore {
 
     fn ws(&self) -> Result<&Workspace, RuntimeError> {
         self.workspace
+            .as_ref()
+            .ok_or_else(|| RuntimeError::new("NO_WORKSPACE", "请先打开一个项目文件夹"))
+    }
+
+    fn conversations(&self) -> Result<&ConversationStore, RuntimeError> {
+        self.conversations
             .as_ref()
             .ok_or_else(|| RuntimeError::new("NO_WORKSPACE", "请先打开一个项目文件夹"))
     }
@@ -102,12 +116,18 @@ impl NativeCore {
                 let path = req_str(&params, "path")?;
                 let ws = Workspace::open(path, &self.data_dir)?;
                 let info = ws.info();
+                let conversations = ConversationStore::new(
+                    self.data_dir.join("conversations").join(ws.storage_key())
+                )?;
                 self.workspace = Some(ws);
+                self.conversations = Some(conversations);
                 Self::emit(app, "workspace.opened", info.clone());
                 Ok(info)
             }
             "workspace.close" => {
+                let _ = self.agent.stop();
                 self.workspace = None;
+                self.conversations = None;
                 Self::emit(app, "workspace.closed", json!({}));
                 Ok(json!({}))
             }
@@ -276,6 +296,39 @@ impl NativeCore {
                 }
                 Ok(batch.result)
             }
+            "conversations.list" => Ok(json!({"conversations": self.conversations()?.list()?})),
+            "conversations.get" => self.conversations()?.get(req_str(&params, "id")?),
+            "conversations.delete" => {
+                self.conversations()?.delete(req_str(&params, "id")?)?;
+                Ok(json!({}))
+            }
+            "conversations.compact" => Err(RuntimeError::new(
+                "MIGRATION_PENDING",
+                "Native 对话压缩还在迁移中",
+            )),
+            "agent.start" => {
+                let mode = params.get("mode").and_then(Value::as_str).unwrap_or("chat");
+                if mode != "chat" {
+                    return Err(RuntimeError::new(
+                        "MIGRATION_PENDING",
+                        "alpha.5 当前只开放 Native 聊天模式；只读、编辑和智能体模式会在原生工具循环迁移完成后开放",
+                    ).with_data(json!({"mode": mode, "supported_modes": ["chat"]})));
+                }
+                let goal = req_str(&params, "goal")?.to_owned();
+                let profile_id = req_str(&params, "profile")?;
+                let (profile, key) = self.profiles.get(profile_id)?;
+                let store = self.conversations()?.clone();
+                self.agent.start_chat(
+                    app.clone(),
+                    store,
+                    profile,
+                    key,
+                    goal,
+                    params.get("conversation_id").and_then(Value::as_str).map(str::to_owned),
+                    params.get("reasoning").and_then(Value::as_str).unwrap_or("auto").to_owned(),
+                )
+            }
+            "agent.stop" => Ok(json!({"stopping": self.agent.stop()})),
             "git.status" => Ok(json!({"is_repo": false, "files": [], "branch": null})),
             _ => Err(RuntimeError::new(
                 "METHOD_NOT_IMPLEMENTED",
@@ -299,14 +352,15 @@ impl NativeCore {
             },
             "profiles": self.profiles.list_public(),
             "presets": presets(),
-            "agent": {"running": false, "task_id": null},
+            "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
+            "agent_modes": ["chat"],
             "approvals": [],
             "questions": [],
             "tools": [],
             "recent": [],
             "native_migration": {
                 "phase": "C",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conversations.list", "conversations.get", "conversations.delete", "agent.start", "agent.stop"]
             },
             "data_dir": self.data_dir
         })
