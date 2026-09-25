@@ -28,6 +28,7 @@ pub struct AgentState {
     cancel: Arc<AtomicBool>,
     task_id: Arc<Mutex<Option<String>>>,
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    questions: Arc<Mutex<HashMap<String, PendingQuestion>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -42,6 +43,11 @@ struct PendingApproval {
     tx: mpsc::Sender<ApprovalDecision>,
 }
 
+struct PendingQuestion {
+    payload: Value,
+    tx: mpsc::Sender<Vec<String>>,
+}
+
 impl AgentState {
     pub fn new() -> Self {
         Self {
@@ -49,6 +55,7 @@ impl AgentState {
             cancel: Arc::new(AtomicBool::new(false)),
             task_id: Arc::new(Mutex::new(None)),
             approvals: Arc::new(Mutex::new(HashMap::new())),
+            questions: Arc::new(Mutex::new(HashMap::new())),
             session_grants: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -74,6 +81,45 @@ impl AgentState {
             .lock()
             .map(|pending| pending.values().map(|item| item.payload.clone()).collect())
             .unwrap_or_default()
+    }
+
+
+    pub fn pending_questions(&self) -> Vec<Value> {
+        self.questions
+            .lock()
+            .map(|pending| pending.values().map(|item| item.payload.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn answer_question(
+        &self,
+        question_id: &str,
+        answers: Vec<String>,
+    ) -> Result<Value, RuntimeError> {
+        let pending = self
+            .questions
+            .lock()
+            .map_err(|_| RuntimeError::new("LOCK_POISONED", "提问状态锁已损坏"))?
+            .remove(question_id)
+            .ok_or_else(|| RuntimeError::new("NO_QUESTION", "这个问题已经不存在或已经处理"))?;
+        let expected = pending
+            .payload
+            .get("questions")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(1);
+        let normalized = answers
+            .into_iter()
+            .map(|x| x.trim().to_owned())
+            .collect::<Vec<_>>();
+        if normalized.len() != expected || normalized.iter().any(|x| x.is_empty()) {
+            return Err(RuntimeError::new("BAD_ANSWER", "每个问题都需要一个回答"));
+        }
+        pending
+            .tx
+            .send(normalized.clone())
+            .map_err(|_| RuntimeError::new("QUESTION_CLOSED", "等待回答的任务已经结束"))?;
+        Ok(json!({"question_id":question_id,"answers":normalized}))
     }
 
     pub fn respond_approval(
@@ -182,6 +228,7 @@ impl AgentState {
         let return_conversation = conversation.clone();
         let return_task = task_id.clone();
         let approvals = self.approvals.clone();
+        let questions = self.questions.clone();
         let session_grants = self.session_grants.clone();
 
         emit(
@@ -232,6 +279,7 @@ impl AgentState {
                     &checkpoints,
                     mode == "edit",
                     approvals.clone(),
+                    questions.clone(),
                     session_grants.clone(),
                 )
             } else {
@@ -335,6 +383,7 @@ fn run_tool_mode(
     checkpoints: &CheckpointStore,
     editable: bool,
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    questions: Arc<Mutex<HashMap<String, PendingQuestion>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<String, RuntimeError> {
     let tools = if editable { edit_tool_specs() } else { read_tool_specs() };
@@ -399,7 +448,9 @@ fn run_tool_mode(
                 }),
             );
 
-            let result = if matches!(call.name.as_str(), "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy") {
+            let result = if call.name == "ask_user" {
+                execute_ask_user(app, cancel, task_id, &call, questions.clone())
+            } else if matches!(call.name.as_str(), "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy") {
                 if !editable {
                     Err(RuntimeError::new("UNKNOWN_TOOL", "当前模式没有写入工具"))
                 } else {
@@ -433,6 +484,7 @@ fn run_tool_mode(
                         "fs_list" => format!("{} 条结果", value.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
                         "fs_search" => format!("{} 条结果", value.get("matches").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
                         "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy" => "已修改".to_owned(),
+                        "ask_user" => "已回答".to_owned(),
                         _ => "完成".to_owned(),
                     };
                     if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search") {
@@ -554,6 +606,15 @@ fn read_tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type":"function","function":{
+                "name":"ask_user","description":"Ask the user one or more concise questions when an important choice or missing fact cannot be inferred safely.",
+                "parameters":{"type":"object","properties":{
+                    "questions":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"object","properties":{"question":{"type":"string","minLength":1},"options":{"type":"array","items":{"type":"string"}},"allow_custom":{"type":"boolean"}},"required":["question"],"additionalProperties":false}},
+                    "question":{"type":"string"},"options":{"type":"array","items":{"type":"string"}},"allow_custom":{"type":"boolean"}
+                },"additionalProperties":false}
+            }
+        }),
     ]
 }
 
@@ -571,6 +632,7 @@ fn tool_title(call: &ToolCall) -> String {
             "搜索“{}”",
             call.arguments.get("query").and_then(Value::as_str).unwrap_or("")
         ),
+        "ask_user" => "向你提问".to_owned(),
         _ => call.name.clone(),
     }
 }
@@ -787,6 +849,81 @@ fn search_dir(
     Ok(())
 }
 
+
+
+fn execute_ask_user(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    call: &ToolCall,
+    questions_state: Arc<Mutex<HashMap<String, PendingQuestion>>>,
+) -> Result<Value, RuntimeError> {
+    let mut questions = call
+        .arguments
+        .get("questions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if questions.is_empty() {
+        if let Some(question) = call.arguments.get("question").and_then(Value::as_str) {
+            questions.push(json!({
+                "question":question,
+                "options":call.arguments.get("options").cloned().unwrap_or_else(|| json!([])),
+                "allow_custom":call.arguments.get("allow_custom").and_then(Value::as_bool).unwrap_or(true)
+            }));
+        }
+    }
+    if questions.is_empty() || questions.len() > 6 {
+        return Err(RuntimeError::new("BAD_ARGUMENTS", "ask_user 需要 1 到 6 个问题"));
+    }
+    for q in &mut questions {
+        let question = q.get("question").and_then(Value::as_str).unwrap_or("").trim();
+        if question.is_empty() {
+            return Err(RuntimeError::new("BAD_ARGUMENTS", "问题文本不能为空"));
+        }
+        if let Some(obj)=q.as_object_mut() {
+            obj.entry("options").or_insert_with(|| json!([]));
+            obj.entry("allow_custom").or_insert(Value::Bool(true));
+        }
+    }
+
+    let question_id = unique_id("question-");
+    let (tx, rx) = mpsc::channel();
+    let payload = json!({
+        "question_id":question_id,
+        "task_id":task_id,
+        "call_id":call.id,
+        "questions":questions
+    });
+    questions_state.lock()
+        .map_err(|_| RuntimeError::new("LOCK_POISONED","提问状态锁已损坏"))?
+        .insert(question_id.clone(), PendingQuestion { payload:payload.clone(), tx });
+    let _ = app.emit("diffusion://event", RuntimeEvent { event:"agent.question".into(), data:payload });
+    let _ = app.emit("diffusion://event", RuntimeEvent {
+        event:"agent.status".into(),
+        data:json!({"task_id":task_id,"state":"waiting_user","detail":"等待你的回答"})
+    });
+
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            if let Ok(mut q)=questions_state.lock() { q.remove(&question_id); }
+            return Err(RuntimeError::new("STOPPED","已由你停止"));
+        }
+        match rx.recv_timeout(Duration::from_millis(120)) {
+            Ok(answers) => {
+                let summary = questions.iter().zip(answers.iter()).map(|(q,a)| json!({
+                    "question":q.get("question").and_then(Value::as_str).unwrap_or(""),
+                    "answer":a
+                })).collect::<Vec<_>>();
+                return Ok(json!({"answers":answers,"summary":summary}));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(RuntimeError::new("QUESTION_CLOSED","提问通道已经关闭"));
+            }
+        }
+    }
+}
 
 fn edit_tool_specs() -> Vec<Value> {
     let mut tools = read_tool_specs();
