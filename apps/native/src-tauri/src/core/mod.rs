@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use agent::AgentState;
 use conversation::ConversationStore;
-use provider::{list_models, presets, test_profile, ProfileStore};
+use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
 pub const VERSION: &str = "0.8.0-alpha.7";
@@ -119,10 +119,33 @@ impl NativeCore {
                 self.conversations()?.delete(req_str(&params, "id")?)?;
                 Ok(json!({}))
             }
-            "conversation.compact" => Err(RuntimeError::new(
-                "MIGRATION_PENDING",
-                "Native 对话压缩还在迁移中",
-            )),
+            "conversation.compact" => {
+                let conversation_id = req_str(&params, "conversation_id")?;
+                let profile_id = params.get("profile").and_then(Value::as_str).map(str::to_owned)
+                    .or_else(|| self.profiles.list_public().first().and_then(|p| p.get("id")).and_then(Value::as_str).map(str::to_owned))
+                    .ok_or_else(|| RuntimeError::new("NO_PROFILE", "请先添加一个模型服务商"))?;
+                let (profile, key) = self.profiles.get(&profile_id)?;
+                let messages = self.conversations()?.messages(conversation_id)?;
+                if messages.is_empty() {
+                    return Err(RuntimeError::new("EMPTY_CONVERSATION", "当前会话没有可压缩的内容"));
+                }
+                let transcript = messages.iter().filter_map(|m| {
+                    let role = m.get("role").and_then(Value::as_str)?;
+                    let content = m.get("content").and_then(Value::as_str)?;
+                    Some(format!("{role}: {content}"))
+                }).collect::<Vec<_>>().join("\n\n");
+                let summary = chat_complete(
+                    &profile,
+                    key.as_deref(),
+                    &[
+                        json!({"role":"system","content":"Summarize the conversation for future continuation inside a coding IDE. Preserve decisions, file names, constraints, unresolved tasks, and important technical facts. Be compact but loss-minimizing. Do not add facts."}),
+                        json!({"role":"user","content":transcript})
+                    ],
+                    "off",
+                )?;
+                self.conversations()?.append_compact(conversation_id, &summary)?;
+                Ok(json!({"summary":summary}))
+            },
             "agent.start" => {
                 if self.agent.is_running() {
                     return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
@@ -172,6 +195,15 @@ impl NativeCore {
                 )
             }
             "agent.stop" => Ok(json!({"stopped": self.agent.stop()})),
+            "agent.answer" => {
+                let answers = params.get("answers").and_then(Value::as_array)
+                    .map(|xs| xs.iter().map(|v| v.as_str().unwrap_or("").to_owned()).collect::<Vec<_>>())
+                    .or_else(|| params.get("answer").and_then(Value::as_str).map(|s| vec![s.to_owned()]))
+                    .unwrap_or_default();
+                let result = self.agent.answer_question(req_str(&params, "question_id")?, answers)?;
+                Self::emit(app, "agent.question_resolved", result.clone());
+                Ok(result)
+            },
             "approval.respond" => {
                 let result = self.agent.respond_approval(
                     req_str(&params, "approval_id")?,
@@ -391,12 +423,12 @@ impl NativeCore {
             "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
             "agent_modes": ["chat", "read", "edit"],
             "approvals": self.agent.pending_approvals(),
-            "questions": [],
+            "questions": self.agent.pending_questions(),
             "tools": [],
             "recent": [],
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact"]
             },
             "data_dir": self.data_dir
         })
