@@ -140,6 +140,11 @@ impl Workspace {
         })
     }
 
+    pub fn storage_key(&self) -> String {
+        let key = sha256_hex(self.canonical_root.to_string_lossy().as_bytes());
+        key[..16].to_owned()
+    }
+
     fn rel_display(&self, p: &Path) -> String {
         p.strip_prefix(&self.canonical_root)
             .ok()
