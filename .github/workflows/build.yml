@@ -64,12 +64,6 @@ jobs:
         with:
           workspaces: "apps/native/src-tauri -> target"
 
-      - name: Cache pnpm
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
-
       - name: Install JavaScript dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -125,12 +119,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "apps/native/src-tauri -> target"
-
-      - name: Cache pnpm
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
 
       - name: Install JavaScript dependencies
         shell: pwsh
