@@ -1,6 +1,9 @@
+mod agent;
 mod checkpoint;
+mod conversation;
 mod crypto;
 mod id;
+mod policy;
 mod provider;
 mod trash;
 mod workspace;
@@ -9,10 +12,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
+use agent::AgentState;
+use conversation::ConversationStore;
 use provider::{list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "0.8.0-alpha.4";
+pub const VERSION: &str = "0.8.0-alpha.5";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
@@ -44,15 +49,19 @@ struct RuntimeEvent<'a> {
 pub struct NativeCore {
     data_dir: PathBuf,
     workspace: Option<Workspace>,
+    conversations: Option<ConversationStore>,
     profiles: ProfileStore,
+    agent: AgentState,
 }
 
 impl NativeCore {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             profiles: ProfileStore::new(data_dir.clone()),
+            agent: AgentState::new(),
             data_dir,
             workspace: None,
+            conversations: None,
         }
     }
 
@@ -62,6 +71,12 @@ impl NativeCore {
 
     fn ws(&self) -> Result<&Workspace, RuntimeError> {
         self.workspace
+            .as_ref()
+            .ok_or_else(|| RuntimeError::new("NO_WORKSPACE", "请先打开一个项目文件夹"))
+    }
+
+    fn conversations(&self) -> Result<&ConversationStore, RuntimeError> {
+        self.conversations
             .as_ref()
             .ok_or_else(|| RuntimeError::new("NO_WORKSPACE", "请先打开一个项目文件夹"))
     }
@@ -98,16 +113,89 @@ impl NativeCore {
                 let (profile, key) = self.profiles.get(req_str(&params, "id")?)?;
                 Ok(json!({"ok": true, "reply": test_profile(&profile, key.as_deref())?}))
             }
+            "conv.list" => Ok(json!({"conversations": self.conversations()?.list()?})),
+            "conv.get" => self.conversations()?.get(req_str(&params, "id")?),
+            "conv.delete" => {
+                self.conversations()?.delete(req_str(&params, "id")?)?;
+                Ok(json!({}))
+            }
+            "conversation.compact" => Err(RuntimeError::new(
+                "MIGRATION_PENDING",
+                "Native 对话压缩还在迁移中",
+            )),
+            "agent.start" => {
+                if self.agent.is_running() {
+                    return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
+                }
+                let mode = params.get("mode").and_then(Value::as_str).unwrap_or("chat");
+                if !matches!(mode, "chat" | "read") {
+                    return Err(RuntimeError::new(
+                        "MIGRATION_PENDING",
+                        format!("Native Core 的「{mode}」模式仍在迁移；alpha.5 当前开放聊天和只读模式"),
+                    )
+                    .with_data(json!({"mode": mode, "available_modes": ["chat", "read"]})));
+                }
+                let goal = req_str(&params, "goal")?.to_owned();
+                let profile_id = req_str(&params, "profile")?.to_owned();
+                let reasoning = params
+                    .get("reasoning")
+                    .and_then(Value::as_str)
+                    .unwrap_or("auto")
+                    .to_owned();
+                let conversation_id = params
+                    .get("conversation_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let (profile, key) = self.profiles.get(&profile_id)?;
+                let store = self.conversations()?.clone();
+                let workspace_root = self.ws()?.root_path();
+                let checkpoints = self.ws()?.checkpoint_handle();
+                let checkpoint_task = checkpoints.start_task(&goal, mode)?;
+                let task_id = checkpoint_task
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "新建任务缺少 id"))?
+                    .to_owned();
+                self.agent.start(
+                    app.clone(),
+                    store,
+                    profile,
+                    key,
+                    goal,
+                    conversation_id,
+                    reasoning,
+                    mode.to_owned(),
+                    workspace_root,
+                    task_id,
+                    checkpoints,
+                )
+            }
+            "agent.stop" => Ok(json!({"stopped": self.agent.stop()})),
+            "approval.respond" => {
+                let result = self.agent.respond_approval(
+                    req_str(&params, "approval_id")?,
+                    params.get("allow").and_then(Value::as_bool).unwrap_or(false),
+                    params.get("scope").and_then(Value::as_str).unwrap_or("once"),
+                )?;
+                Self::emit(app, "approval.resolved", result.clone());
+                Ok(result)
+            },
             "workspace.open" => {
                 let path = req_str(&params, "path")?;
                 let ws = Workspace::open(path, &self.data_dir)?;
                 let info = ws.info();
+                let conversations = ConversationStore::new(
+                    self.data_dir.join("conversations").join(ws.storage_key())
+                )?;
                 self.workspace = Some(ws);
+                self.conversations = Some(conversations);
                 Self::emit(app, "workspace.opened", info.clone());
                 Ok(info)
             }
             "workspace.close" => {
+                let _ = self.agent.stop();
                 self.workspace = None;
+                self.conversations = None;
                 Self::emit(app, "workspace.closed", json!({}));
                 Ok(json!({}))
             }
@@ -299,14 +387,15 @@ impl NativeCore {
             },
             "profiles": self.profiles.list_public(),
             "presets": presets(),
-            "agent": {"running": false, "task_id": null},
-            "approvals": [],
+            "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
+            "agent_modes": ["chat", "read"],
+            "approvals": self.agent.pending_approvals(),
             "questions": [],
             "tools": [],
             "recent": [],
             "native_migration": {
-                "phase": "C",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test"]
+                "phase": "D-readonly",
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "hard_policy.read", "approval.respond", "checkpoint.agent_lifecycle"]
             },
             "data_dir": self.data_dir
         })

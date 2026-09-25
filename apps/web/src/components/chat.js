@@ -60,7 +60,13 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
     const idx = MODES.findIndex(([id]) => id === s.agent.mode);
     modeSeg.style.setProperty("--i", String(Math.max(0, idx)));
     modeSeg.style.setProperty("--n", String(MODES.length));
-    [...modeSeg.querySelectorAll("button")].forEach((b, i) => b.setAttribute("aria-pressed", String(i === idx)));
+    const supported = Array.isArray(st.hello?.agent_modes) ? st.hello.agent_modes : MODES.map(([id]) => id);
+    [...modeSeg.querySelectorAll("button")].forEach((b, i) => {
+      const id = MODES[i][0];
+      b.setAttribute("aria-pressed", String(i === idx));
+      b.disabled = !supported.includes(id);
+      b.title = supported.includes(id) ? "" : "Native Core 仍在迁移这个模式";
+    });
     const prof = st.profiles.find((p) => p.id === s.agent.profile) || st.profiles[0];
     clear(profileChip);
     profileChip.append(icon("spark", 15), h("span", null, prof ? prof.name : "添加服务商"));
@@ -91,7 +97,10 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
         switchCtl(thinking !== "off", () => { saveSettings({ agent: { reasoning: thinking === "off" ? "auto" : "off" } }); renderModelPopover(); })),
       prof && prof.kind === "deepseek" ? h("div", { class: "popover-row" }, h("span", null, "联网搜索（DeepSeek）"),
         switchCtl(!!s.agent.webSearch, () => { saveSettings({ agent: { webSearch: !s.agent.webSearch } }); renderModelPopover(); })) : null,
-      h("button", { class: "popover-item", type: "button", onclick: async () => {
+      h("button", { class: "popover-item", type: "button",
+        disabled: runtime.kind === "native" && !(st.hello?.native_migration?.implemented || []).includes("conversation.compact"),
+        title: runtime.kind === "native" && !(st.hello?.native_migration?.implemented || []).includes("conversation.compact") ? "Native Core 仍在迁移上下文压缩" : "",
+        onclick: async () => {
         closePopover();
         const cid = state.get().conversationId;
         if (!cid) return toast("当前还没有可以压缩的对话");
@@ -126,7 +135,7 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
   async function go() {
     const text = input.value.trim();
     if (!text) return;
-    if (state.get().conn !== "online") return toast("请先连接桥接服务（设置 › Python 桥接）");
+    if (state.get().conn !== "online") return toast(runtime.kind === "native" ? "本地 Native Core 尚未连接" : "请先连接桥接服务（设置 › Python 桥接）");
     if (!state.get().workspace) return toast("请先打开一个项目文件夹");
     try {
       await startAgent(text);
@@ -138,6 +147,11 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
   }
 
   state.subscribe((s) => {
+    const supported = Array.isArray(s.hello?.agent_modes) ? s.hello.agent_modes : null;
+    const currentMode = settingsStore.get().agent.mode;
+    if (runtime.kind === "native" && supported?.length && !supported.includes(currentMode)) {
+      queueMicrotask(() => saveSettings({ agent: { mode: supported[0] } }));
+    }
     send.classList.toggle("running", s.agent.running);
     send.setAttribute("aria-label", s.agent.running ? "停止" : "发送");
     paintHeader();

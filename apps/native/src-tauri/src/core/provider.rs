@@ -1,3 +1,4 @@
+use crate::core::id::unique_id;
 use crate::core::RuntimeError;
 use reqwest::blocking::{Client, RequestBuilder};
 use serde_json::{json, Map, Value};
@@ -444,4 +445,611 @@ pub fn test_profile(profile: &Value, api_key: Option<&str>) -> Result<String, Ru
             .unwrap_or("ok"),
     };
     Ok(reply.chars().take(80).collect())
+}
+
+
+/// One complete non-streaming chat turn used by the first Native Agent milestone.
+/// Tool calling is intentionally not accepted here yet: alpha.5 initially exposes only the honest
+/// "chat" mode, while read/edit/agent stay disabled until their native tool loop is migrated.
+pub fn chat_complete(
+    profile: &Value,
+    api_key: Option<&str>,
+    messages: &[Value],
+    reasoning: &str,
+) -> Result<String, RuntimeError> {
+    let endpoint = profile
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写接口地址"))?;
+    let model = profile
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写模型 ID"))?;
+    let kind = profile
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("openai_compatible");
+
+    let (url, body) = match kind {
+        "anthropic" => {
+            let mut system = Vec::new();
+            let mut out = Vec::new();
+            for message in messages {
+                let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+                if content.is_empty() {
+                    continue;
+                }
+                if role == "system" {
+                    system.push(content.to_owned());
+                } else {
+                    out.push(json!({
+                        "role": if role == "assistant" { "assistant" } else { "user" },
+                        "content": content
+                    }));
+                }
+            }
+            let mut body = json!({
+                "model": model,
+                "max_tokens": profile.pointer("/sampling/max_tokens").and_then(Value::as_u64).unwrap_or(8192),
+                "messages": out
+            });
+            if !system.is_empty() {
+                body["system"] = Value::String(system.join("\n\n"));
+            }
+            if reasoning == "on" {
+                body["thinking"] = json!({"type": "adaptive"});
+            }
+            (
+                format!("{}/messages", endpoint.trim_end_matches('/')),
+                body,
+            )
+        }
+        "gemini_native" => {
+            let mut contents = Vec::new();
+            let mut system = Vec::new();
+            for message in messages {
+                let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+                if content.is_empty() {
+                    continue;
+                }
+                if role == "system" {
+                    system.push(content.to_owned());
+                } else {
+                    contents.push(json!({
+                        "role": if role == "assistant" { "model" } else { "user" },
+                        "parts": [{"text": content}]
+                    }));
+                }
+            }
+            let mut body = json!({"contents": contents});
+            if !system.is_empty() {
+                body["systemInstruction"] = json!({"parts": [{"text": system.join("\n\n")}]});
+            }
+            (
+                format!(
+                    "{}/models/{}:generateContent",
+                    endpoint.trim_end_matches('/'),
+                    model.strip_prefix("models/").unwrap_or(model)
+                ),
+                body,
+            )
+        }
+        _ => {
+            let mut body = json!({
+                "model": model,
+                "messages": messages,
+                "stream": false
+            });
+            if let Some(sampling) = profile.get("sampling").and_then(Value::as_object) {
+                for (key, value) in sampling {
+                    if !value.is_null() {
+                        body[key] = value.clone();
+                    }
+                }
+            }
+
+            let lower_model = model.to_ascii_lowercase();
+            if matches!(reasoning, "on" | "off") {
+                let on = reasoning == "on";
+                match kind {
+                    "deepseek" => body["thinking"] = json!({"type": if on { "enabled" } else { "disabled" }}),
+                    "openrouter" => body["reasoning"] = json!({"enabled": on}),
+                    "gemini" => {
+                        body["reasoning_effort"] = Value::String(if on { "high" } else if lower_model.contains("pro") || lower_model.starts_with("gemini-3") { "minimal" } else { "none" }.into())
+                    }
+                    "openai" if lower_model.starts_with("o1")
+                        || lower_model.starts_with("o3")
+                        || lower_model.starts_with("o4")
+                        || lower_model.starts_with("gpt-5") =>
+                    {
+                        body["reasoning_effort"] = Value::String(if on { "medium" } else { "none" }.into())
+                    }
+                    "minimax" | "minimax_cn" => {
+                        body["thinking"] = json!({"type": if on { "adaptive" } else { "disabled" }})
+                    }
+                    _ => {}
+                }
+            }
+            if matches!(kind, "minimax" | "minimax_cn") {
+                body["reasoning_split"] = Value::Bool(true);
+            }
+            if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
+                for (key, value) in extra {
+                    body[key] = value.clone();
+                }
+            }
+            (
+                format!("{}/chat/completions", endpoint.trim_end_matches('/')),
+                body,
+            )
+        }
+    };
+
+    let resp = add_headers(client()?.post(url), profile, api_key, true)
+        .json(&body)
+        .send()
+        .map_err(|e| provider_error(format!("模型请求失败：{e}")))?;
+    let payload = response_json(resp)?;
+
+    let text = match kind {
+        "anthropic" => payload
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default(),
+        "gemini_native" => payload
+            .pointer("/candidates/0/content/parts")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default(),
+        _ => {
+            let content = payload.pointer("/choices/0/message/content");
+            match content {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|part| {
+                        part.get("text")
+                            .and_then(Value::as_str)
+                            .or_else(|| part.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            }
+        }
+    };
+
+    if text.trim().is_empty() {
+        return Err(provider_error(format!(
+            "模型返回成功，但没有可显示的文本：{}",
+            payload.to_string().chars().take(600).collect::<String>()
+        )));
+    }
+    Ok(text)
+}
+
+
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderTurn {
+    pub text: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub assistant_message: Value,
+}
+
+fn parse_json_object(raw: &str) -> Value {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+fn canonical_tool_calls(calls: &[ToolCall]) -> Value {
+    Value::Array(
+        calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into())
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+fn anthropic_request_messages(messages: &[Value]) -> (Option<String>, Vec<Value>) {
+    let mut system = Vec::new();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < messages.len() {
+        let message = &messages[i];
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+        match role {
+            "system" => {
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        system.push(text.to_owned());
+                    }
+                }
+                i += 1;
+            }
+            "assistant" => {
+                let mut content = Vec::new();
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        content.push(json!({"type":"text","text":text}));
+                    }
+                }
+                if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+                    for call in calls {
+                        let id = call.get("id").and_then(Value::as_str).unwrap_or("");
+                        let function = call.get("function").and_then(Value::as_object);
+                        let name = function.and_then(|f| f.get("name")).and_then(Value::as_str).unwrap_or("");
+                        let args = function
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(Value::as_str)
+                            .map(parse_json_object)
+                            .unwrap_or_else(|| json!({}));
+                        if !name.is_empty() {
+                            content.push(json!({"type":"tool_use","id":id,"name":name,"input":args}));
+                        }
+                    }
+                }
+                out.push(json!({"role":"assistant","content":content}));
+                i += 1;
+            }
+            "tool" => {
+                let mut content = Vec::new();
+                while i < messages.len()
+                    && messages[i].get("role").and_then(Value::as_str) == Some("tool")
+                {
+                    let tool = &messages[i];
+                    let id = tool.get("tool_call_id").and_then(Value::as_str).unwrap_or("");
+                    let result = tool.get("content").and_then(Value::as_str).unwrap_or("");
+                    content.push(json!({"type":"tool_result","tool_use_id":id,"content":result}));
+                    i += 1;
+                }
+                out.push(json!({"role":"user","content":content}));
+            }
+            _ => {
+                let text = message.get("content").and_then(Value::as_str).unwrap_or("");
+                out.push(json!({"role":"user","content":text}));
+                i += 1;
+            }
+        }
+    }
+    let system = if system.is_empty() { None } else { Some(system.join("\n\n")) };
+    (system, out)
+}
+
+fn gemini_request(messages: &[Value]) -> (Option<String>, Vec<Value>) {
+    let mut system = Vec::new();
+    let mut contents = Vec::new();
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+        match role {
+            "system" => {
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        system.push(text.to_owned());
+                    }
+                }
+            }
+            "assistant" => {
+                let mut parts = Vec::new();
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        parts.push(json!({"text":text}));
+                    }
+                }
+                if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+                    for call in calls {
+                        let function = call.get("function").and_then(Value::as_object);
+                        let name = function.and_then(|f| f.get("name")).and_then(Value::as_str).unwrap_or("");
+                        let args = function
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(Value::as_str)
+                            .map(parse_json_object)
+                            .unwrap_or_else(|| json!({}));
+                        if !name.is_empty() {
+                            parts.push(json!({"functionCall":{"name":name,"args":args}}));
+                        }
+                    }
+                }
+                contents.push(json!({"role":"model","parts":parts}));
+            }
+            "tool" => {
+                let name = message.get("name").and_then(Value::as_str).unwrap_or("tool");
+                let raw = message.get("content").and_then(Value::as_str).unwrap_or("");
+                let response = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({"result":raw}));
+                contents.push(json!({
+                    "role":"user",
+                    "parts":[{"functionResponse":{"name":name,"response":response}}]
+                }));
+            }
+            _ => {
+                let text = message.get("content").and_then(Value::as_str).unwrap_or("");
+                contents.push(json!({"role":"user","parts":[{"text":text}]}));
+            }
+        }
+    }
+    let system = if system.is_empty() { None } else { Some(system.join("\n\n")) };
+    (system, contents)
+}
+
+pub fn agent_turn(
+    profile: &Value,
+    api_key: Option<&str>,
+    messages: &[Value],
+    tools: &[Value],
+    reasoning: &str,
+) -> Result<ProviderTurn, RuntimeError> {
+    let endpoint = profile
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写接口地址"))?;
+    let model = profile
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写模型 ID"))?;
+    let kind = profile
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("openai_compatible");
+
+    if profile.get("tool_calling").and_then(Value::as_bool) == Some(false) {
+        return Err(RuntimeError::new(
+            "TOOLS_DISABLED",
+            "这个服务商配置关闭了工具调用；请在服务商设置里启用后再使用只读模式",
+        ));
+    }
+
+    match kind {
+        "anthropic" => {
+            let (system, request_messages) = anthropic_request_messages(messages);
+            let mut body = json!({
+                "model": model,
+                "max_tokens": profile.pointer("/sampling/max_tokens").and_then(Value::as_u64).unwrap_or(8192),
+                "messages": request_messages,
+                "tools": tools.iter().filter_map(|tool| {
+                    let function = tool.get("function")?;
+                    Some(json!({
+                        "name": function.get("name")?,
+                        "description": function.get("description").cloned().unwrap_or(Value::String(String::new())),
+                        "input_schema": function.get("parameters").cloned().unwrap_or_else(|| json!({"type":"object"}))
+                    }))
+                }).collect::<Vec<_>>()
+            });
+            if let Some(system) = system {
+                body["system"] = Value::String(system);
+            }
+            if reasoning == "on" {
+                body["thinking"] = json!({"type":"adaptive"});
+            }
+            if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
+                for (key, value) in extra {
+                    body[key] = value.clone();
+                }
+            }
+            let resp = add_headers(
+                client()?.post(format!("{}/messages", endpoint.trim_end_matches('/'))),
+                profile,
+                api_key,
+                true,
+            )
+            .json(&body)
+            .send()
+            .map_err(|e| provider_error(format!("模型请求失败：{e}")))?;
+            let payload = response_json(resp)?;
+
+            let mut text = String::new();
+            let mut calls = Vec::new();
+            for part in payload.get("content").and_then(Value::as_array).into_iter().flatten() {
+                match part.get("type").and_then(Value::as_str) {
+                    Some("text") => text.push_str(part.get("text").and_then(Value::as_str).unwrap_or("")),
+                    Some("tool_use") => {
+                        let name = part.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+                        if !name.is_empty() {
+                            calls.push(ToolCall {
+                                id: part.get("id").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| unique_id("call-")),
+                                name,
+                                arguments: part.get("input").cloned().filter(Value::is_object).unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let assistant_message = json!({
+                "role":"assistant",
+                "content":text,
+                "tool_calls":canonical_tool_calls(&calls)
+            });
+            Ok(ProviderTurn { text, tool_calls: calls, assistant_message })
+        }
+        "gemini_native" => {
+            let (system, contents) = gemini_request(messages);
+            let mut body = json!({
+                "contents": contents,
+                "tools": [{"functionDeclarations": tools.iter().filter_map(|tool| {
+                    let function = tool.get("function")?;
+                    Some(json!({
+                        "name": function.get("name")?,
+                        "description": function.get("description").cloned().unwrap_or(Value::String(String::new())),
+                        "parameters": function.get("parameters").cloned().unwrap_or_else(|| json!({"type":"object"}))
+                    }))
+                }).collect::<Vec<_>>()}]
+            });
+            if let Some(system) = system {
+                body["systemInstruction"] = json!({"parts":[{"text":system}]});
+            }
+            if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
+                for (key, value) in extra {
+                    body[key] = value.clone();
+                }
+            }
+            let url = format!(
+                "{}/models/{}:generateContent",
+                endpoint.trim_end_matches('/'),
+                model.strip_prefix("models/").unwrap_or(model)
+            );
+            let resp = add_headers(client()?.post(url), profile, api_key, true)
+                .json(&body)
+                .send()
+                .map_err(|e| provider_error(format!("模型请求失败：{e}")))?;
+            let payload = response_json(resp)?;
+
+            let mut text = String::new();
+            let mut calls = Vec::new();
+            for part in payload
+                .pointer("/candidates/0/content/parts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
+                if let Some(piece) = part.get("text").and_then(Value::as_str) {
+                    text.push_str(piece);
+                }
+                if let Some(call) = part.get("functionCall").and_then(Value::as_object) {
+                    let name = call.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+                    if !name.is_empty() {
+                        calls.push(ToolCall {
+                            id: unique_id("call-"),
+                            name,
+                            arguments: call.get("args").cloned().filter(Value::is_object).unwrap_or_else(|| json!({})),
+                        });
+                    }
+                }
+            }
+            let assistant_message = json!({
+                "role":"assistant",
+                "content":text,
+                "tool_calls":canonical_tool_calls(&calls)
+            });
+            Ok(ProviderTurn { text, tool_calls: calls, assistant_message })
+        }
+        _ => {
+            let mut body = json!({
+                "model": model,
+                "messages": messages,
+                "stream": false,
+                "tools": tools
+            });
+            if let Some(sampling) = profile.get("sampling").and_then(Value::as_object) {
+                for (key, value) in sampling {
+                    if !value.is_null() {
+                        body[key] = value.clone();
+                    }
+                }
+            }
+            let lower_model = model.to_ascii_lowercase();
+            if matches!(reasoning, "on" | "off") {
+                let on = reasoning == "on";
+                match kind {
+                    "deepseek" => body["thinking"] = json!({"type": if on { "enabled" } else { "disabled" }}),
+                    "openrouter" => body["reasoning"] = json!({"enabled":on}),
+                    "gemini" => {
+                        body["reasoning_effort"] = Value::String(
+                            if on { "high" } else if lower_model.contains("pro") || lower_model.starts_with("gemini-3") { "minimal" } else { "none" }.into()
+                        );
+                    }
+                    "openai" if lower_model.starts_with("o1")
+                        || lower_model.starts_with("o3")
+                        || lower_model.starts_with("o4")
+                        || lower_model.starts_with("gpt-5") =>
+                    {
+                        body["reasoning_effort"] = Value::String(if on { "medium" } else { "none" }.into());
+                    }
+                    "minimax" | "minimax_cn" => {
+                        body["thinking"] = json!({"type": if on { "adaptive" } else { "disabled" }});
+                    }
+                    _ => {}
+                }
+            }
+            if matches!(kind, "minimax" | "minimax_cn") {
+                body["reasoning_split"] = Value::Bool(true);
+            }
+            if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
+                for (key, value) in extra {
+                    body[key] = value.clone();
+                }
+            }
+            let resp = add_headers(
+                client()?.post(format!("{}/chat/completions", endpoint.trim_end_matches('/'))),
+                profile,
+                api_key,
+                true,
+            )
+            .json(&body)
+            .send()
+            .map_err(|e| provider_error(format!("模型请求失败：{e}")))?;
+            let payload = response_json(resp)?;
+            let message = payload
+                .pointer("/choices/0/message")
+                .cloned()
+                .ok_or_else(|| provider_error("模型响应缺少 choices[0].message"))?;
+
+            let text = match message.get("content") {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str).or_else(|| part.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            };
+            let mut calls = Vec::new();
+            for call in message.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
+                let function = call.get("function").and_then(Value::as_object);
+                let name = function.and_then(|f| f.get("name")).and_then(Value::as_str).unwrap_or("").to_owned();
+                if name.is_empty() {
+                    continue;
+                }
+                let args = function
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(Value::as_str)
+                    .map(parse_json_object)
+                    .unwrap_or_else(|| json!({}));
+                calls.push(ToolCall {
+                    id: call.get("id").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| unique_id("call-")),
+                    name,
+                    arguments: args,
+                });
+            }
+            Ok(ProviderTurn { text, tool_calls: calls, assistant_message: message })
+        }
+    }
 }
