@@ -102,3 +102,22 @@ mod tests {
         assert!(check_read_path("/etc/passwd").is_err());
     }
 }
+
+
+pub fn check_write_path(raw: &str) -> Result<(), RuntimeError> {
+    // Writing inherits every read restriction first: no absolute paths, escapes, secrets or keys.
+    check_read_path(raw)?;
+
+    let normalized = raw.replace('\\', "/").trim_start_matches("./").to_ascii_lowercase();
+    if normalized == ".git"
+        || normalized.starts_with(".git/")
+        || normalized == ".diffusion"
+        || normalized.starts_with(".diffusion/")
+    {
+        return Err(RuntimeError::new(
+            "SENSITIVE_PATH",
+            "HardPolicy 不允许智能体直接修改 Git 内部数据或 Diffusion 自身元数据",
+        ));
+    }
+    Ok(())
+}
