@@ -82,6 +82,12 @@ impl ConversationStore {
         self.save(&conversation)
     }
 
+    pub fn append_compact(&self, id: &str, summary: &str) -> Result<Value, RuntimeError> {
+        let entry = json!({"role":"compact","text":summary,"ts":now_secs()});
+        self.append(id, vec![entry.clone()])?;
+        Ok(entry)
+    }
+
     pub fn list(&self) -> Result<Vec<Value>, RuntimeError> {
         let mut out = Vec::new();
         let entries = fs::read_dir(&self.base)
