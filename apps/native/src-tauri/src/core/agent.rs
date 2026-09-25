@@ -1,11 +1,13 @@
 use crate::core::checkpoint::CheckpointStore;
 use crate::core::conversation::ConversationStore;
-use crate::core::policy::check_read_path;
+use crate::core::id::unique_id;
+use crate::core::policy::{check_read_path, check_write_path};
 use crate::core::provider::{agent_turn, chat_complete, ToolCall};
+use crate::core::workspace::Workspace;
 use crate::core::RuntimeError;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -13,7 +15,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 const MAX_TOOL_ROUNDS: usize = 12;
@@ -26,6 +28,7 @@ pub struct AgentState {
     cancel: Arc<AtomicBool>,
     task_id: Arc<Mutex<Option<String>>>,
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +49,7 @@ impl AgentState {
             cancel: Arc::new(AtomicBool::new(false)),
             task_id: Arc::new(Mutex::new(None)),
             approvals: Arc::new(Mutex::new(HashMap::new())),
+            session_grants: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -111,20 +115,22 @@ impl AgentState {
         reasoning: String,
         mode: String,
         workspace_root: PathBuf,
+        data_dir: PathBuf,
         task_id: String,
         checkpoints: CheckpointStore,
     ) -> Result<Value, RuntimeError> {
-        if !matches!(mode.as_str(), "chat" | "read") {
+        if !matches!(mode.as_str(), "chat" | "read" | "edit") {
             return Err(RuntimeError::new(
                 "MIGRATION_PENDING",
-                format!("Native Core 的「{mode}」模式仍在迁移；alpha.5 当前开放聊天和只读模式"),
+                format!("Native Core 的「{mode}」模式仍在迁移；当前开放聊天、只读和编辑模式"),
             )
-            .with_data(json!({"mode":mode,"available_modes":["chat","read"]})));
+            .with_data(json!({"mode":mode,"available_modes":["chat","read","edit"]})));
         }
         if self.running.swap(true, Ordering::SeqCst) {
             return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
         }
         self.cancel.store(false, Ordering::SeqCst);
+        if let Ok(mut grants) = self.session_grants.lock() { grants.clear(); }
         if let Ok(mut slot) = self.task_id.lock() {
             *slot = Some(task_id.clone());
         }
@@ -145,12 +151,12 @@ impl AgentState {
 
             let mut messages = store.messages(&conversation)?;
             messages.push(json!({"role":"user","content":goal.clone()}));
-            if mode == "read" {
+            if matches!(mode.as_str(), "read" | "edit") {
                 messages.insert(
                     0,
                     json!({
                         "role":"system",
-                        "content":"You are Diffusion IDE in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list directories, read text files, and search text. You cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy. If a tool is denied, do not try to bypass the policy. Give a concise final answer grounded in what you actually inspected."
+                        "content": if mode == "edit" { "You are Diffusion IDE in EDIT mode. Inspect files before modifying them. You may list, read and search files, then request guarded file edits using the provided tools. Every write is subject to HardPolicy, user approval and Checkpoint. Never bypass a denied action and never edit Git/Diffusion internal metadata directly." } else { "You are Diffusion IDE in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list directories, read text files, and search text. You cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy. If a tool is denied, do not try to bypass the policy. Give a concise final answer grounded in what you actually inspected." }
                     }),
                 );
             }
@@ -175,6 +181,8 @@ impl AgentState {
         let task_slot = self.task_id.clone();
         let return_conversation = conversation.clone();
         let return_task = task_id.clone();
+        let approvals = self.approvals.clone();
+        let session_grants = self.session_grants.clone();
 
         emit(
             &app,
@@ -210,8 +218,8 @@ impl AgentState {
                 }
             };
 
-            let outcome = if mode == "read" {
-                run_read_mode(
+            let outcome = if matches!(mode.as_str(), "read" | "edit") {
+                run_tool_mode(
                     &app,
                     &cancel,
                     &task_id,
@@ -220,7 +228,11 @@ impl AgentState {
                     messages,
                     &reasoning,
                     &workspace_root,
+                    &data_dir,
                     &checkpoints,
+                    mode == "edit",
+                    approvals.clone(),
+                    session_grants.clone(),
                 )
             } else {
                 run_chat_mode(
@@ -310,7 +322,7 @@ fn run_chat_mode(
     Ok(answer)
 }
 
-fn run_read_mode(
+fn run_tool_mode(
     app: &AppHandle,
     cancel: &AtomicBool,
     task_id: &str,
@@ -319,9 +331,15 @@ fn run_read_mode(
     mut messages: Vec<Value>,
     reasoning: &str,
     workspace_root: &Path,
+    data_dir: &Path,
     checkpoints: &CheckpointStore,
+    editable: bool,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<String, RuntimeError> {
-    let tools = read_tool_specs();
+    let tools = if editable { edit_tool_specs() } else { read_tool_specs() };
+    let workspace = Workspace::open(&workspace_root.to_string_lossy(), data_dir)?;
+    let mut read_revisions: HashMap<String, String> = HashMap::new();
     let mut visible = String::new();
     let mut total_calls = 0usize;
 
@@ -381,24 +399,53 @@ fn run_read_mode(
                 }),
             );
 
-            let result = execute_read_tool(workspace_root, &call);
+            let result = if matches!(call.name.as_str(), "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy") {
+                if !editable {
+                    Err(RuntimeError::new("UNKNOWN_TOOL", "当前模式没有写入工具"))
+                } else {
+                    execute_edit_tool(
+                        app,
+                        cancel,
+                        task_id,
+                        &workspace,
+                        checkpoints,
+                        &call,
+                        &mut read_revisions,
+                        approvals.clone(),
+                        session_grants.clone(),
+                    )
+                }
+            } else {
+                execute_read_tool(workspace_root, &call)
+            };
             let (payload, state, summary, detail) = match result {
                 Ok(value) => {
+                    if call.name == "fs_read" {
+                        if let (Some(path), Some(revision)) = (
+                            value.get("path").and_then(Value::as_str),
+                            value.get("revision").and_then(Value::as_str),
+                        ) {
+                            read_revisions.insert(path.to_owned(), revision.to_owned());
+                        }
+                    }
                     let summary = match call.name.as_str() {
                         "fs_read" => format!("{} 行", value.get("total_lines").and_then(Value::as_u64).unwrap_or(0)),
                         "fs_list" => format!("{} 条结果", value.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
                         "fs_search" => format!("{} 条结果", value.get("matches").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
+                        "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy" => "已修改".to_owned(),
                         _ => "完成".to_owned(),
                     };
-                    let _ = checkpoints.add_event(
-                        task_id,
-                        "read",
-                        &tool_title(&call),
-                        json!({"tool":call.name.clone(),"arguments":call.arguments.clone(),"summary":summary.clone()}),
-                    );
+                    if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search") {
+                        let _ = checkpoints.add_event(
+                            task_id,
+                            "read",
+                            &tool_title(&call),
+                            json!({"tool":call.name.clone(),"arguments":call.arguments.clone(),"summary":summary.clone()}),
+                        );
+                    }
                     (value, "done", summary, String::new())
                 },
-                Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE") => {
+                Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE" | "USER_DECLINED") => {
                     let code = error.code.clone();
                     let message = error.message.clone();
                     (
@@ -576,6 +623,7 @@ fn execute_read_tool(root: &Path, call: &ToolCall) -> Result<Value, RuntimeError
             };
             Ok(json!({
                 "path":display_rel(root,&path),
+                "revision": crate::core::crypto::sha256_hex(&data),
                 "total_lines":lines.len(),
                 "range":[start,end],
                 "content":content
@@ -736,6 +784,279 @@ fn search_dir(
             }
         }
     }
+    Ok(())
+}
+
+
+fn edit_tool_specs() -> Vec<Value> {
+    let mut tools = read_tool_specs();
+    tools.extend([
+        json!({"type":"function","function":{
+            "name":"fs_write","description":"Write complete UTF-8 text to a workspace file. Existing files MUST be read first. Requires user approval.",
+            "parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"fs_patch","description":"Patch a text file after reading it. Edits may use old_text/new_text or range/new_text. Requires user approval.",
+            "parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object"}}},"required":["path","edits"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"fs_create","description":"Create a new UTF-8 text file or folder. Requires user approval.",
+            "parameters":{"type":"object","properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["file","dir"]},"content":{"type":"string"}},"required":["path"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"fs_delete","description":"Delete a FILE by moving it to Diffusion Trash. Directory deletion is intentionally not exposed to the agent. Requires user approval.",
+            "parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"fs_rename","description":"Rename or move a FILE inside the workspace. Requires user approval.",
+            "parameters":{"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"fs_copy","description":"Copy a FILE inside the workspace. Requires user approval.",
+            "parameters":{"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"],"additionalProperties":false}
+        }})
+    ]);
+    tools
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_edit_tool(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    workspace: &Workspace,
+    checkpoints: &CheckpointStore,
+    call: &ToolCall,
+    read_revisions: &mut HashMap<String, String>,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
+) -> Result<Value, RuntimeError> {
+    ensure_not_cancelled(cancel)?;
+
+    let primary = call.arguments.get("path").and_then(Value::as_str)
+        .or_else(|| call.arguments.get("from").and_then(Value::as_str))
+        .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "写入工具缺少 path/from"))?;
+    check_write_path(primary)?;
+    if let Some(to) = call.arguments.get("to").and_then(Value::as_str) {
+        check_write_path(to)?;
+    }
+
+    request_write_approval(
+        app, cancel, task_id, call, approvals, session_grants
+    )?;
+    ensure_not_cancelled(cancel)?;
+
+    match call.name.as_str() {
+        "fs_write" => {
+            let path = required_arg(&call.arguments, "path")?;
+            let content = required_arg(&call.arguments, "content")?;
+            let before = workspace.read(path).ok();
+            let base = if let Some(current) = before.as_ref() {
+                let rev = read_revisions.get(path).ok_or_else(|| RuntimeError::new(
+                    "NEEDS_READ",
+                    format!("修改 {path} 之前请先用 fs_read 读取它"),
+                ))?;
+                Some(rev.as_str())
+            } else {
+                Some("absent")
+            };
+            let before_bytes = before.as_ref()
+                .and_then(|v| v.get("content").and_then(Value::as_str))
+                .map(str::as_bytes);
+            checkpoints.record_before(task_id, path, before_bytes)?;
+            let mutation = workspace.write_text(path, content, base)?;
+            record_agent_mutation(app, checkpoints, task_id, &mutation.event, before_bytes)?;
+            if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
+                read_revisions.insert(path.to_owned(), rev.to_owned());
+            }
+            Ok(mutation.result)
+        }
+        "fs_patch" => {
+            let path = required_arg(&call.arguments, "path")?;
+            let edits = call.arguments.get("edits").and_then(Value::as_array)
+                .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "fs_patch 缺少 edits"))?;
+            let base = read_revisions.get(path).cloned().ok_or_else(|| RuntimeError::new(
+                "NEEDS_READ",
+                format!("修改 {path} 之前请先用 fs_read 读取它"),
+            ))?;
+            let before_value = workspace.read(path)?;
+            let before_text = before_value.get("content").and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::new("BINARY_FILE", format!("{path} 不是 UTF-8 文本")))?;
+            checkpoints.record_before(task_id, path, Some(before_text.as_bytes()))?;
+            let mutation = workspace.patch(path, &base, edits)?;
+            record_agent_mutation(app, checkpoints, task_id, &mutation.event, Some(before_text.as_bytes()))?;
+            if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
+                read_revisions.insert(path.to_owned(), rev.to_owned());
+            }
+            Ok(mutation.result)
+        }
+        "fs_create" => {
+            let path = required_arg(&call.arguments, "path")?;
+            let kind = call.arguments.get("kind").and_then(Value::as_str).unwrap_or("file");
+            let content = call.arguments.get("content").and_then(Value::as_str).unwrap_or("");
+            checkpoints.record_before(task_id, path, None)?;
+            let mutation = workspace.create(path, kind, content)?;
+            record_agent_mutation(app, checkpoints, task_id, &mutation.event, None)?;
+            if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
+                read_revisions.insert(path.to_owned(), rev.to_owned());
+            }
+            Ok(mutation.result)
+        }
+        "fs_delete" => {
+            let path = required_arg(&call.arguments, "path")?;
+            let before = workspace.read(path).map_err(|e| {
+                if e.code == "NOT_FOUND" { e } else {
+                    RuntimeError::new("POLICY_DENIED", "智能体当前只允许删除普通文件，不允许删除文件夹")
+                }
+            })?;
+            let text = before.get("content").and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许删除 UTF-8 文本文件"))?;
+            checkpoints.record_before(task_id, path, Some(text.as_bytes()))?;
+            let mutation = workspace.delete(path)?;
+            record_agent_mutation(app, checkpoints, task_id, &mutation.event, Some(text.as_bytes()))?;
+            read_revisions.remove(path);
+            Ok(mutation.result)
+        }
+        "fs_rename" => {
+            let from = required_arg(&call.arguments, "from")?;
+            let to = required_arg(&call.arguments, "to")?;
+            let before = workspace.read(from)?;
+            let text = before.get("content").and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许重命名 UTF-8 文本文件"))?;
+            checkpoints.record_before(task_id, from, Some(text.as_bytes()))?;
+            checkpoints.record_before(task_id, to, None)?;
+            let mutation = workspace.rename(from, to)?;
+            let before_blob = checkpoints.blob_for_event_before(Some(text.as_bytes()))?;
+            checkpoints.add_event(task_id, "edit", &format!("删除 {from}"), json!({
+                "path":from,"kind":"delete","before_blob":before_blob,"existed_before":true,
+                "after_rev":"absent","old_path":from,"new_path":to
+            }))?;
+            let after_rev = workspace.read(to)?.get("revision").cloned().unwrap_or(Value::String("absent".into()));
+            checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
+                "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
+                "after_rev":after_rev,"old_path":from,"new_path":to
+            }))?;
+            let mut event = mutation.event.clone();
+            if let Some(obj) = event.as_object_mut() {
+                obj.insert("actor".into(), Value::String("agent".into()));
+                obj.insert("task_id".into(), Value::String(task_id.into()));
+            }
+            let _ = app.emit("diffusion://event", RuntimeEvent { event:"fs.changed".into(), data:event });
+            read_revisions.remove(from);
+            if let Ok(v) = workspace.read(to) {
+                if let Some(rev)=v.get("revision").and_then(Value::as_str) { read_revisions.insert(to.to_owned(), rev.to_owned()); }
+            }
+            Ok(mutation.result)
+        }
+        "fs_copy" => {
+            let from = required_arg(&call.arguments, "from")?;
+            let to = required_arg(&call.arguments, "to")?;
+            let before = workspace.read(from)?;
+            let text = before.get("content").and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许复制 UTF-8 文本文件"))?;
+            checkpoints.record_before(task_id, to, None)?;
+            let result = workspace.copy(from, to)?;
+            let after = workspace.read(to)?;
+            checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
+                "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
+                "after_rev":after.get("revision").cloned().unwrap_or(Value::String("absent".into()))
+            }))?;
+            let _ = app.emit("diffusion://event", RuntimeEvent {
+                event:"fs.changed".into(),
+                data:json!({"kind":"create","path":to,"actor":"agent","task_id":task_id})
+            });
+            if let Some(rev)=after.get("revision").and_then(Value::as_str) { read_revisions.insert(to.to_owned(), rev.to_owned()); }
+            Ok(result)
+        }
+        _ => Err(RuntimeError::new("UNKNOWN_TOOL", format!("未知编辑工具：{}", call.name))),
+    }
+}
+
+fn request_write_approval(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    call: &ToolCall,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
+) -> Result<(), RuntimeError> {
+    if session_grants.lock().map(|g| g.contains(&call.name)).unwrap_or(false) {
+        return Ok(());
+    }
+
+    let approval_id = unique_id("approval-");
+    let (tx, rx) = mpsc::channel();
+    let payload = json!({
+        "approval_id":approval_id,
+        "task_id":task_id,
+        "call_id":call.id,
+        "tool":call.name,
+        "title":tool_title(call),
+        "args":call.arguments,
+        "risk": if matches!(call.name.as_str(),"fs_delete"|"fs_rename") {"high"} else {"medium"},
+        "permission_class":"files.write",
+        "reason":"智能体将修改工作区文件。Diffusion 会先写入 Checkpoint，以便你随后撤销。",
+        "forced":false
+    });
+    approvals.lock()
+        .map_err(|_| RuntimeError::new("LOCK_POISONED","审批状态锁已损坏"))?
+        .insert(approval_id.clone(), PendingApproval { payload:payload.clone(), tx });
+    let _ = app.emit("diffusion://event", RuntimeEvent { event:"approval.request".into(), data:payload });
+    let _ = app.emit("diffusion://event", RuntimeEvent {
+        event:"agent.status".into(),
+        data:json!({"task_id":task_id,"state":"waiting_approval","detail":tool_title(call)})
+    });
+
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            if let Ok(mut p)=approvals.lock() { p.remove(&approval_id); }
+            return Err(RuntimeError::new("STOPPED","已由你停止"));
+        }
+        match rx.recv_timeout(Duration::from_millis(120)) {
+            Ok(decision) => {
+                if !decision.allow {
+                    return Err(RuntimeError::new("USER_DECLINED","你已拒绝这次文件修改"));
+                }
+                if decision.scope == "session" {
+                    if let Ok(mut grants)=session_grants.lock() { grants.insert(call.name.clone()); }
+                }
+                return Ok(());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(RuntimeError::new("APPROVAL_CLOSED","审批通道已经关闭"));
+            }
+        }
+    }
+}
+
+fn record_agent_mutation(
+    app: &AppHandle,
+    checkpoints: &CheckpointStore,
+    task_id: &str,
+    raw_event: &Value,
+    before: Option<&[u8]>,
+) -> Result<(), RuntimeError> {
+    let kind = raw_event.get("kind").and_then(Value::as_str).unwrap_or("modify");
+    let path = raw_event.get("path").and_then(Value::as_str)
+        .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT","文件事件缺少 path"))?;
+    let before_blob = checkpoints.blob_for_event_before(before)?;
+    let after_rev = raw_event.get("after_rev").cloned().unwrap_or(Value::String("absent".into()));
+    let verb = match kind {"create"=>"新建","delete"=>"删除","rename"=>"重命名",_=>"修改"};
+    checkpoints.add_event(task_id, "edit", &format!("{verb} {path}"), json!({
+        "path":path,
+        "kind":kind,
+        "before_blob":before_blob,
+        "existed_before":before.is_some(),
+        "after_rev":after_rev
+    }))?;
+
+    let mut event = raw_event.clone();
+    if let Some(obj)=event.as_object_mut() {
+        obj.insert("actor".into(), Value::String("agent".into()));
+        obj.insert("task_id".into(), Value::String(task_id.to_owned()));
+    }
+    let _ = app.emit("diffusion://event", RuntimeEvent { event:"fs.changed".into(), data:event });
     Ok(())
 }
 
