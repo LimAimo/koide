@@ -400,6 +400,7 @@ impl NativeCore {
             "presets": presets(),
             "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
             "agent_modes": ["chat"],
+            "agent_modes": ["chat"],
             "approvals": [],
             "questions": [],
             "tools": [],
