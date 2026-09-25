@@ -1,5 +1,14 @@
 # 更新日志
 
+## 0.8.0-alpha.4
+- **Native 服务商配置开始真正接通**：Rust Native Core 新增 profiles.list / save / delete / models / test；Native hello 不再返回空的 profiles / presets，设置页可显示 OpenAI、DeepSeek、Kimi、OpenRouter、Gemini、Anthropic、Ollama、MiniMax 与自定义 OpenAI 兼容接口。
+- **模型列表与连接测试走本机 Rust HTTP**：不再依赖 Python Bridge 或 localhost WebSocket；API 密钥保存在应用私有数据目录，前端只看到 has_key。
+- **修复移动端网页感缩放**：Native 壳禁止双指页面缩放，并补齐 viewport / touch gesture 限制。
+- **GitHub Actions 直接从源码树构建**：Android 与 Windows 均由仓库源码自动构建，不再上传源码 ZIP，也不再手工搬 Gradle/Maven 缓存。
+- **自动 prerelease**：Android + Windows 都成功后自动创建 GitHub prerelease，并附加 APK、portable EXE 与 NSIS 安装包。
+- **Android 成品签名门禁**：alpha 阶段改为可直接安装的 debug-signed APK，并在发布前强制执行 apksigner verify；未签名 APK 不再进入 Release。
+- **版本策略**：Native Agent、Permissions、Git、Terminal、Android SAF 等迁移完成并清理已知问题之前，继续停留在 alpha。
+
 ## 0.8.0-alpha.3
 - **首次真实 Native 编译通过**：使用完整 Cargo vendor 后，`cargo check --offline --locked --target aarch64-linux-android` 成功；Native Core 已通过 Android ARM64 类型检查。
 - **修复 Rust 编译错误**：修正 Trash / Checkpoint / Workspace 的错误映射闭包生命周期，并清理移除 `uuid` 后遗漏的一处临时文件名生成。
