@@ -1672,7 +1672,7 @@ impl SafWorkspace {
         if self.exists(&rel)?{return Err(RuntimeError::new("ALREADY_EXISTS",format!("{rel} 已存在")));}
         match kind{
             "dir"|"folder"=>{self.app.saf().create(&self.uri,&rel,"dir").map_err(|e|RuntimeError::new("CREATE_FAILED",format!("{rel}: {e}")))?;Ok(Mutation{changed:true,result:json!({"path":rel,"type":"dir"}),event:json!({"kind":"create","path":rel,"before_text":null,"after_text":null,"before_rev":"absent","after_rev":"absent","actor":"user","task_id":null})})}
-            "file"=>self.commit_bytes(&rel,content.as_bytes(),Some("absent"))
+            "file"=>self.commit_bytes(&rel,content.as_bytes(),Some("absent")),
             _=>Err(RuntimeError::new("BAD_REQUEST","kind 只能是 file 或 dir"))
         }
     }
