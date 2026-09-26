@@ -46,6 +46,14 @@ jobs:
         working-directory: apps/native/src-tauri
         run: cargo test --lib
 
+      - name: Upload refreshed Cargo lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: diffusion-native-cargo-lock
+          path: apps/native/src-tauri/Cargo.lock
+          if-no-files-found: error
+          retention-days: 2
+
   android:
     name: Android ARM64 APK
     runs-on: ubuntu-latest
