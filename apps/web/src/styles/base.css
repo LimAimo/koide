@@ -190,3 +190,32 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   user-select: text;
   -webkit-touch-callout: default;
 }
+
+/* Koide / MD3E：主要交互从 full shape 按压 morph 到更方的 rounded rectangle。 */
+.btn, .icon-btn, .row-btn, .menu-item, .select-button {
+  transition: border-radius 180ms var(--ease-emph), transform 180ms var(--ease-emph), background 180ms var(--ease-emph), box-shadow 180ms var(--ease-emph);
+}
+.btn:active { transform: scale(.985); border-radius: 12px; transition-duration: 70ms; }
+.icon-btn:active { transform: scale(.94); border-radius: 12px; transition-duration: 70ms; }
+.row-btn:active, .menu-item:active, .select-button:active { transform: scale(.99); border-radius: 12px; transition-duration: 70ms; }
+.select-button {
+  position: relative; display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-width: 112px; min-height: 44px; padding: 0 14px; border: 1px solid var(--outline-variant);
+  border-radius: var(--r-md); background: var(--surface-2); color: var(--on-surface); overflow: hidden;
+}
+.welcome-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+@media (max-width: 520px) {
+  .welcome-actions { display: grid; grid-template-columns: minmax(0,1fr); }
+  .welcome-actions > .btn { width: 100%; white-space: normal; min-height: 48px; }
+}
+
+/* 顶部 surface 使用渐进式玻璃层，而不是一条不透明色块。 */
+.appbar, .settings-head, .sheet-heading {
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+.appbar::after, .settings-head::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -18px; height: 18px;
+  pointer-events: none; background: linear-gradient(to bottom, color-mix(in srgb, var(--surface) 36%, transparent), transparent);
+}
