@@ -40,7 +40,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
       - name: Install JavaScript dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Build CodeMirror 6 editor
@@ -101,7 +100,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -181,7 +179,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
