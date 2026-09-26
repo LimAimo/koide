@@ -100,6 +100,13 @@ impl NativeCore {
             .ok_or_else(|| RuntimeError::new("NO_WORKSPACE", "请先打开一个项目文件夹"))
     }
 
+    fn local_workspace_root(&self, feature: &str) -> Result<PathBuf, RuntimeError> {
+        self.ws()?.local_root_path().ok_or_else(|| RuntimeError::new(
+            "WORKSPACE_CAPABILITY",
+            format!("当前 Android SAF 工作区不提供 {feature} 的 POSIX 路径能力"),
+        ).with_data(json!({"feature":feature,"workspace_backend":"saf"})))
+    }
+
     pub fn call(
         &mut self,
         app: &AppHandle,
@@ -190,9 +197,10 @@ impl NativeCore {
                     .map(str::to_owned);
                 let (profile, key) = self.profiles.get(&profile_id)?;
                 let store = self.conversations()?.clone();
-                let workspace_root = self.ws()?.root_path();
-                let checkpoints = self.ws()?.checkpoint_handle();
-                let system_context = instructions::agent_context(&self.data_dir, &workspace_root);
+                let workspace = self.ws()?.clone();
+                let checkpoints = workspace.checkpoint_handle();
+                let project_instructions = workspace.project_instructions();
+                let system_context = instructions::agent_context_with_project(&self.data_dir, Some(&project_instructions));
                 let limits = AgentLimits::from_params(
                     params.get("limits"),
                     params.get("web_search").and_then(Value::as_bool).unwrap_or(false),
@@ -213,7 +221,7 @@ impl NativeCore {
                     reasoning,
                     mode.to_owned(),
                     system_context,
-                    workspace_root,
+                    workspace,
                     self.data_dir.clone(),
                     task_id,
                     checkpoints,
@@ -237,10 +245,10 @@ impl NativeCore {
                 Ok(updated)
             }
             "instructions.constitution" => Ok(json!({"text": instructions::AIMO_CONSTITUTION})),
-            "instructions.get" => Ok(instructions::get(
-                &self.data_dir,
-                self.workspace.as_ref().map(|ws| ws.root_path()).as_deref(),
-            )),
+            "instructions.get" => {
+                let project = self.workspace.as_ref().map(Workspace::project_instructions).unwrap_or_default();
+                Ok(instructions::get_with_project(&self.data_dir, Some(&project)))
+            },
             "instructions.set" => {
                 instructions::set_global(
                     &self.data_dir,
@@ -258,18 +266,26 @@ impl NativeCore {
                 Ok(result)
             },
             "workspace.open" => {
-                let path = req_str(&params, "path")?;
                 if let Some(watcher) = self.watcher.take() { watcher.stop(); }
-                let ws = Workspace::open(path, &self.data_dir)?;
+                let mut location = params.get("location").cloned().or_else(|| {
+                    params.get("path").and_then(Value::as_str).map(|path| Value::String(path.to_owned()))
+                }).ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "缺少工作区位置"))?;
+                if location.get("kind").and_then(Value::as_str) == Some("saf")
+                    && location.get("pick").and_then(Value::as_bool) == Some(true)
+                {
+                    location = Workspace::pick_saf(app)?;
+                }
+                let ws = Workspace::open_location(app, &location, &self.data_dir)?;
                 let info = ws.info();
-                let root_path = ws.root_path();
+                let canonical_location = ws.location();
                 let conversations = ConversationStore::new(
                     self.data_dir.join("conversations").join(ws.storage_key())
                 )?;
-                let recent = self.settings.touch_recent(&root_path)?;
+                let recent = self.settings.touch_recent_location(&canonical_location)?;
+                let local_root = ws.local_root_path();
                 self.workspace = Some(ws);
                 self.conversations = Some(conversations);
-                self.watcher = Some(WorkspaceWatcher::start(app.clone(), root_path)?);
+                self.watcher = local_root.map(|root| WorkspaceWatcher::start(app.clone(), root)).transpose()?;
                 Self::emit(app, "workspace.opened", info.clone());
                 Self::emit(app, "workspace.recent_changed", json!({"recent": recent}));
                 Ok(info)
@@ -285,7 +301,9 @@ impl NativeCore {
             }
             "workspace.browse" => browse_location(params.get("path").and_then(Value::as_str), Some(&self.data_dir)),
             "workspace.remove_recent" => {
-                let recent = self.settings.remove_recent(req_str(&params, "path")?)?;
+                let target = params.get("location").or_else(|| params.get("path"))
+                    .ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "缺少最近项目位置"))?;
+                let recent = self.settings.remove_recent_value(target)?;
                 Self::emit(app, "workspace.recent_changed", json!({"recent": recent}));
                 Ok(json!({"recent": recent}))
             },
@@ -458,14 +476,14 @@ impl NativeCore {
             }
             "terminal.run" => self.terminal.run(
                 app,
-                &self.ws()?.root_path(),
+                &self.local_workspace_root("终端")?,
                 req_str(&params, "command")?,
                 params.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(600.0),
             ),
             "terminal.kill" => self.terminal.kill(req_str(&params, "id")?),
             "terminal.open" => self.terminal.open(
                 app,
-                &self.ws()?.root_path(),
+                &self.local_workspace_root("终端")?,
                 params.get("cols").and_then(Value::as_u64).unwrap_or(80).clamp(20, 500) as u16,
                 params.get("rows").and_then(Value::as_u64).unwrap_or(24).clamp(8, 300) as u16,
             ),
@@ -488,9 +506,9 @@ impl NativeCore {
             )),
             "devices.list" => Ok(json!({"devices": self.devices.list()})),
             "devices.revoke" => Ok(json!({"revoked": self.devices.revoke(req_str(&params, "id")?)?})),
-            "git.status" => gitops::status(&self.ws()?.root_path()),
+            "git.status" => gitops::status(&self.local_workspace_root("Git")?),
             "git.diff" => gitops::diff(
-                &self.ws()?.root_path(),
+                &self.local_workspace_root("Git")?,
                 req_str(&params, "path")?,
                 params.get("staged").and_then(Value::as_bool).unwrap_or(false),
             ),
@@ -498,7 +516,7 @@ impl NativeCore {
                 let paths = params.get("paths").and_then(Value::as_array)
                     .ok_or_else(|| RuntimeError::new("BAD_REQUEST", "paths 必须是数组"))?
                     .iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
-                let result = gitops::stage(&self.ws()?.root_path(), &paths)?;
+                let result = gitops::stage(&self.local_workspace_root("Git")?, &paths)?;
                 Self::emit(app, "git.changed", json!({}));
                 Ok(result)
             }
@@ -506,7 +524,7 @@ impl NativeCore {
                 let paths = params.get("paths").and_then(Value::as_array)
                     .ok_or_else(|| RuntimeError::new("BAD_REQUEST", "paths 必须是数组"))?
                     .iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
-                let result = gitops::unstage(&self.ws()?.root_path(), &paths)?;
+                let result = gitops::unstage(&self.local_workspace_root("Git")?, &paths)?;
                 Self::emit(app, "git.changed", json!({}));
                 Ok(result)
             }
@@ -532,14 +550,14 @@ impl NativeCore {
                 Ok(result)
             }
             "git.commit" => {
-                let result = gitops::commit(&self.ws()?.root_path(), req_str(&params, "message")?)?;
+                let result = gitops::commit(&self.local_workspace_root("Git")?, req_str(&params, "message")?)?;
                 Self::emit(app, "git.changed", json!({}));
                 Ok(result)
             }
-            "git.branches" => gitops::branches(&self.ws()?.root_path()),
+            "git.branches" => gitops::branches(&self.local_workspace_root("Git")?),
             "git.checkout" => {
                 let result = gitops::checkout(
-                    &self.ws()?.root_path(),
+                    &self.local_workspace_root("Git")?,
                     req_str(&params, "name")?,
                     params.get("create").and_then(Value::as_bool).unwrap_or(false),
                 )?;
@@ -548,20 +566,20 @@ impl NativeCore {
                 Ok(result)
             }
             "git.log" => gitops::log(
-                &self.ws()?.root_path(),
+                &self.local_workspace_root("Git")?,
                 params.get("limit").and_then(Value::as_u64).unwrap_or(50),
                 params.get("path").and_then(Value::as_str),
             ),
-            "git.blame" => gitops::blame(&self.ws()?.root_path(), req_str(&params, "path")?),
+            "git.blame" => gitops::blame(&self.local_workspace_root("Git")?, req_str(&params, "path")?),
             "git.pull" => {
-                let result = gitops::pull(&self.ws()?.root_path())?;
+                let result = gitops::pull(&self.local_workspace_root("Git")?)?;
                 Self::emit(app, "git.changed", json!({}));
                 Self::emit(app, "fs.external", json!({"changes":[{"path":".","kind":"modify"}]}));
                 Ok(result)
             }
-            "git.push" => gitops::push(&self.ws()?.root_path()),
+            "git.push" => gitops::push(&self.local_workspace_root("Git")?),
             "git.init" => {
-                let result = gitops::init(&self.ws()?.root_path())?;
+                let result = gitops::init(&self.local_workspace_root("Git")?)?;
                 Self::emit(app, "git.changed", json!({}));
                 Ok(result)
             },

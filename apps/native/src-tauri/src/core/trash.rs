@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[derive(Clone)]
 pub struct Trash {
     base: PathBuf,
 }
@@ -58,6 +59,57 @@ impl Trash {
             return Err(err);
         }
         Ok(meta["id"].as_str().unwrap_or_default().to_owned())
+    }
+
+
+    pub fn stash_virtual(&self, original: &str, staged_path: &Path) -> Result<String, RuntimeError> {
+        if !staged_path.exists() {
+            return Err(RuntimeError::new("NOT_FOUND", format!("{original} 不存在")));
+        }
+        let tid = format!(
+            "{}-{}",
+            unix_seconds(),
+            unique_id("").chars().take(10).collect::<String>()
+        );
+        let slot = self.base.join(&tid);
+        fs::create_dir(&slot).map_err(io_err("TRASH_WRITE_FAILED", &slot.to_string_lossy()))?;
+        let is_dir = staged_path.is_dir();
+        let size = if is_dir { 0 } else { fs::metadata(staged_path).map_err(io_err("TRASH_WRITE_FAILED", original))?.len() };
+        let payload = slot.join("payload");
+        if let Err(err) = move_path(staged_path, &payload) {
+            let _ = fs::remove_dir_all(&slot);
+            return Err(err);
+        }
+        let meta = json!({
+            "id": tid,
+            "original": original,
+            "deleted_at": unix_seconds_f64(),
+            "is_dir": is_dir,
+            "size": size,
+            "virtual": true,
+        });
+        if let Err(err) = write_json_atomic(&slot.join("meta.json"), &meta) {
+            let _ = fs::remove_dir_all(&slot);
+            return Err(err);
+        }
+        Ok(meta["id"].as_str().unwrap_or_default().to_owned())
+    }
+
+    pub fn virtual_item(&self, id: &str) -> Result<(Value, PathBuf), RuntimeError> {
+        let slot = self.slot(id)?;
+        let meta: Value = serde_json::from_slice(
+            &fs::read(slot.join("meta.json")).map_err(io_err("TRASH_READ_FAILED", id))?,
+        )
+        .map_err(|e| RuntimeError::new("TRASH_CORRUPT", format!("回收站元数据损坏：{e}")))?;
+        if meta.get("virtual").and_then(Value::as_bool) != Some(true) {
+            return Err(RuntimeError::new("TRASH_KIND_MISMATCH", "这不是 SAF 回收站项目"));
+        }
+        Ok((meta, slot.join("payload")))
+    }
+
+    pub fn finish_virtual_restore(&self, id: &str) -> Result<(), RuntimeError> {
+        let slot = self.slot(id)?;
+        fs::remove_dir_all(&slot).map_err(io_err("TRASH_RESTORE_FAILED", id))
     }
 
     pub fn list(&self) -> Result<Vec<Value>, RuntimeError> {

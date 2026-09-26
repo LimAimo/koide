@@ -106,7 +106,12 @@ function boot() {
     app.classList.toggle("no-ws", !ws);
     homeBtn.hidden = !ws && !s.tabs.length;                          // 项目里或草稿本里都能一键回到首页
     aiBtn.hidden = tmBtn.hidden = termBtn.hidden = gitBtn.hidden = !ws;   // 首页还没有项目，这些按钮没有意义，直接隐藏而不是灰掉
-    gitBtn.title = ws && s.git.is_repo ? `Git：${s.git.branch}` : "Git";
+    const canGit = ws?.capabilities?.git !== false;
+    const canTerminal = ws?.capabilities?.terminal_cwd !== false;
+    gitBtn.disabled = !!ws && !canGit;
+    termBtn.disabled = !!ws && !canTerminal;
+    gitBtn.title = !canGit ? "Android SAF 原地项目不提供 Git；复制到 Diffusion 私有工作区后可用" : (ws && s.git.is_repo ? `Git：${s.git.branch}` : "Git");
+    termBtn.title = !canTerminal ? "Android SAF 原地项目不能把系统终端 cwd 设为该目录；复制到 Diffusion 私有工作区后可用" : "显示或隐藏终端";
   });
   let lastWs = null;
   state.subscribe((s) => { const k = s.workspace ? s.workspace.roots.join("|") : null; if (k !== lastWs) { lastWs = k; if (k) { tree.reset(); events.emit("conversation:load", null); restoreConversation(); refreshGit(); } } });
@@ -121,7 +126,8 @@ function boot() {
     aiBtn.classList.toggle("active", !!s.aiVisible);
     filesBtn.setAttribute("aria-pressed", String(!!s.filesVisible));
     aiBtn.setAttribute("aria-pressed", String(!!s.aiVisible));
-    const termShown = !!s.terminalVisible && layout?.mode === "wide" && !!state.get().workspace;
+    const ws = state.get().workspace;
+    const termShown = !!s.terminalVisible && layout?.mode === "wide" && !!ws && ws?.capabilities?.terminal_cwd !== false;
     app.classList.toggle("terminal-open", termShown);
     termBtn.classList.toggle("active", termShown);
     termBtn.setAttribute("aria-pressed", String(termShown));

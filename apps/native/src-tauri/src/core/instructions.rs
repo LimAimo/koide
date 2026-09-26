@@ -169,6 +169,13 @@ pub fn get(data_dir: &Path, workspace: Option<&Path>) -> Value {
     json!({"global":global,"project_exists":project_exists,"project":project})
 }
 
+pub fn get_with_project(data_dir: &Path, project: Option<&str>) -> Value {
+    let global_path = data_dir.join("global_instructions.md");
+    let global = fs::read_to_string(&global_path).unwrap_or_default();
+    let project = project.unwrap_or("").chars().take(8000).collect::<String>();
+    json!({"global":global,"project_exists":!project.is_empty(),"project":project})
+}
+
 pub fn set_global(data_dir: &Path, text: &str) -> Result<(), RuntimeError> {
     if text.chars().count() > 20_000 {
         return Err(RuntimeError::new("INSTRUCTIONS_TOO_LONG", "全局指令太长（上限 20000 字）"));
@@ -178,6 +185,11 @@ pub fn set_global(data_dir: &Path, text: &str) -> Result<(), RuntimeError> {
 }
 
 pub fn agent_context(data_dir: &Path, workspace: &Path) -> String {
+    let project = fs::read_to_string(workspace.join("AGENTS.md")).unwrap_or_default();
+    agent_context_with_project(data_dir, Some(&project))
+}
+
+pub fn agent_context_with_project(data_dir: &Path, project: Option<&str>) -> String {
     let mut text = String::new();
     text.push_str("\n# Aimo 宪法（内置行为原则，完整遵守）\n");
     text.push_str(AIMO_CONSTITUTION);
@@ -189,12 +201,9 @@ pub fn agent_context(data_dir: &Path, workspace: &Path) -> String {
             text.extend(raw.chars().take(6000));
         }
     }
-    let agents = workspace.join("AGENTS.md");
-    if let Ok(raw) = fs::read_to_string(agents) {
-        if !raw.is_empty() {
-            text.push_str("\n# Project instructions (AGENTS.md)\n");
-            text.extend(raw.chars().take(8000));
-        }
+    if let Some(raw) = project.filter(|raw| !raw.is_empty()) {
+        text.push_str("\n# Project instructions (AGENTS.md)\n");
+        text.extend(raw.chars().take(8000));
     }
     text
 }

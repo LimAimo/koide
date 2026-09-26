@@ -322,9 +322,13 @@ function workspaceSection(rerender) {
   const rows = [];
   const recent = st.hello?.recent || [];
   rows.push(row({ label: st.workspace ? st.workspace.name : "还没有打开项目", desc: st.workspace ? st.workspace.roots.join(", ") : "请在开始页面打开一个文件夹。", keywords: "项目 文件夹 project folder" }));
-  for (const r of recent.slice(0, 6)) rows.push(h("div", { class: "recent-row", dataset: { search: search("最近项目 recent project", r) } },
-    h("button", { class: "row-btn recent-open", type: "button", onclick: () => openWorkspace(r).then(() => toast("已打开")).catch((e) => toast(e.message)) }, icon("folder", 20), h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r)),
-    iconButton("trash", "从最近项目移除", () => runtime.workspace.removeRecent({ path: r }).then(() => { toast("已从最近项目移除"); rerender(); }).catch((e) => toast(e.message)))));
+  for (const r of recent.slice(0, 6)) {
+    const label = typeof r === "string" ? r : (r?.name || r?.path || "Android 项目");
+    const removeParams = typeof r === "string" ? { path: r } : { location: r };
+    rows.push(h("div", { class: "recent-row", dataset: { search: search("最近项目 recent project", label) } },
+      h("button", { class: "row-btn recent-open", type: "button", onclick: () => openWorkspace(r).then(() => toast("已打开")).catch((e) => toast(e.message)) }, icon("folder", 20), h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label)),
+      iconButton("trash", "从最近项目移除", () => runtime.workspace.removeRecent(removeParams).then(() => { toast("已从最近项目移除"); rerender(); }).catch((e) => toast(e.message)))));
+  }
   const trash = h("div", { dataset: { search: "回收站 恢复 已删除 trash restore deleted files" } });
   async function loadTrash() {
     try {

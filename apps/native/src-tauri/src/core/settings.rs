@@ -39,43 +39,74 @@ impl SettingsStore {
             .map_err(|e| RuntimeError::new("SETTINGS_WRITE_FAILED", format!("{}: {e}", self.path.display())))
     }
 
-    pub fn recent(&self) -> Vec<String> {
+    pub fn recent(&self) -> Vec<Value> {
         self.load()
             .get("recent")
             .and_then(Value::as_array)
-            .map(|xs| xs.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|xs| xs.iter().filter_map(|item| {
+                if let Some(path) = item.as_str() {
+                    Some(Value::String(path.to_owned()))
+                } else if item.get("kind").and_then(Value::as_str).is_some() {
+                    Some(item.clone())
+                } else {
+                    None
+                }
+            }).collect())
             .unwrap_or_default()
     }
 
-    pub fn touch_recent(&self, path: &Path) -> Result<Vec<String>, RuntimeError> {
-        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let value = canonical.to_string_lossy().into_owned();
+    fn recent_key(item: &Value) -> Option<String> {
+        if let Some(path) = item.as_str() {
+            let canonical = fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+            return Some(format!("local:{}", canonical.to_string_lossy()));
+        }
+        match item.get("kind").and_then(Value::as_str) {
+            Some("local") => {
+                let path = item.get("path").and_then(Value::as_str)?;
+                let canonical = fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                Some(format!("local:{}", canonical.to_string_lossy()))
+            }
+            Some("saf") => item.get("uri").and_then(Value::as_str).map(|uri| format!("saf:{uri}")),
+            _ => None,
+        }
+    }
+
+    pub fn touch_recent_location(&self, location: &Value) -> Result<Vec<Value>, RuntimeError> {
+        let normalized = if let Some(path) = location.as_str() {
+            let canonical = fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+            Value::String(canonical.to_string_lossy().into_owned())
+        } else {
+            location.clone()
+        };
+        let key = Self::recent_key(&normalized)
+            .ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "无法保存这个最近项目位置"))?;
         let mut root = self.load();
         let mut recent = self.recent();
-        recent.retain(|item| item != &value);
-        recent.insert(0, value);
+        recent.retain(|item| Self::recent_key(item).as_deref() != Some(key.as_str()));
+        recent.insert(0, normalized);
         recent.truncate(12);
-        root.insert("recent".into(), json!(recent));
+        root.insert("recent".into(), Value::Array(recent.clone()));
         self.save(&root)?;
         Ok(recent)
     }
 
-    pub fn remove_recent(&self, raw: &str) -> Result<Vec<String>, RuntimeError> {
-        let target = fs::canonicalize(raw)
-            .unwrap_or_else(|_| PathBuf::from(raw))
-            .to_string_lossy()
-            .into_owned();
+    pub fn touch_recent(&self, path: &Path) -> Result<Vec<Value>, RuntimeError> {
+        self.touch_recent_location(&Value::String(path.to_string_lossy().into_owned()))
+    }
+
+    pub fn remove_recent_value(&self, target: &Value) -> Result<Vec<Value>, RuntimeError> {
+        let key = Self::recent_key(target)
+            .ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "最近项目位置无效"))?;
         let mut root = self.load();
         let mut recent = self.recent();
-        recent.retain(|item| {
-            fs::canonicalize(item)
-                .unwrap_or_else(|_| PathBuf::from(item))
-                .to_string_lossy()
-                != target
-        });
-        root.insert("recent".into(), json!(recent));
+        recent.retain(|item| Self::recent_key(item).as_deref() != Some(key.as_str()));
+        root.insert("recent".into(), Value::Array(recent.clone()));
         self.save(&root)?;
         Ok(recent)
+    }
+
+    pub fn remove_recent(&self, raw: &str) -> Result<Vec<Value>, RuntimeError> {
+        self.remove_recent_value(&Value::String(raw.to_owned()))
     }
 
     pub fn permissions(&self) -> Value {
@@ -367,7 +398,7 @@ mod permission_tests {
 
         let recent = store.touch_recent(&project).unwrap();
         assert_eq!(recent.len(), 1);
-        assert!(recent[0].contains("project"));
+        assert!(recent[0].as_str().unwrap().contains("project"));
 
         store.update_permissions(&json!({
             "mode":"autonomous",

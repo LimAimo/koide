@@ -14,6 +14,16 @@ export function openFolderPicker() {
     try { await openWorkspace(current); sheet.close(); } catch (e) { toast(e.message); }
   } }, "打开这个文件夹");
   const isAndroidNative = runtime.kind === "native" && state.get().hello?.platform === "android";
+  const safBtn = isAndroidNative ? h("button", {
+    class: "btn filled",
+    type: "button",
+    onclick: async () => {
+      try {
+        await openWorkspace({ kind: "saf", pick: true });
+        sheet.close();
+      } catch (e) { toast(e.message); }
+    },
+  }, icon("folder", 18), "从手机选择项目文件夹") : null;
   const importBtn = isAndroidNative ? h("button", {
     class: "btn tonal",
     type: "button",
@@ -22,11 +32,11 @@ export function openFolderPicker() {
       try { await importDirectoryAsWorkspace(); }
       catch (e) { toast(`导入文件夹失败：${e?.message || String(e)}`); }
     },
-  }, icon("upload", 18), "从手机选择并导入文件夹") : null;
+  }, icon("upload", 18), "复制到 Diffusion 私有工作区") : null;
   const hint = isAndroidNative
-    ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "Android 受分区存储限制：可打开 Diffusion 本地工作区，或从系统选择一个目录导入后直接编辑。")
+    ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "推荐直接选择原项目文件夹：Diffusion 会通过 Android 系统目录授权原地读写，并记住授权。SAF 项目不提供 Git 和以项目目录为 cwd 的终端；需要这些能力时可复制到私有工作区。")
     : null;
-  const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, hint, importBtn, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
+  const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, hint, safBtn, importBtn, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
 
   async function go(path) {
     try {
@@ -65,13 +75,16 @@ export function createWelcome({ onOpenSettings }) {
           h("button", { class: "btn outlined", type: "button", onclick: () => onOpenSettings("bridge") }, "手动连接…"))));
     } else {
       const recent = s.hello?.recent || [];
-      const recentList = recent.length ? h("div", { class: "recent" }, ...recent.slice(0, 6).map((path) => {
+      const recentLabel = (entry) => typeof entry === "string" ? entry : (entry?.name || entry?.path || "Android 项目");
+      const recentRemoveParams = (entry) => typeof entry === "string" ? { path: entry } : { location: entry };
+      const recentList = recent.length ? h("div", { class: "recent" }, ...recent.slice(0, 6).map((entry) => {
+        const label = recentLabel(entry);
         const more = iconButton("more", "项目操作", () => openMenu("最近项目", [
-          { label: "打开", icon: "folder", onClick: () => openWorkspace(path).catch((e) => toast(e.message)) },
-          { label: "从最近项目移除", icon: "trash", danger: true, onClick: () => runtime.workspace.removeRecent({ path }).then(() => toast("已从最近项目移除")).catch((e) => toast(e.message)) },
+          { label: "打开", icon: "folder", onClick: () => openWorkspace(entry).catch((e) => toast(e.message)) },
+          { label: "从最近项目移除", icon: "trash", danger: true, onClick: () => runtime.workspace.removeRecent(recentRemoveParams(entry)).then(() => toast("已从最近项目移除")).catch((e) => toast(e.message)) },
         ]));
         return h("div", { class: "recent-row" },
-          h("button", { class: "recent-open", type: "button", onclick: () => openWorkspace(path).catch((e) => toast(e.message)) }, icon("folder", 20), h("span", { class: "p" }, "\u200e" + path)), more);
+          h("button", { class: "recent-open", type: "button", onclick: () => openWorkspace(entry).catch((e) => toast(e.message)) }, icon("folder", 20), h("span", { class: "p" }, "\u200e" + label)), more);
       })) : h("p", { class: "muted" }, "还没有最近打开的项目。");
       inner.append(card("项目",
         h("button", { class: "btn filled", type: "button", onclick: () => openFolderPicker() }, icon("folder", 18), "打开文件夹"),
@@ -92,7 +105,7 @@ export function createWelcome({ onOpenSettings }) {
 
   let last = "";
   state.subscribe((s) => {
-    const sig = s.conn + s.profiles.length + (s.hello?.recent || []).join();
+    const sig = s.conn + s.profiles.length + JSON.stringify(s.hello?.recent || []);
     if (sig !== last) { last = sig; render(); }
     el.hidden = !!s.workspace || s.tabs.length > 0;
   });

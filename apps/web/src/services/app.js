@@ -60,8 +60,9 @@ export async function connectManual(target) {
 }
 
 // ---- workspace / files -------------------------------------------------------------------------------
-export async function openWorkspace(path) {
-  const ws = await runtime.workspace.open({ path });
+export async function openWorkspace(location) {
+  const params = typeof location === "string" ? { path: location } : { location };
+  const ws = await runtime.workspace.open(params);
   state.set({ workspace: ws, tabs: [], active: null, editing: {}, conversationId: null });
   refreshGit();
   return ws;

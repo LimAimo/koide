@@ -174,7 +174,7 @@ pub fn unstage(root:&Path,paths:&[String])->Result<Value,RuntimeError>{
 
 pub fn discard(workspace:&Workspace,path:&str,confirm:bool)->Result<(Value,Vec<Value>),RuntimeError>{
     if !confirm { return Err(RuntimeError::new("NEEDS_CONFIRM","丢弃改动需要明确确认")); }
-    let root=workspace.root_path();
+    let root=workspace.local_root_path().ok_or_else(|| RuntimeError::new("WORKSPACE_CAPABILITY", "Git 需要本地文件系统工作区；Android SAF 原地项目请复制到 Diffusion 私有工作区后再使用 Git"))?;
     let rel=safe_rel(path)?;
     let st=status(&root)?;
     let entry=st.get("files").and_then(Value::as_array).into_iter().flatten().find(|f|f.get("path").and_then(Value::as_str)==Some(rel.as_str()));
@@ -261,7 +261,7 @@ fn tree(root:&Path,reference:&str)->Result<BTreeMap<String,(String,String,String
 fn blob(root:&Path,sha:&str)->Result<Vec<u8>,RuntimeError>{run_bytes(root,&["cat-file","blob",sha],true)}
 
 pub fn reset(workspace:&Workspace,reference:&str,mode:&str,confirm:bool)->Result<(Value,Vec<Value>),RuntimeError>{
-    let root=workspace.root_path();
+    let root=workspace.local_root_path().ok_or_else(|| RuntimeError::new("WORKSPACE_CAPABILITY", "Git 需要本地文件系统工作区；Android SAF 原地项目请复制到 Diffusion 私有工作区后再使用 Git"))?;
     let commit=resolve_commit(&root,reference)?;
     if mode=="soft" {
         run(&root,&["reset","--soft",&commit],true)?;

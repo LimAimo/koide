@@ -200,7 +200,7 @@ impl AgentState {
         reasoning: String,
         mode: String,
         system_context: String,
-        workspace_root: PathBuf,
+        workspace: Workspace,
         data_dir: PathBuf,
         task_id: String,
         checkpoints: CheckpointStore,
@@ -321,7 +321,7 @@ impl AgentState {
                     api_key.as_deref(),
                     messages,
                     &reasoning,
-                    &workspace_root,
+                    &workspace,
                     &data_dir,
                     &checkpoints,
                     matches!(mode.as_str(), "edit" | "agent"),
@@ -428,7 +428,7 @@ fn run_tool_mode(
     api_key: Option<&str>,
     mut messages: Vec<Value>,
     reasoning: &str,
-    workspace_root: &Path,
+    workspace: &Workspace,
     data_dir: &Path,
     checkpoints: &CheckpointStore,
     editable: bool,
@@ -439,8 +439,8 @@ fn run_tool_mode(
     questions: Arc<Mutex<HashMap<String, PendingQuestion>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<String, RuntimeError> {
-    let tools = if full_agent { agent_tool_specs() } else if editable { edit_tool_specs() } else { read_tool_specs() };
-    let workspace = Workspace::open(&workspace_root.to_string_lossy(), data_dir)?;
+    let shell_root = workspace.local_root_path();
+    let tools = if full_agent { agent_tool_specs(shell_root.is_some()) } else if editable { edit_tool_specs() } else { read_tool_specs() };
     let mut read_revisions: HashMap<String, String> = HashMap::new();
     let mut visible = String::new();
     let mut total_calls = 0usize;
@@ -535,10 +535,13 @@ fn run_tool_mode(
                     data_dir, profile, api_key, approvals.clone(), session_grants.clone()
                 ).and_then(|_| execute_ask_user(app, cancel, task_id, &call, questions.clone()))
             } else if full_agent && call.name == "shell_run" {
-                execute_shell_tool(
-                    app, cancel, task_id, &call, workspace_root, data_dir,
+                let root = shell_root.as_deref().ok_or_else(|| RuntimeError::new(
+                    "WORKSPACE_CAPABILITY", "当前 Android SAF 工作区不提供 shell 工作目录能力"
+                ));
+                root.and_then(|root| execute_shell_tool(
+                    app, cancel, task_id, &call, root, data_dir,
                     profile, api_key, approvals.clone(), session_grants.clone()
-                )
+                ))
             } else if full_agent && call.name == "terminal_read" {
                 execute_terminal_read(
                     app, cancel, task_id, &call, &terminal, data_dir,
@@ -557,7 +560,7 @@ fn run_tool_mode(
                         app,
                         cancel,
                         task_id,
-                        &workspace,
+                        workspace,
                         checkpoints,
                         &call,
                         &mut read_revisions,
@@ -576,7 +579,7 @@ fn run_tool_mode(
                 authorize_tool(
                     app, cancel, task_id, &call, "read", "low", target,
                     data_dir, profile, api_key, approvals.clone(), session_grants.clone()
-                ).and_then(|_| execute_read_tool(workspace_root, &call))
+                ).and_then(|_| execute_read_tool(workspace, &call))
             };
             let (payload, state, summary, detail) = match result {
                 Ok(value) => {
@@ -814,98 +817,99 @@ fn tool_title(call: &ToolCall) -> String {
     }
 }
 
-fn execute_read_tool(root: &Path, call: &ToolCall) -> Result<Value, RuntimeError> {
+fn execute_read_tool(workspace: &Workspace, call: &ToolCall) -> Result<Value, RuntimeError> {
     match call.name.as_str() {
         "fs_list" => {
             let raw = call.arguments.get("path").and_then(Value::as_str).unwrap_or(".");
             check_read_path(raw)?;
             let depth = call.arguments.get("depth").and_then(Value::as_u64).unwrap_or(1).clamp(1, 4) as usize;
-            let dir = resolve_inside(root, raw)?;
-            if !dir.is_dir() {
-                return Err(RuntimeError::new("NOT_A_FOLDER", format!("{raw} 不是文件夹")));
-            }
+            let nodes = workspace.tree(raw, depth, true)?;
             let mut entries = Vec::new();
-            list_dir(root, &dir, depth, &mut entries)?;
+            fn flatten(nodes: &[Value], out: &mut Vec<Value>) {
+                for node in nodes {
+                    let mut item = node.clone();
+                    if let Some(obj) = item.as_object_mut() { obj.remove("children"); }
+                    if item.get("path").and_then(Value::as_str).is_some_and(|p| check_read_path(p).is_ok()) {
+                        out.push(item);
+                    }
+                    if let Some(children) = node.get("children").and_then(Value::as_array) { flatten(children, out); }
+                }
+            }
+            flatten(nodes.as_array().map(Vec::as_slice).unwrap_or(&[]), &mut entries);
             Ok(json!({"entries":entries}))
         }
         "fs_read" => {
             let raw = required_arg(&call.arguments, "path")?;
             check_read_path(raw)?;
-            let path = resolve_inside(root, raw)?;
-            if !path.is_file() {
-                return Err(RuntimeError::new("NOT_FOUND", format!("{raw} 不是文件")));
+            let value = workspace.read(raw)?;
+            if value.get("binary").and_then(Value::as_bool) == Some(true) {
+                return Ok(value);
             }
-            let meta = fs::metadata(&path)
-                .map_err(|e| RuntimeError::new("READ_FAILED", format!("{raw}: {e}")))?;
-            if meta.len() > MAX_AGENT_READ_BYTES {
-                return Err(RuntimeError::new("TOO_LARGE", format!("{raw} 超过 8 MiB 读取上限")));
-            }
-            let data = fs::read(&path)
-                .map_err(|e| RuntimeError::new("READ_FAILED", format!("{raw}: {e}")))?;
-            if data[..data.len().min(4096)].contains(&0) {
-                return Ok(json!({"path":display_rel(root,&path),"binary":true,"size":data.len()}));
-            }
-            let text = std::str::from_utf8(&data)
-                .map_err(|_| RuntimeError::new("BINARY_FILE", format!("{raw} 不是 UTF-8 文本文件")))?;
+            let text = value.get("content").and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::new("BINARY_FILE", format!("{raw} 不是 UTF-8 文本文件")))?;
             let lines = text.split('\n').collect::<Vec<_>>();
             let start = call.arguments.get("start_line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
             let end = call.arguments.get("end_line").and_then(Value::as_u64).unwrap_or(lines.len() as u64).max(1) as usize;
             let start = start.min(lines.len().max(1));
             let end = end.min(lines.len()).max(start);
             let content = if call.arguments.get("start_line").is_some() || call.arguments.get("end_line").is_some() {
-                (start..=end)
-                    .map(|n| format!("{n}: {}", lines.get(n - 1).copied().unwrap_or("")))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                text.to_owned()
-            };
+                (start..=end).map(|n| format!("{n}: {}", lines.get(n - 1).copied().unwrap_or(""))).collect::<Vec<_>>().join("\n")
+            } else { text.to_owned() };
             Ok(json!({
-                "path":display_rel(root,&path),
-                "revision": crate::core::crypto::sha256_hex(&data),
-                "total_lines":lines.len(),
-                "range":[start,end],
-                "content":content
+                "path":value.get("path").cloned().unwrap_or_else(||Value::String(raw.to_owned())),
+                "revision":value.get("revision").cloned().unwrap_or_else(||Value::String("absent".into())),
+                "total_lines":lines.len(),"range":[start,end],"content":content
             }))
         }
         "fs_glob" => {
             let pattern = required_arg(&call.arguments, "pattern")?;
             let max_results = call.arguments.get("max_results").and_then(Value::as_u64).unwrap_or(200).clamp(1, 500) as usize;
-            let mut paths = Vec::new();
-            glob_dir(root, root, pattern, max_results, &mut paths)?;
-            Ok(json!({"paths":paths,"truncated":paths.len() >= max_results}))
+            let value = workspace.glob(pattern, max_results.saturating_mul(4).max(max_results))?;
+            let mut paths = value.get("paths").and_then(Value::as_array).into_iter().flatten()
+                .filter_map(Value::as_str).filter(|p| check_read_path(p).is_ok()).take(max_results).map(str::to_owned).collect::<Vec<_>>();
+            paths.truncate(max_results);
+            Ok(json!({"truncated":paths.len()>=max_results,"paths":paths}))
         }
         "fs_multi_read" => {
             let paths = call.arguments.get("paths").and_then(Value::as_array)
                 .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "fs_multi_read 缺少 paths"))?;
             let mut files = Vec::new();
             for raw in paths.iter().take(20).filter_map(Value::as_str) {
-                let nested = ToolCall {
-                    id: String::new(),
-                    name: "fs_read".into(),
-                    arguments: json!({"path":raw})
-                };
-                match execute_read_tool(root, &nested) {
+                let nested = ToolCall { id:String::new(), name:"fs_read".into(), arguments:json!({"path":raw}) };
+                match execute_read_tool(workspace, &nested) {
                     Ok(value) => files.push(value),
-                    Err(error) => files.push(json!({
-                        "path":raw,
-                        "error":format!("{}: {}", error.code, error.message)
-                    })),
+                    Err(error) => files.push(json!({"path":raw,"error":format!("{}: {}",error.code,error.message)})),
                 }
             }
             Ok(json!({"files":files}))
         }
         "fs_search" => {
             let query = required_arg(&call.arguments, "query")?;
-            if query.is_empty() {
-                return Err(RuntimeError::new("BAD_QUERY", "搜索内容不能为空"));
-            }
+            if query.is_empty() { return Err(RuntimeError::new("BAD_QUERY", "搜索内容不能为空")); }
             let case_sensitive = call.arguments.get("case_sensitive").and_then(Value::as_bool).unwrap_or(false);
             let max_results = call.arguments.get("max_results").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
+            // HardPolicy must prevent even internal reads of credential paths. Enumerate first,
+            // filter paths, then read only allowed files instead of calling the unrestricted UI search.
+            let all = workspace.glob("*", 5000)?;
+            let needle = if case_sensitive { query.to_owned() } else { query.to_lowercase() };
             let mut matches = Vec::new();
             let mut scanned = 0usize;
-            search_dir(root, root, query, case_sensitive, max_results, &mut matches, &mut scanned)?;
-            Ok(json!({"matches":matches,"files_scanned":scanned,"truncated":matches.len() >= max_results}))
+            for path in all.get("paths").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+                if matches.len() >= max_results { break; }
+                if check_read_path(path).is_err() { continue; }
+                let Ok(value) = workspace.read(path) else { continue; };
+                if value.get("binary").and_then(Value::as_bool) == Some(true) { continue; }
+                let Some(text) = value.get("content").and_then(Value::as_str) else { continue; };
+                scanned += 1;
+                for (idx,line) in text.lines().enumerate() {
+                    let hay = if case_sensitive { line.to_owned() } else { line.to_lowercase() };
+                    if let Some(column)=hay.find(&needle) {
+                        matches.push(json!({"path":path,"line":idx+1,"column":column+1,"text":line.chars().take(300).collect::<String>()}));
+                        if matches.len() >= max_results { break; }
+                    }
+                }
+            }
+            Ok(json!({"matches":matches,"files_scanned":scanned,"truncated":matches.len()>=max_results}))
         }
         _ => Err(RuntimeError::new("UNKNOWN_TOOL", format!("未知的只读工具：{}", call.name))),
     }
@@ -1204,33 +1208,35 @@ fn edit_tool_specs() -> Vec<Value> {
     tools
 }
 
-fn agent_tool_specs() -> Vec<Value> {
+fn agent_tool_specs(shell_available: bool) -> Vec<Value> {
     let mut tools = edit_tool_specs();
-    tools.extend([
-        json!({"type":"function","function":{
-            "name":"shell_run",
-            "description":"Run a shell command in the workspace root to build, test or inspect the project. Dangerous commands may be denied or require explicit user approval.",
-            "parameters":{"type":"object","properties":{
-                "command":{"type":"string","minLength":1},
-                "timeout_seconds":{"type":"number","minimum":1,"maximum":1800}
-            },"required":["command"],"additionalProperties":false}
-        }}),
-        json!({"type":"function","function":{
-            "name":"terminal_read",
-            "description":"Read recent output from the user's interactive terminal without recording keystrokes.",
-            "parameters":{"type":"object","properties":{
-                "id":{"type":"string"},
-                "max_chars":{"type":"integer","minimum":100,"maximum":20000}
-            },"additionalProperties":false}
-        }}),
-        json!({"type":"function","function":{
-            "name":"web_fetch",
-            "description":"Fetch readable content from a public http/https URL. Localhost and private-network targets are blocked by HardPolicy.",
-            "parameters":{"type":"object","properties":{
-                "url":{"type":"string","minLength":1}
-            },"required":["url"],"additionalProperties":false}
-        }})
-    ]);
+    if shell_available {
+        tools.extend([
+            json!({"type":"function","function":{
+                "name":"shell_run",
+                "description":"Run a shell command in the workspace root to build, test or inspect the project. Dangerous commands may be denied or require explicit user approval.",
+                "parameters":{"type":"object","properties":{
+                    "command":{"type":"string","minLength":1},
+                    "timeout_seconds":{"type":"number","minimum":1,"maximum":1800}
+                },"required":["command"],"additionalProperties":false}
+            }}),
+            json!({"type":"function","function":{
+                "name":"terminal_read",
+                "description":"Read recent output from the user's interactive terminal without recording keystrokes.",
+                "parameters":{"type":"object","properties":{
+                    "id":{"type":"string"},
+                    "max_chars":{"type":"integer","minimum":100,"maximum":20000}
+                },"additionalProperties":false}
+            }})
+        ]);
+    }
+    tools.push(json!({"type":"function","function":{
+        "name":"web_fetch",
+        "description":"Fetch readable content from a public http/https URL. Localhost and private-network targets are blocked by HardPolicy.",
+        "parameters":{"type":"object","properties":{
+            "url":{"type":"string","minLength":1}
+        },"required":["url"],"additionalProperties":false}
+    }}));
     tools
 }
 

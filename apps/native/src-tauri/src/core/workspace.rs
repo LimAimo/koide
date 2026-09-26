@@ -1,7 +1,9 @@
 use super::{
-    checkpoint::CheckpointStore, crypto::sha256_hex, id::unique_id, trash::Trash, RuntimeError,
+    checkpoint::CheckpointStore, crypto::sha256_hex, id::unique_id, settings::wildcard_match, trash::Trash, RuntimeError,
 };
 use serde_json::{json, Value};
+use diffusion_saf::SafExt;
+use tauri::AppHandle;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -129,7 +131,118 @@ struct PendingWrite {
     base_revision: Option<String>,
 }
 
+
+#[derive(Clone)]
 pub struct Workspace {
+    backend: std::sync::Arc<std::sync::Mutex<WorkspaceBackend>>,
+}
+
+enum WorkspaceBackend {
+    Local(LocalWorkspace),
+    Saf(SafWorkspace),
+}
+
+impl Workspace {
+    pub fn open(path: &str, data_dir: &Path) -> Result<Self, RuntimeError> {
+        Ok(Self {
+            backend: std::sync::Arc::new(std::sync::Mutex::new(WorkspaceBackend::Local(
+                LocalWorkspace::open(path, data_dir)?,
+            ))),
+        })
+    }
+
+    pub fn open_location(app: &AppHandle, location: &Value, data_dir: &Path) -> Result<Self, RuntimeError> {
+        if let Some(path) = location.as_str() {
+            return Self::open(path, data_dir);
+        }
+        let obj = location.as_object().ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "工作区位置必须是路径或位置对象"))?;
+        match obj.get("kind").and_then(Value::as_str).unwrap_or("local") {
+            "local" => {
+                let path = obj.get("path").and_then(Value::as_str)
+                    .ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "本地工作区缺少 path"))?;
+                Self::open(path, data_dir)
+            }
+            "saf" => {
+                let uri = obj.get("uri").and_then(Value::as_str)
+                    .ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "SAF 工作区缺少 uri"))?;
+                let name = obj.get("name").and_then(Value::as_str).unwrap_or("project");
+                Ok(Self {
+                    backend: std::sync::Arc::new(std::sync::Mutex::new(WorkspaceBackend::Saf(
+                        SafWorkspace::open(app.clone(), uri, name, data_dir)?,
+                    ))),
+                })
+            }
+            other => Err(RuntimeError::new("BAD_WORKSPACE", format!("未知工作区类型：{other}"))),
+        }
+    }
+
+    pub fn pick_saf(app: &AppHandle) -> Result<Value, RuntimeError> {
+        #[cfg(target_os = "android")]
+        {
+            let picked = app.saf().pick_tree().map_err(|e| RuntimeError::new("SAF_PICK_FAILED", e))?;
+            let uri = picked.get("uri").and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::new("SAF_PICK_FAILED", "系统没有返回目录 URI"))?;
+            let name = picked.get("name").and_then(Value::as_str).unwrap_or("project");
+            return Ok(json!({"kind":"saf","uri":uri,"name":name}));
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = app;
+            Err(RuntimeError::new("UNSUPPORTED_PLATFORM", "SAF 目录选择器只在 Android 上可用"))
+        }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, WorkspaceBackend>, RuntimeError> {
+        self.backend.lock().map_err(|_| RuntimeError::new("LOCK_POISONED", "工作区状态锁已损坏"))
+    }
+
+    pub fn info(&self) -> Value { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.info(), WorkspaceBackend::Saf(x) => x.info() } }
+    pub fn location(&self) -> Value { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => json!({"kind":"local","path":x.root_path().to_string_lossy(),"name":x.info()["name"]}), WorkspaceBackend::Saf(x) => x.location() } }
+    pub fn is_saf(&self) -> bool { matches!(&*self.lock().expect("workspace lock"), WorkspaceBackend::Saf(_)) }
+    pub fn local_root_path(&self) -> Option<PathBuf> { match &*self.lock().ok()? { WorkspaceBackend::Local(x) => Some(x.root_path()), WorkspaceBackend::Saf(_) => None } }
+    pub fn root_path(&self) -> PathBuf { self.local_root_path().unwrap_or_default() }
+    pub fn storage_key(&self) -> String { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.storage_key(), WorkspaceBackend::Saf(x) => x.storage_key() } }
+    pub(crate) fn checkpoint_handle(&self) -> CheckpointStore { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.checkpoint_handle(), WorkspaceBackend::Saf(x) => x.checkpoint_handle() } }
+    pub fn supports_git(&self) -> bool { !self.is_saf() }
+    pub fn supports_terminal_cwd(&self) -> bool { !self.is_saf() }
+    pub fn project_instructions(&self) -> String {
+        match self.read("AGENTS.md") {
+            Ok(v) if v.get("binary").and_then(Value::as_bool) != Some(true) => v.get("content").and_then(Value::as_str).unwrap_or("").chars().take(8000).collect(),
+            _ => String::new(),
+        }
+    }
+
+    pub fn read(&self, raw:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.read(raw),WorkspaceBackend::Saf(x)=>x.read(raw)}}
+    pub fn hash(&self, raw:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.hash(raw),WorkspaceBackend::Saf(x)=>x.hash(raw)}}
+    pub fn tree(&self, raw:&str, depth:usize, show_hidden:bool)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.tree(raw,depth,show_hidden),WorkspaceBackend::Saf(x)=>x.tree(raw,depth,show_hidden)}}
+    pub fn glob(&self,p:&str,max:usize)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.glob(p,max),WorkspaceBackend::Saf(x)=>x.glob(p,max)}}
+    pub fn search(&self,q:&str,cs:bool,max:usize)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.search(q,cs,max),WorkspaceBackend::Saf(x)=>x.search(q,cs,max)}}
+    pub fn write_text(&self,p:&str,c:&str,b:Option<&str>)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.write_text(p,c,b),WorkspaceBackend::Saf(x)=>x.write_text(p,c,b)}}
+    pub(crate) fn write_bytes_protected(&self,p:&str,d:&[u8],b:Option<&str>)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.write_bytes_protected(p,d,b),WorkspaceBackend::Saf(x)=>x.write_bytes_protected(p,d,b)}}
+    pub(crate) fn set_executable_protected(&self,p:&str,e:bool)->Result<(),RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.set_executable_protected(p,e),WorkspaceBackend::Saf(x)=>x.set_executable_protected(p,e)}}
+    pub fn begin_write(&self,p:&str,b:Option<&str>)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.begin_write(p,b),WorkspaceBackend::Saf(x)=>x.begin_write(p,b)}}
+    pub fn write_chunk(&self,id:&str,seq:usize,d:&str,e:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.write_chunk(id,seq,d,e),WorkspaceBackend::Saf(x)=>x.write_chunk(id,seq,d,e)}}
+    pub fn commit_write(&self,id:&str,total:usize,sha:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.commit_write(id,total,sha),WorkspaceBackend::Saf(x)=>x.commit_write(id,total,sha)}}
+    pub fn abort_write(&self,id:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.abort_write(id),WorkspaceBackend::Saf(x)=>x.abort_write(id)}}
+    pub fn create(&self,p:&str,k:&str,c:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.create(p,k,c),WorkspaceBackend::Saf(x)=>x.create(p,k,c)}}
+    pub fn patch(&self,p:&str,b:&str,e:&[Value])->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.patch(p,b,e),WorkspaceBackend::Saf(x)=>x.patch(p,b,e)}}
+    pub fn delete(&self,p:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.delete(p),WorkspaceBackend::Saf(x)=>x.delete(p)}}
+    pub fn trash_list(&self)->Result<Vec<Value>,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.trash_list(),WorkspaceBackend::Saf(x)=>x.trash_list()}}
+    pub fn trash_delete(&self,id:&str)->Result<(),RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.trash_delete(id),WorkspaceBackend::Saf(x)=>x.trash_delete(id)}}
+    pub fn trash_empty(&self)->Result<usize,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.trash_empty(),WorkspaceBackend::Saf(x)=>x.trash_empty()}}
+    pub fn restore_from_trash(&self,id:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.restore_from_trash(id),WorkspaceBackend::Saf(x)=>x.restore_from_trash(id)}}
+    pub fn export_zip(&self,p:&str,d:&Path)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.export_zip(p,d),WorkspaceBackend::Saf(x)=>x.export_zip(p,d)}}
+    pub fn checkpoint_tasks(&self,l:usize)->Result<Vec<Value>,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.checkpoint_tasks(l),WorkspaceBackend::Saf(x)=>x.checkpoint_tasks(l)}}
+    pub fn checkpoint_task(&self,id:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.checkpoint_task(id),WorkspaceBackend::Saf(x)=>x.checkpoint_task(id)}}
+    pub fn checkpoint_diff(&self,id:&str,seq:usize)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.checkpoint_diff(id,seq),WorkspaceBackend::Saf(x)=>x.checkpoint_diff(id,seq)}}
+    pub fn checkpoint_revert_file(&self,id:&str,p:&str)->Result<BatchMutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.checkpoint_revert_file(id,p),WorkspaceBackend::Saf(x)=>x.checkpoint_revert_file(id,p)}}
+    pub fn checkpoint_revert_task(&self,id:&str)->Result<BatchMutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.checkpoint_revert_task(id),WorkspaceBackend::Saf(x)=>x.checkpoint_revert_task(id)}}
+    pub fn checkpoint_revert_event(&self,id:&str,seq:usize,force:bool)->Result<BatchMutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.checkpoint_revert_event(id,seq,force),WorkspaceBackend::Saf(x)=>x.checkpoint_revert_event(id,seq,force)}}
+    pub fn rename(&self,f:&str,t:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.rename(f,t),WorkspaceBackend::Saf(x)=>x.rename(f,t)}}
+    pub fn copy(&self,f:&str,t:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.copy(f,t),WorkspaceBackend::Saf(x)=>x.copy(f,t)}}
+}
+
+struct LocalWorkspace {
     root: PathBuf,
     canonical_root: PathBuf,
     trash: Trash,
@@ -137,7 +250,7 @@ pub struct Workspace {
     writes: RefCell<HashMap<String, PendingWrite>>,
 }
 
-impl Workspace {
+impl LocalWorkspace {
     pub fn open(path: &str, data_dir: &Path) -> Result<Self, RuntimeError> {
         let root = PathBuf::from(path);
         if !root.is_dir() {
@@ -170,7 +283,15 @@ impl Workspace {
     pub fn info(&self) -> Value {
         json!({
             "roots": [self.root.to_string_lossy()],
-            "name": self.root.file_name().and_then(|x| x.to_str()).unwrap_or("project")
+            "name": self.root.file_name().and_then(|x| x.to_str()).unwrap_or("project"),
+            "location": {"kind":"local","path":self.root.to_string_lossy()},
+            "backend": "local",
+            "capabilities": {
+                "git": true,
+                "terminal_cwd": true,
+                "watcher": true,
+                "posix_permissions": cfg!(unix)
+            }
         })
     }
 
@@ -360,6 +481,30 @@ impl Workspace {
             out.push(node);
         }
         Ok(out)
+    }
+
+    fn glob(&self, pattern: &str, max_results: usize) -> Result<Value, RuntimeError> {
+        if pattern.trim().is_empty() { return Err(RuntimeError::new("BAD_QUERY", "glob pattern 不能为空")); }
+        let mut paths = Vec::new();
+        self.glob_level(&self.canonical_root, pattern, max_results, &mut paths)?;
+        Ok(json!({"paths":paths,"truncated":paths.len()>=max_results}))
+    }
+
+    fn glob_level(&self, dir: &Path, pattern: &str, max_results: usize, out: &mut Vec<String>) -> Result<(), RuntimeError> {
+        if out.len() >= max_results { return Ok(()); }
+        let entries = match fs::read_dir(dir) { Ok(x) => x, Err(_) => return Ok(()) };
+        for entry in entries.filter_map(Result::ok) {
+            if out.len() >= max_results { break; }
+            let Ok(ty) = entry.file_type() else { continue; };
+            if ty.is_symlink() { continue; }
+            let path = entry.path();
+            let rel = self.rel_display(&path);
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if ty.is_dir() && matches!(name.as_str(), ".git"|"node_modules"|"target"|".gradle"|".idea"|"__pycache__"|".venv"|"venv") { continue; }
+            if wildcard_match(pattern, &rel) { out.push(rel.clone()); }
+            if ty.is_dir() { self.glob_level(&path, pattern, max_results, out)?; }
+        }
+        Ok(())
     }
 
     pub fn search(
@@ -1171,6 +1316,439 @@ impl Workspace {
     }
 }
 
+
+struct SafPendingWrite {
+    path: String,
+    temp: PathBuf,
+    next_seq: usize,
+    bytes: usize,
+    base_revision: Option<String>,
+}
+
+struct SafWorkspace {
+    app: AppHandle,
+    uri: String,
+    name: String,
+    trash: Trash,
+    checkpoints: CheckpointStore,
+    writes: RefCell<HashMap<String, SafPendingWrite>>,
+}
+
+impl SafWorkspace {
+    fn open(app: AppHandle, uri: &str, name: &str, data_dir: &Path) -> Result<Self, RuntimeError> {
+        if !uri.starts_with("content://") {
+            return Err(RuntimeError::new("BAD_WORKSPACE", "SAF 工作区必须使用 content:// tree URI"));
+        }
+        let stat = app.saf().stat(uri, ".").map_err(|e| RuntimeError::new("SAF_PERMISSION", format!("无法访问已授权目录：{e}")))?;
+        if stat.get("exists").and_then(Value::as_bool) != Some(true)
+            || stat.get("type").and_then(Value::as_str) != Some("dir")
+        {
+            return Err(RuntimeError::new("SAF_PERMISSION", "已保存的 Android 目录授权已失效，请重新选择目录"));
+        }
+        let key = sha256_hex(uri.as_bytes());
+        let key = &key[..16];
+        Ok(Self {
+            app,
+            uri: uri.to_owned(),
+            name: if name.trim().is_empty() { "project".into() } else { name.to_owned() },
+            trash: Trash::new(data_dir.join("trash").join(key))?,
+            checkpoints: CheckpointStore::new(data_dir.join("checkpoints").join(key))?,
+            writes: RefCell::new(HashMap::new()),
+        })
+    }
+
+    fn info(&self) -> Value {
+        json!({
+            "roots": [self.uri],
+            "name": self.name,
+            "location": self.location(),
+            "backend": "saf",
+            "capabilities": {
+                "git": false,
+                "terminal_cwd": false,
+                "watcher": "refresh",
+                "posix_permissions": false
+            }
+        })
+    }
+
+    fn location(&self) -> Value {
+        json!({"kind":"saf","uri":self.uri,"name":self.name})
+    }
+
+    fn storage_key(&self) -> String {
+        sha256_hex(self.uri.as_bytes())[..16].to_owned()
+    }
+
+    fn checkpoint_handle(&self) -> CheckpointStore { self.checkpoints.clone() }
+
+    fn clean_rel(raw: &str) -> Result<String, RuntimeError> {
+        if raw.contains('\0') {
+            return Err(RuntimeError::new("BAD_PATH", "路径包含无效字符"));
+        }
+        let normalized = raw.replace('\\', "/");
+        let normalized = normalized.trim_matches('/');
+        if normalized.is_empty() || normalized == "." {
+            return Ok(".".into());
+        }
+        if raw.starts_with('/') || raw.starts_with('\\') {
+            return Err(RuntimeError::new("OUTSIDE_WORKSPACE", "只接受工作区相对路径"));
+        }
+        let mut parts = Vec::new();
+        for part in normalized.split('/') {
+            if part.is_empty() || part == "." || part == ".." {
+                return Err(RuntimeError::new("OUTSIDE_WORKSPACE", "路径试图离开工作区"));
+            }
+            parts.push(part);
+        }
+        Ok(parts.join("/"))
+    }
+
+    fn stat(&self, raw: &str) -> Result<Value, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        self.app.saf().stat(&self.uri, &rel)
+            .map_err(|e| RuntimeError::new("SAF_IO", format!("{rel}: {e}")))
+    }
+
+    fn exists(&self, raw: &str) -> Result<bool, RuntimeError> {
+        Ok(self.stat(raw)?.get("exists").and_then(Value::as_bool) == Some(true))
+    }
+
+    fn list_entries(&self, raw: &str) -> Result<Vec<Value>, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let value = self.app.saf().list(&self.uri, &rel)
+            .map_err(|e| RuntimeError::new("READ_FAILED", format!("{rel}: {e}")))?;
+        Ok(value.get("entries").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+
+    fn read_bytes(&self, raw: &str) -> Result<Vec<u8>, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let stat = self.stat(&rel)?;
+        if stat.get("exists").and_then(Value::as_bool) != Some(true) {
+            return Err(RuntimeError::new("NOT_FOUND", format!("{rel} 不存在")));
+        }
+        if stat.get("type").and_then(Value::as_str) != Some("file") {
+            return Err(RuntimeError::new("NOT_A_FILE", format!("{rel} 不是文件")));
+        }
+        if stat.get("size").and_then(Value::as_u64).unwrap_or(0) > MAX_READ_BYTES {
+            return Err(RuntimeError::new("TOO_LARGE", format!("{rel} 超过 8 MiB 读取上限")));
+        }
+        self.read_bytes_unbounded(&rel)
+    }
+
+    fn read_bytes_unbounded(&self, raw: &str) -> Result<Vec<u8>, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let value = self.app.saf().read(&self.uri, &rel)
+            .map_err(|e| RuntimeError::new("READ_FAILED", format!("{rel}: {e}")))?;
+        let encoded = value.get("data").and_then(Value::as_str)
+            .ok_or_else(|| RuntimeError::new("READ_FAILED", format!("{rel}: SAF 返回缺少 data")))?;
+        decode_base64(encoded)
+    }
+
+    fn ensure_parent_dirs(&self, raw: &str) -> Result<(), RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        if let Some((parent, _)) = rel.rsplit_once('/') {
+            if !self.exists(parent)? {
+                self.app.saf().create(&self.uri, parent, "dir")
+                    .map_err(|e| RuntimeError::new("CREATE_FAILED", format!("{parent}: {e}")))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_raw(&self, raw: &str, data: &[u8]) -> Result<(), RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        if rel == "." { return Err(RuntimeError::new("BAD_PATH", "不能写入工作区根目录")); }
+        self.ensure_parent_dirs(&rel)?;
+        let encoded = encode_base64(data);
+        self.app.saf().write(&self.uri, &rel, &encoded)
+            .map_err(|e| RuntimeError::new("WRITE_FAILED", format!("{rel}: {e}")))?;
+        Ok(())
+    }
+
+    fn read(&self, raw: &str) -> Result<Value, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let data = self.read_bytes(&rel)?;
+        let revision = revision_of(Some(&data));
+        match std::str::from_utf8(&data) {
+            Ok(text) if !data[..data.len().min(4096)].contains(&0) => Ok(json!({
+                "path":rel,"content":text,"revision":revision,"size":data.len(),"binary":false
+            })),
+            _ => Ok(json!({"path":rel,"revision":revision,"size":data.len(),"binary":true})),
+        }
+    }
+
+    fn hash(&self, raw: &str) -> Result<Value, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let stat = self.stat(&rel)?;
+        if stat.get("exists").and_then(Value::as_bool) != Some(true) {
+            return Ok(json!({"path":rel,"revision":revision_of(None)}));
+        }
+        if stat.get("type").and_then(Value::as_str) == Some("file") {
+            let data = self.read_bytes_unbounded(&rel)?;
+            Ok(json!({"path":rel,"revision":revision_of(Some(&data))}))
+        } else {
+            Ok(json!({"path":rel,"revision":revision_of(None)}))
+        }
+    }
+
+    fn tree(&self, raw: &str, depth: usize, show_hidden: bool) -> Result<Value, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let stat = self.stat(&rel)?;
+        if stat.get("exists").and_then(Value::as_bool) != Some(true)
+            || stat.get("type").and_then(Value::as_str) != Some("dir")
+        {
+            return Err(RuntimeError::new("NOT_A_FOLDER", format!("{rel} 不是文件夹")));
+        }
+        Ok(Value::Array(self.tree_level(&rel, depth, show_hidden)?))
+    }
+
+    fn tree_level(&self, raw: &str, depth: usize, show_hidden: bool) -> Result<Vec<Value>, RuntimeError> {
+        let mut entries = self.list_entries(raw)?;
+        entries.sort_by_key(|v| (
+            v.get("type").and_then(Value::as_str) != Some("dir"),
+            v.get("name").and_then(Value::as_str).unwrap_or("").to_lowercase(),
+        ));
+        let mut out = Vec::new();
+        for entry in entries {
+            let name = entry.get("name").and_then(Value::as_str).unwrap_or("");
+            if name.starts_with(TMP_PREFIX) || (!show_hidden && matches!(name, ".git" | ".DS_Store")) { continue; }
+            let path = entry.get("path").and_then(Value::as_str).unwrap_or(name).to_owned();
+            let is_dir = entry.get("type").and_then(Value::as_str) == Some("dir");
+            let mut node = json!({
+                "name":name,"path":path,"type":if is_dir{"dir"}else{"file"},
+                "size":entry.get("size").cloned().unwrap_or(json!(0)),
+                "mtime":entry.get("mtime").and_then(Value::as_f64).map(|x|x/1000.0).unwrap_or(0.0)
+            });
+            if is_dir && depth > 1 {
+                node["children"] = Value::Array(self.tree_level(&path, depth - 1, show_hidden)?);
+            }
+            out.push(node);
+        }
+        Ok(out)
+    }
+
+    fn glob(&self, pattern:&str, max_results:usize)->Result<Value,RuntimeError>{
+        if pattern.trim().is_empty(){return Err(RuntimeError::new("BAD_QUERY","glob pattern 不能为空"));}
+        let mut paths=Vec::new();self.glob_dir(".",pattern,max_results,&mut paths)?;Ok(json!({"paths":paths,"truncated":paths.len()>=max_results}))
+    }
+
+    fn glob_dir(&self,raw:&str,pattern:&str,max_results:usize,out:&mut Vec<String>)->Result<(),RuntimeError>{
+        if out.len()>=max_results{return Ok(());}for entry in self.list_entries(raw)?{if out.len()>=max_results{break;}let name=entry.get("name").and_then(Value::as_str).unwrap_or("");let path=entry.get("path").and_then(Value::as_str).unwrap_or("");let is_dir=entry.get("type").and_then(Value::as_str)==Some("dir");if is_dir&&matches!(name,".git"|"node_modules"|"target"|".gradle"|".idea"|"__pycache__"|".venv"|"venv"){continue;}if wildcard_match(pattern,path){out.push(path.to_owned());}if is_dir{self.glob_dir(path,pattern,max_results,out)?;}}Ok(())
+    }
+
+    fn search(&self, query: &str, case_sensitive: bool, max_results: usize) -> Result<Value, RuntimeError> {
+        if query.is_empty() { return Err(RuntimeError::new("BAD_QUERY", "搜索内容不能为空")); }
+        let needle = if case_sensitive { query.to_owned() } else { query.to_lowercase() };
+        let mut matches = Vec::new();
+        let mut scanned = 0usize;
+        self.search_dir(".", &needle, case_sensitive, max_results, &mut matches, &mut scanned)?;
+        Ok(json!({"matches":matches,"files_scanned":scanned,"truncated":matches.len()>=max_results}))
+    }
+
+    fn search_dir(&self, raw: &str, needle: &str, case_sensitive: bool, max_results: usize, matches: &mut Vec<Value>, scanned: &mut usize) -> Result<(), RuntimeError> {
+        if matches.len() >= max_results { return Ok(()); }
+        for entry in self.list_entries(raw)? {
+            if matches.len() >= max_results { break; }
+            let name = entry.get("name").and_then(Value::as_str).unwrap_or("");
+            if matches!(name, ".git" | "node_modules" | "__pycache__" | ".venv" | "venv" | ".gradle" | ".idea") { continue; }
+            let path = entry.get("path").and_then(Value::as_str).unwrap_or("");
+            if entry.get("type").and_then(Value::as_str) == Some("dir") {
+                self.search_dir(path, needle, case_sensitive, max_results, matches, scanned)?;
+                continue;
+            }
+            if entry.get("size").and_then(Value::as_u64).unwrap_or(0) > 1_000_000 { continue; }
+            let Ok(data) = self.read_bytes_unbounded(path) else { continue; };
+            if data[..data.len().min(4096)].contains(&0) { continue; }
+            let Ok(text) = std::str::from_utf8(&data) else { continue; };
+            *scanned += 1;
+            for (idx,line) in text.lines().enumerate() {
+                let hay = if case_sensitive { line.to_owned() } else { line.to_lowercase() };
+                if let Some(column) = hay.find(needle) {
+                    matches.push(json!({"path":path,"line":idx+1,"column":column+1,"text":line.chars().take(300).collect::<String>()}));
+                    if matches.len() >= max_results { break; }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_bytes(&self, raw: &str, data: &[u8], base_revision: Option<&str>) -> Result<Mutation, RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let stat = self.stat(&rel)?;
+        if stat.get("exists").and_then(Value::as_bool) == Some(true)
+            && stat.get("type").and_then(Value::as_str) != Some("file")
+        {
+            return Err(RuntimeError::new("NOT_A_FILE", format!("{rel} 不是文件")));
+        }
+        let before = if stat.get("exists").and_then(Value::as_bool) == Some(true) {
+            Some(self.read_bytes_unbounded(&rel)?)
+        } else { None };
+        let current = revision_of(before.as_deref());
+        if let Some(base) = base_revision {
+            if base != current {
+                return Err(RuntimeError::new("CONFLICT", format!("{rel} 在读取之后已被修改，请重新读取后再试"))
+                    .with_data(json!({"current_revision":current})));
+            }
+        }
+        if before.as_deref() == Some(data) {
+            return Ok(Mutation{changed:false,result:json!({"path":rel,"revision":current,"changed":false}),event:json!({})});
+        }
+        self.write_raw(&rel, data)?;
+        let after_rev = revision_of(Some(data));
+        let kind = if before.is_some(){"modify"}else{"create"};
+        Ok(Mutation{changed:true,result:json!({"path":rel,"revision":after_rev,"changed":true}),event:json!({
+            "kind":kind,"path":rel,"before_text":event_text(before.as_deref()),"after_text":event_text(Some(data)),
+            "before_rev":revision_of(before.as_deref()),"after_rev":after_rev,"actor":"user","task_id":null
+        })})
+    }
+
+    fn write_text(&self, raw:&str, content:&str, base_revision:Option<&str>) -> Result<Mutation,RuntimeError> {
+        self.commit_bytes(raw, content.as_bytes(), base_revision)
+    }
+
+    fn write_bytes_protected(&self, raw:&str, data:&[u8], base_revision:Option<&str>) -> Result<Mutation,RuntimeError> {
+        self.commit_bytes(raw,data,base_revision)
+    }
+
+    fn set_executable_protected(&self, _raw:&str, _executable:bool) -> Result<(),RuntimeError> {
+        Err(RuntimeError::new("WORKSPACE_CAPABILITY", "Android SAF 工作区没有 POSIX 可执行位"))
+    }
+
+    fn begin_write(&self, raw:&str, base_revision:Option<&str>) -> Result<Value,RuntimeError> {
+        let rel = Self::clean_rel(raw)?;
+        let current = self.hash(&rel)?.get("revision").and_then(Value::as_str).unwrap_or("absent").to_owned();
+        if let Some(base)=base_revision { if base != current { return Err(RuntimeError::new("CONFLICT",format!("{rel} 在读取之后已被修改，请重新读取后再试")).with_data(json!({"current_revision":current}))); } }
+        let pending_dir = self.checkpoints.base_dir().join("pending-writes");
+        fs::create_dir_all(&pending_dir).map_err(io_err("WRITE_FAILED", &pending_dir.to_string_lossy()))?;
+        let id=unique_id("w");
+        let temp=pending_dir.join(format!("{id}.tmp"));
+        OpenOptions::new().create_new(true).write(true).open(&temp).map_err(io_err("WRITE_FAILED",&rel))?;
+        self.writes.borrow_mut().insert(id.clone(),SafPendingWrite{path:rel,temp,next_seq:0,bytes:0,base_revision:base_revision.map(ToOwned::to_owned)});
+        Ok(json!({"write_id":id}))
+    }
+
+    fn write_chunk(&self, id:&str, seq:usize, data:&str, encoding:&str) -> Result<Value,RuntimeError> {
+        let mut writes=self.writes.borrow_mut();
+        let pending=writes.get_mut(id).ok_or_else(||RuntimeError::new("NO_SUCH_WRITE","写入事务不存在或已结束"))?;
+        if seq != pending.next_seq {
+            let expected=pending.next_seq; let temp=pending.temp.clone(); writes.remove(id); let _=fs::remove_file(temp);
+            return Err(RuntimeError::new("SEQUENCE_ERROR",format!("写入块顺序错误：期望 {expected}，收到 {seq}；写入已中止")));
+        }
+        let bytes=match encoding {"utf-8"|"utf8"=>data.as_bytes().to_vec(),"base64"=>decode_base64(data)?,_=>return Err(RuntimeError::new("BAD_ENCODING","分块写入只支持 utf-8 或 base64"))};
+        let mut file=OpenOptions::new().append(true).open(&pending.temp).map_err(io_err("WRITE_FAILED",id))?;
+        file.write_all(&bytes).map_err(io_err("WRITE_FAILED",id))?;
+        pending.bytes+=bytes.len(); pending.next_seq+=1;
+        Ok(json!({"received_bytes":pending.bytes,"next_seq":pending.next_seq}))
+    }
+
+    fn commit_write(&self,id:&str,total_bytes:usize,expected_sha256:&str)->Result<Mutation,RuntimeError>{
+        let pending=self.writes.borrow_mut().remove(id).ok_or_else(||RuntimeError::new("NO_SUCH_WRITE","写入事务不存在或已结束"))?;
+        let result=(||{
+            if pending.bytes!=total_bytes{return Err(RuntimeError::new("BYTE_COUNT_MISMATCH",format!("收到 {} 字节，期望 {total_bytes} 字节",pending.bytes)));}
+            let data=fs::read(&pending.temp).map_err(io_err("READ_FAILED",id))?;
+            let actual=sha256_hex(&data); let expected=expected_sha256.strip_prefix("sha256:").unwrap_or(expected_sha256);
+            if actual!=expected{return Err(RuntimeError::new("HASH_MISMATCH","内容哈希不匹配；原文件未被改动").with_data(json!({"actual":actual,"expected":expected})));}
+            self.commit_bytes(&pending.path,&data,pending.base_revision.as_deref())
+        })();
+        let _=fs::remove_file(&pending.temp); result
+    }
+
+    fn abort_write(&self,id:&str)->Result<Value,RuntimeError>{
+        let pending=self.writes.borrow_mut().remove(id); if let Some(p)=pending.as_ref(){let _=fs::remove_file(&p.temp);} Ok(json!({"aborted":pending.is_some()}))
+    }
+
+    fn create(&self,raw:&str,kind:&str,content:&str)->Result<Mutation,RuntimeError>{
+        let rel=Self::clean_rel(raw)?; if rel=="."{return Err(RuntimeError::new("ALREADY_EXISTS","工作区根目录已经存在"));}
+        if self.exists(&rel)?{return Err(RuntimeError::new("ALREADY_EXISTS",format!("{rel} 已存在")));}
+        match kind{
+            "dir"|"folder"=>{self.app.saf().create(&self.uri,&rel,"dir").map_err(|e|RuntimeError::new("CREATE_FAILED",format!("{rel}: {e}")))?;Ok(Mutation{changed:true,result:json!({"path":rel,"type":"dir"}),event:json!({"kind":"create","path":rel,"before_text":null,"after_text":null,"before_rev":"absent","after_rev":"absent","actor":"user","task_id":null})})}
+            "file"=>{self.ensure_parent_dirs(&rel)?;self.app.saf().create(&self.uri,&rel,"file").map_err(|e|RuntimeError::new("CREATE_FAILED",format!("{rel}: {e}")))?;if !content.is_empty(){self.write_raw(&rel,content.as_bytes())?;}let rev=revision_of(Some(content.as_bytes()));Ok(Mutation{changed:true,result:json!({"path":rel,"revision":rev,"changed":true}),event:json!({"kind":"create","path":rel,"before_text":null,"after_text":event_text(Some(content.as_bytes())),"before_rev":"absent","after_rev":rev,"actor":"user","task_id":null})})}
+            _=>Err(RuntimeError::new("BAD_REQUEST","kind 只能是 file 或 dir"))
+        }
+    }
+
+    fn patch(&self,raw:&str,base_revision:&str,edits:&[Value])->Result<Mutation,RuntimeError>{
+        if base_revision.is_empty(){return Err(RuntimeError::new("NEEDS_REVISION","修改文件需要 base_revision，请先读取该文件"));}
+        if edits.is_empty(){return Err(RuntimeError::new("BAD_EDIT","edits 必须是非空列表"));}
+        let bytes=self.read_bytes(raw)?;let current=revision_of(Some(&bytes));if current!=base_revision{return Err(RuntimeError::new("CONFLICT",format!("{raw} 在读取之后已被修改，请重新读取后再试")).with_data(json!({"current_revision":current})));}
+        let text=std::str::from_utf8(&bytes).map_err(|_|RuntimeError::new("BINARY",format!("{raw} 不是 UTF-8 文本")))?;let next=apply_edits(text,edits)?;self.write_text(raw,&next,Some(base_revision))
+    }
+
+    fn stage_to_local(&self, raw:&str, dest:&Path)->Result<(),RuntimeError>{
+        let rel=Self::clean_rel(raw)?;let stat=self.stat(&rel)?;if stat.get("exists").and_then(Value::as_bool)!=Some(true){return Err(RuntimeError::new("NOT_FOUND",format!("{rel} 不存在")));}
+        if stat.get("type").and_then(Value::as_str)==Some("dir"){
+            fs::create_dir_all(dest).map_err(io_err("TRASH_WRITE_FAILED",&dest.to_string_lossy()))?;
+            for entry in self.list_entries(&rel)?{let name=entry.get("name").and_then(Value::as_str).unwrap_or("item");let path=entry.get("path").and_then(Value::as_str).unwrap_or("");self.stage_to_local(path,&dest.join(name))?;}
+        }else{if let Some(parent)=dest.parent(){fs::create_dir_all(parent).map_err(io_err("TRASH_WRITE_FAILED",&parent.to_string_lossy()))?;}fs::write(dest,self.read_bytes_unbounded(&rel)?).map_err(io_err("TRASH_WRITE_FAILED",&dest.to_string_lossy()))?;}
+        Ok(())
+    }
+
+    fn upload_from_local(&self, src:&Path, raw:&str)->Result<(),RuntimeError>{
+        let rel=Self::clean_rel(raw)?;
+        if src.is_dir(){if !self.exists(&rel)?{self.app.saf().create(&self.uri,&rel,"dir").map_err(|e|RuntimeError::new("RESTORE_FAILED",format!("{rel}: {e}")))?;}for entry in fs::read_dir(src).map_err(io_err("RESTORE_FAILED",&src.to_string_lossy()))?{let entry=entry.map_err(|e|RuntimeError::new("RESTORE_FAILED",e.to_string()))?;let name=entry.file_name().to_string_lossy().into_owned();let child=if rel=="."{name}else{format!("{rel}/{name}")};self.upload_from_local(&entry.path(),&child)?;}}
+        else{self.write_raw(&rel,&fs::read(src).map_err(io_err("RESTORE_FAILED",&src.to_string_lossy()))?)?;}
+        Ok(())
+    }
+
+    fn delete(&self,raw:&str)->Result<Mutation,RuntimeError>{
+        let rel=Self::clean_rel(raw)?;if rel=="."{return Err(RuntimeError::new("POLICY_DENIED","不能删除工作区根目录"));}
+        let stat=self.stat(&rel)?;if stat.get("exists").and_then(Value::as_bool)!=Some(true){return Err(RuntimeError::new("NOT_FOUND",format!("{rel} 不存在")));}
+        let before=if stat.get("type").and_then(Value::as_str)==Some("file"){Some(self.read_bytes_unbounded(&rel)?)}else{None};
+        let staging=self.checkpoints.base_dir().join("trash-staging").join(unique_id("saf-"));self.stage_to_local(&rel,&staging)?;let trash_id=self.trash.stash_virtual(&rel,&staging)?;
+        if let Err(e)=self.app.saf().delete(&self.uri,&rel){let _=self.trash.delete_permanently(&trash_id);return Err(RuntimeError::new("DELETE_FAILED",format!("{rel}: {e}")));}
+        Ok(Mutation{changed:true,result:json!({"path":rel,"trash_id":trash_id}),event:json!({"kind":"delete","path":rel,"before_text":event_text(before.as_deref()),"after_text":null,"before_rev":revision_of(before.as_deref()),"after_rev":"absent","actor":"user","task_id":null})})
+    }
+
+    fn trash_list(&self)->Result<Vec<Value>,RuntimeError>{self.trash.list()}
+    fn trash_delete(&self,id:&str)->Result<(),RuntimeError>{self.trash.delete_permanently(id)}
+    fn trash_empty(&self)->Result<usize,RuntimeError>{self.trash.empty()}
+
+    fn restore_from_trash(&self,id:&str)->Result<Mutation,RuntimeError>{
+        let (meta,payload)=self.trash.virtual_item(id)?;let rel=meta.get("original").and_then(Value::as_str).ok_or_else(||RuntimeError::new("TRASH_CORRUPT","回收站元数据缺少 original"))?.to_owned();
+        if self.exists(&rel)?{return Err(RuntimeError::new("ALREADY_EXISTS",format!("无法恢复：{rel} 已经存在")));}
+        let after=if payload.is_file(){Some(fs::read(&payload).map_err(io_err("RESTORE_FAILED",&payload.to_string_lossy()))?)}else{None};
+        self.upload_from_local(&payload,&rel)?;self.trash.finish_virtual_restore(id)?;
+        Ok(Mutation{changed:true,result:json!({"path":rel}),event:json!({"kind":"create","path":rel,"before_text":null,"after_text":event_text(after.as_deref()),"before_rev":"absent","after_rev":revision_of(after.as_deref()),"actor":"system","task_id":null})})
+    }
+
+    fn export_zip(&self,raw:&str,data_dir:&Path)->Result<Value,RuntimeError>{
+        let rel=Self::clean_rel(raw)?;let stat=self.stat(&rel)?;if stat.get("exists").and_then(Value::as_bool)!=Some(true){return Err(RuntimeError::new("NOT_FOUND",format!("{rel} 不存在")));}
+        let exports=data_dir.join("exports");fs::create_dir_all(&exports).map_err(io_err("EXPORT_FAILED",&exports.to_string_lossy()))?;
+        let staging=exports.join(format!(".saf-stage-{}",unique_id("")));let base=if rel=="."{self.name.clone()}else{rel.rsplit('/').next().unwrap_or("project").to_owned()};let staged=staging.join(&base);self.stage_to_local(&rel,&staged)?;
+        let output=exports.join(format!("{}-{base}.zip",unique_id("export-")));let result=zip_local_source(&staged,&base,&output);let _=fs::remove_dir_all(&staging);let total=result?;let size=fs::metadata(&output).map_err(io_err("EXPORT_FAILED",&output.to_string_lossy()))?.len();Ok(json!({"native_path":output.to_string_lossy(),"name":format!("{base}.zip"),"size":size,"source_bytes":total}))
+    }
+
+    fn checkpoint_tasks(&self,limit:usize)->Result<Vec<Value>,RuntimeError>{self.checkpoints.list_tasks(limit)}
+    fn checkpoint_task(&self,id:&str)->Result<Value,RuntimeError>{self.checkpoints.load(id)}
+
+    fn restore_checkpoint_state(&self,rel:&str,existed:bool,blob:Option<&str>)->Result<Option<Value>,RuntimeError>{
+        let stat=self.stat(rel)?;let current=if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)==Some("file"){Some(self.read_bytes_unbounded(rel)?)}else{None};
+        if existed{let blob=blob.ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","Checkpoint 缺少 blob"))?;let data=self.checkpoints.get_blob(blob)?;if current.as_deref()==Some(data.as_slice()){return Ok(None);}if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)!=Some("file"){return Err(RuntimeError::new("NOT_A_FILE",format!("{rel} 当前不是文件")));}self.write_raw(rel,&data)?;let kind=if current.is_some(){"modify"}else{"create"};return Ok(Some(json!({"kind":kind,"path":rel,"before_text":event_text(current.as_deref()),"after_text":event_text(Some(&data)),"before_rev":revision_of(current.as_deref()),"after_rev":revision_of(Some(&data)),"actor":"system","task_id":null})));}
+        if current.is_some(){let before=current.unwrap_or_default();let _=self.delete(rel)?;return Ok(Some(json!({"kind":"delete","path":rel,"before_text":event_text(Some(&before)),"after_text":null,"before_rev":revision_of(Some(&before)),"after_rev":"absent","actor":"system","task_id":null})));}Ok(None)
+    }
+
+    fn checkpoint_diff(&self,task_id:&str,seq:usize)->Result<Value,RuntimeError>{
+        let task=self.checkpoints.load(task_id)?;let events=task["events"].as_array().ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","任务 events 无效"))?;let event=events.get(seq).ok_or_else(||RuntimeError::new("BAD_EVENT","Checkpoint 事件编号超出范围"))?;if event["type"].as_str()!=Some("edit"){return Err(RuntimeError::new("NOT_AN_EDIT","这条记录没有可比较的差异"));}let rel=event["path"].as_str().ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","编辑事件缺少 path"))?;let before=event.get("before_blob").and_then(Value::as_str).map(|sha|self.checkpoints.get_blob(sha)).transpose()?;let mut after=None;for later in events.iter().skip(seq+1){if later["type"].as_str()==Some("edit")&&later["path"].as_str()==Some(rel){after=later.get("before_blob").and_then(Value::as_str).map(|sha|self.checkpoints.get_blob(sha)).transpose()?;break;}}if after.is_none(){let stat=self.stat(rel)?;if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)==Some("file"){after=Some(self.read_bytes_unbounded(rel)?);}}Ok(json!({"path":rel,"before":event_text(before.as_deref()),"after":event_text(after.as_deref())}))
+    }
+
+    fn checkpoint_revert_file(&self,task_id:&str,rel:&str)->Result<BatchMutation,RuntimeError>{let task=self.checkpoints.load(task_id)?;let snap=task["files"].get(rel).ok_or_else(||RuntimeError::new("NOT_IN_TASK",format!("任务 {task_id} 没有改动过 {rel}")))?;let event=self.restore_checkpoint_state(rel,snap["existed"].as_bool().unwrap_or(false),snap.get("blob").and_then(Value::as_str))?;Ok(BatchMutation{result:json!({"reverted":[rel]}),events:event.into_iter().collect()})}
+
+    fn checkpoint_revert_task(&self,task_id:&str)->Result<BatchMutation,RuntimeError>{let task=self.checkpoints.load(task_id)?;let files=task["files"].as_object().ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","任务 files 无效"))?;let mut reverted=Vec::new();let mut emitted=Vec::new();for(rel,snap)in files{if let Some(event)=self.restore_checkpoint_state(rel,snap["existed"].as_bool().unwrap_or(false),snap.get("blob").and_then(Value::as_str))?{emitted.push(event);}reverted.push(rel.clone());}let seqs=task["events"].as_array().map(|events|events.iter().filter(|e|e["type"].as_str()==Some("edit")).filter_map(|e|e["seq"].as_u64().map(|n|n as usize)).collect::<Vec<_>>()).unwrap_or_default();self.checkpoints.mark_reverted(task_id,&seqs)?;let _=self.checkpoints.add_event(task_id,"revert",&format!("已将 {} 个文件恢复到任务开始之前",reverted.len()),json!({}));Ok(BatchMutation{result:json!({"reverted":reverted}),events:emitted})}
+
+    fn checkpoint_revert_event(&self,task_id:&str,seq:usize,force:bool)->Result<BatchMutation,RuntimeError>{let task=self.checkpoints.load(task_id)?;let event=task["events"].as_array().and_then(|x|x.get(seq)).ok_or_else(||RuntimeError::new("BAD_EVENT","Checkpoint 事件编号超出范围"))?;let kind=event["kind"].as_str().unwrap_or("");if event["type"].as_str()!=Some("edit")||!matches!(kind,"create"|"modify"|"delete"){return Err(RuntimeError::new("NOT_REVERTIBLE","这条记录无法单独撤销"));}let rel=event["path"].as_str().ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","编辑事件缺少 path"))?;let stat=self.stat(rel)?;let current=if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)==Some("file"){Some(self.read_bytes_unbounded(rel)?)}else{None};if !force{let expected=event["after_rev"].as_str().unwrap_or("absent");let actual=revision_of(current.as_deref());if actual!=expected{return Err(RuntimeError::new("CONFLICT",format!("{rel} 在这一步之后又被修改过，撤销会丢失后续的工作")).with_data(json!({"current_revision":actual})));}}let restored=self.restore_checkpoint_state(rel,event["existed_before"].as_bool().unwrap_or(false),event.get("before_blob").and_then(Value::as_str))?;self.checkpoints.mark_reverted(task_id,&[seq])?;Ok(BatchMutation{result:json!({"reverted":[rel]}),events:restored.into_iter().collect()})}
+
+    fn rename(&self,from:&str,to:&str)->Result<Mutation,RuntimeError>{let from=Self::clean_rel(from)?;let to=Self::clean_rel(to)?;if !self.exists(&from)?{return Err(RuntimeError::new("NOT_FOUND",format!("{from} 不存在")));}if self.exists(&to)?{return Err(RuntimeError::new("ALREADY_EXISTS",format!("{to} 已存在")));}self.ensure_parent_dirs(&to)?;self.app.saf().rename(&self.uri,&from,&to).map_err(|e|RuntimeError::new("RENAME_FAILED",format!("{from}: {e}")))?;Ok(Mutation{changed:true,result:json!({"path":to}),event:json!({"kind":"rename","path":to,"old_path":from,"before_text":null,"after_text":null,"before_rev":"absent","after_rev":"absent","actor":"user","task_id":null})})}
+
+    fn copy(&self,from:&str,to:&str)->Result<Value,RuntimeError>{let from=Self::clean_rel(from)?;let to=Self::clean_rel(to)?;if !self.exists(&from)?{return Err(RuntimeError::new("NOT_FOUND",format!("{from} 不存在")));}if self.exists(&to)?{return Err(RuntimeError::new("ALREADY_EXISTS",format!("{to} 已存在")));}self.ensure_parent_dirs(&to)?;self.app.saf().copy(&self.uri,&from,&to).map_err(|e|RuntimeError::new("COPY_FAILED",format!("{from}: {e}")))?;Ok(json!({"path":to}))}
+}
+
+fn zip_local_source(source:&Path, archive_root:&str, output:&Path)->Result<u64,RuntimeError>{
+    let file=File::create(output).map_err(io_err("EXPORT_FAILED",&output.to_string_lossy()))?;let mut zip=zip::ZipWriter::new(file);let options=zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);let mut total=0u64;
+    fn add(zip:&mut zip::ZipWriter<File>,source:&Path,name:&str,options:zip::write::SimpleFileOptions,total:&mut u64)->Result<(),RuntimeError>{let meta=fs::symlink_metadata(source).map_err(io_err("EXPORT_FAILED",&source.to_string_lossy()))?;if meta.file_type().is_symlink(){return Ok(());}if meta.is_file(){*total=total.saturating_add(meta.len());if *total>EXPORT_MAX_TOTAL{return Err(RuntimeError::new("EXPORT_TOO_LARGE","内容超过 300 MB，无法一次性导出，请分批导出子文件夹"));}zip.start_file(name.replace('\\',"/"),options).map_err(|e|RuntimeError::new("EXPORT_FAILED",e.to_string()))?;let mut input=File::open(source).map_err(io_err("EXPORT_FAILED",&source.to_string_lossy()))?;std::io::copy(&mut input,zip).map_err(io_err("EXPORT_FAILED",&source.to_string_lossy()))?;return Ok(());}if meta.is_dir(){let mut entries=fs::read_dir(source).map_err(io_err("EXPORT_FAILED",&source.to_string_lossy()))?.filter_map(Result::ok).collect::<Vec<_>>();entries.sort_by_key(|e|e.file_name().to_string_lossy().to_lowercase());for entry in entries{let child=entry.path();let child_name=entry.file_name().to_string_lossy().into_owned();if entry.file_type().map(|t|t.is_dir()).unwrap_or(false)&&EXPORT_SKIP_DIRS.contains(&child_name.as_str()){continue;}let dest=if name.is_empty(){child_name}else{format!("{name}/{child_name}")};add(zip,&child,&dest,options,total)?;}}Ok(())}
+    if let Err(error)=add(&mut zip,source,archive_root,options,&mut total){drop(zip);let _=fs::remove_file(output);return Err(error);}zip.finish().map_err(|e|RuntimeError::new("EXPORT_FAILED",e.to_string()))?;Ok(total)
+}
+
 fn apply_edits(text: &str, edits: &[Value]) -> Result<String, RuntimeError> {
     let crlf = text.contains("\r\n");
     let normalized = text.replace("\r\n", "\n");
@@ -1309,6 +1887,22 @@ fn apply_edits(text: &str, edits: &[Value]) -> Result<String, RuntimeError> {
     } else {
         Ok(out)
     }
+}
+
+fn encode_base64(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let a = chunk[0] as u32;
+        let b = chunk.get(1).copied().unwrap_or(0) as u32;
+        let c = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (a << 16) | (b << 8) | c;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 { out.push(TABLE[((n >> 6) & 63) as usize] as char); } else { out.push('='); }
+        if chunk.len() > 2 { out.push(TABLE[(n & 63) as usize] as char); } else { out.push('='); }
+    }
+    out
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, RuntimeError> {
