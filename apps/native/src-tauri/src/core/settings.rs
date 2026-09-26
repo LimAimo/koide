@@ -317,7 +317,7 @@ impl SettingsStore {
     }
 }
 
-fn wildcard_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p = pattern.as_bytes();
     let t = text.as_bytes();
     let (mut pi, mut ti) = (0usize, 0usize);
