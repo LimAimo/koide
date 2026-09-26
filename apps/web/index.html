@@ -26,21 +26,26 @@
   <div id="boot-fallback" role="alert" hidden>
     <strong>Koide 启动失败</strong>
     <pre id="boot-error"></pre>
+    <button id="boot-copy" type="button">复制诊断信息</button>
   </div>
   <script>
     (() => {
-      const show = (value) => {
+      let diagnostic = "";
+      const show = (value, meta = {}) => {
         const box = document.getElementById("boot-fallback");
         const out = document.getElementById("boot-error");
         if (!box || !out) return;
-        out.textContent = String(value && (value.stack || value.message) || value || "未知启动错误");
+        const detail = String(value && (value.stack || value.message) || value || "未知启动错误");
+        const where = meta.filename ? `${meta.filename}:${meta.lineno || "?"}:${meta.colno || "?"}` : "";
+        diagnostic = ["Koide 启动失败", where, detail, `URL: ${location.href}`, `UA: ${navigator.userAgent}`].filter(Boolean).join("\n");
+        out.textContent = diagnostic;
         box.hidden = false;
       };
       window.__KOIDE_BOOT_OK__ = false;
-      window.addEventListener("error", (event) => show(event.error || event.message));
+      window.addEventListener("error", (event) => show(event.error || event.message, event));
       window.addEventListener("unhandledrejection", (event) => show(event.reason));
-      setTimeout(() => { if (!window.__KOIDE_BOOT_OK__) show("主界面未在 8 秒内完成启动。请查看控制台中的首个错误。"); }, 8000);
-    })();
+      setTimeout(() => { if (!window.__KOIDE_BOOT_OK__) show("主界面未在 8 秒内完成启动。上方会显示捕获到的启动错误；如果没有其他信息，请复制诊断信息反馈。"); }, 8000);
+      document.getElementById("boot-copy")?.addEventListener("click", async () => {\n        try { await navigator.clipboard.writeText(diagnostic); }\n        catch { const out = document.getElementById("boot-error"); out?.focus?.(); }\n      });\n    })();
   </script>
   <script type="module" src="./src/main.js"></script>
 </body>
