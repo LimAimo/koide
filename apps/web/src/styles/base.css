@@ -219,3 +219,12 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   content: ""; position: absolute; left: 0; right: 0; bottom: -18px; height: 18px;
   pointer-events: none; background: linear-gradient(to bottom, color-mix(in srgb, var(--surface) 36%, transparent), transparent);
 }
+
+.settings-head { position: sticky; top: 0; z-index: 4; }
+.settings-head > div { min-width: 0; }
+.settings-head h1 { line-height: 1.15; }
+.settings-head small { display: block; margin-top: 2px; font-size: 11px; }
+.settings-group-title {
+  margin: 26px 16px 8px; color: var(--primary); font-size: 12px; font-weight: 700;
+  letter-spacing: .08em;
+}
