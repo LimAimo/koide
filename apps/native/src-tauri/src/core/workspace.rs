@@ -39,7 +39,7 @@ pub fn browse_location(path: Option<&str>, _app_data_dir: Option<&Path>) -> Resu
                 fs::create_dir_all(&workspaces)
                     .map_err(io_err("READ_FAILED", &workspaces.to_string_lossy()))?;
                 entries.push(json!({
-                    "name": "Diffusion 本地工作区",
+                    "name": "Koide 私有工作区",
                     "path": workspaces.to_string_lossy()
                 }));
             }
