@@ -59,17 +59,28 @@ export function importFiles(dir = ".") {
 
 export async function exportPath(path = ".") {
   try {
-    const { url, name } = await runtime.files.export({ path });
-    const t = bridge.target;
-    const base = t ? `${t.tls ? "https" : "http"}://${t.host.includes(":") ? `[${t.host}]` : t.host}:${t.port}` : "";
+    const result = await runtime.files.export({ path });
+    const name = result.name || "project.zip";
+    if (runtime.kind === "native") {
+      const tauri = globalThis.__TAURI__;
+      if (!tauri?.dialog?.save || !tauri?.fs?.copyFile) throw new Error("原生保存组件尚未加载");
+      const destination = await tauri.dialog.save({
+        defaultPath: name,
+        filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+      });
+      if (!destination) return;
+      await tauri.fs.copyFile(result.native_path, destination);
+      toast(`已导出 ${name}`);
+      return;
+    }
     const a = document.createElement("a");
-    a.href = base + url;
+    a.href = result.url;
     a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
     toast(`正在下载 ${name}`);
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e?.message || String(e)); }
 }
 
 
