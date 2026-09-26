@@ -143,17 +143,16 @@ OpenAI-compatible SSE 已通过 Android/Windows CI，但：
 
 ## 7. 推荐继续顺序
 
-1. 先跑当前 SAF 提交的 Android/Windows CI，并修到绿；
-2. Android SAF 真实设备 smoke；
-3. Android interactive PTY；
-4. Provider hard-cancel + Anthropic/Gemini streaming parity；
-5. Rust Remote Runtime / pairing；
-6. Native integration + UI + 实机 smoke；
-7. 再跑 Runtime 72/72 parity；
-8. Android + Windows 全绿；
-9. 最后才删除 Python；
-10. 删除后再跑一次完整 Native-only 门禁；
-11. 更新架构图、README、MIGRATION_STATUS，并决定是否合并 main / 创建 alpha prerelease。
+1. Android SAF 真实设备 smoke；
+2. Android interactive PTY；
+3. Provider hard-cancel + Anthropic/Gemini streaming parity；
+4. Rust Remote Runtime / pairing；
+5. Native integration + Web/UI + 实机 smoke；
+6. 再跑 Runtime 72/72 parity；
+7. Android + Windows + CM6/Web UI CI 全绿；
+8. 最后才删除 Python；
+9. 删除后再跑一次完整 Native-only 门禁；
+10. 更新架构图、README、MIGRATION_STATUS，并决定是否合并 main / 创建 alpha prerelease。
 
 ## 8. 当前分支策略
 
@@ -176,4 +175,4 @@ OpenAI-compatible SSE 已通过 Android/Windows CI，但：
 
 ## 10. 一句话状态
 
-**Diffusion IDE 的 Android SAF 原地 WorkspaceBackend 已进入源码，Native dispatch 也达到 72/72；但 SAF 仍需当前提交的 CI / 实机验证，Android interactive PTY、Rust Remote Runtime 和 Provider hard-cancel/全协议流式等价仍是真正的最后硬骨头；Python Bridge 现在仍是行为基线，不能删。**
+**Diffusion IDE 的 Android SAF 原地 WorkspaceBackend 已进入源码并通过当前 Alpha7 Rust / Windows / Android CI，Native dispatch 达到 72/72；真实设备 SAF smoke、Android interactive PTY、Rust Remote Runtime 和 Provider hard-cancel/全协议流式等价仍是真正的最后硬骨头；Python Bridge 现在仍是行为基线，不能删。最新 UI 已固定使用 CodeMirror 6，并完成移动端 AI 自由高度抽屉、safe-area、文件树实时刷新与 AI 编辑跟随收口。**

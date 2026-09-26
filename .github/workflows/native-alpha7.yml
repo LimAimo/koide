@@ -46,6 +46,35 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  web-ui:
+    name: Web UI + CodeMirror 6
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.0"
+          run_install: false
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build required CodeMirror 6 editor
+        run: pnpm build:cm6
+
+      - name: Run Web and UI regression tests
+        run: node --test tests/web/*.test.mjs
+
   native-core:
     name: Native-only Rust tests
     runs-on: ubuntu-latest

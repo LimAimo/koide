@@ -4,7 +4,9 @@
   "version": "0.8.0-alpha.7",
   "identifier": "io.diffusion.ide",
   "build": {
-    "frontendDist": "../../web"
+    "frontendDist": "../../web",
+    "beforeBuildCommand": "pnpm --filter @diffusion/editor-cm6 build",
+    "beforeDevCommand": "pnpm --filter @diffusion/editor-cm6 build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -26,6 +28,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png", "icons/icon.ico"]
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
   }
 }

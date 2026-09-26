@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { installFakeDom } from "./fake-dom.mjs";
 
 installFakeDom();
@@ -144,4 +145,23 @@ test("Markdown：ATX/Setext 标题、GFM 表格、任务列表和两种围栏代
   assert.equal(root.querySelectorAll(".task-item").length, 2);
   assert.equal(root.querySelectorAll("pre").length, 2);
   assert.match(root.textContent, /一级标题.*二级标题.*const x = 1.*indented/s);
+});
+
+
+test("正式编辑器固定为 CodeMirror 6，原生构建会先生成编辑器产物", () => {
+  const factory = fs.readFileSync(new URL("../../apps/web/src/services/editor-factory.js", import.meta.url), "utf8");
+  const pane = fs.readFileSync(new URL("../../apps/web/src/components/editor-pane.js", import.meta.url), "utf8");
+  const config = JSON.parse(fs.readFileSync(new URL("../../apps/native/src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  assert.doesNotMatch(factory, /catch\s*\(.*=>\s*null/);
+  assert.doesNotMatch(pane, /new CodeEditor/);
+  assert.match(config.build.beforeBuildCommand, /editor-cm6/);
+  assert.match(config.build.beforeDevCommand, /editor-cm6/);
+});
+
+test("手机 AI 全屏保留状态栏安全区且使用自由高度 bottom sheet", () => {
+  const css = fs.readFileSync(new URL("../../apps/web/src/styles/layout.css", import.meta.url), "utf8");
+  const layout = fs.readFileSync(new URL("../../apps/web/src/components/layout.js", import.meta.url), "utf8");
+  assert.match(css, /\.ai\.full\s*\{[^}]*padding-top:\s*env\(safe-area-inset-top\)/s);
+  assert.doesNotMatch(layout, /SNAPS|snapTo\(/);
+  assert.match(layout, /setH\(clamp\(current, minOpenH\(\), max - 1\)\)/);
 });

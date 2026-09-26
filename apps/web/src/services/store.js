@@ -23,11 +23,12 @@ export const DEFAULT_SETTINGS = {
   density: "comfortable",     // compact | comfortable
   tabWidth: 2,
   filesVisible: true,         // 桌面端文件面板是否显示
-  aiVisible: true,            // AI 面板是否显示
+  aiVisible: false,           // 进入项目后 AI 面板默认关闭；用户点击 AI 时再打开
   terminalVisible: false,     // 桌面端底部终端是否显示
   showHiddenFiles: false,     // 文件树是否显示 .git 等隐藏目录
-  editorKind: "auto",         // auto | builtin | cm6
+  editorKind: "cm6",          // 兼容旧设置导入；产品界面固定使用 CodeMirror 6
   showMinimap: false,
+  followAgentEdits: true,      // AI 创建或修改文件时自动打开并定位到改动位置
   anim: {
     mode: "auto",             // auto | manual   (AI-auto is planned)
     pack: "dissolve",

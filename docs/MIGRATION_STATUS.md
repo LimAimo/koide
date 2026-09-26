@@ -37,11 +37,11 @@
 - [x] Terminal / Process / Ports（Windows PTY；Android interactive PTY 仍是单独硬缺口）；
 - [x] fs.export；
 - [x] 外部磁盘 watcher（LocalFS）；
-- [~] Android SAF 原地 WorkspaceBackend：源码实现完成，等待当前提交 Android CI / 真实设备 smoke；
+- [~] Android SAF 原地 WorkspaceBackend：源码实现完成且当前 Alpha7 Android/Windows/Rust CI 已通过；仍等待真实设备 smoke；
 - [ ] Android interactive PTY；
 - [ ] Rust Remote Runtime / pairing（可选，不得成为本地模式依赖）；
 - [~] secrets 平台安全加固：Unix / Android 0600 已有，Windows credential store 属可选加强；
-- [x] Native-only 行为测试与 Web/UI 回归已有通过基线；本次 SAF 变更需 CI 重新验证 Rust/Android。
+- [x] Native-only Rust、Windows x64、Android ARM64 与 Web/UI 回归已有通过基线；最新 UX/CM6 变更继续由 Alpha7 CI 门禁验证。
 
 ### Python 删除硬门禁
 
@@ -64,7 +64,7 @@
 - GitHub Actions 已可从源码构建 ARM64 Tauri APK；
 - APK 会在 Release 前执行 `apksigner verify`；
 - alpha.6 Build #33 已成功；
-- 当前最终产品缺口不是“能否生成 APK”；SAF 源码已接线但需要当前提交重新编译与实机验证，Android interactive Terminal / Remote Runtime / Provider 最终 parity 仍未完成。
+- 当前最终产品缺口不是“能否生成 APK”；SAF 源码已接线并通过当前提交系的 Android 编译；仍需实机验证，Android interactive Terminal / Remote Runtime / Provider 最终 parity 仍未完成。
 
 ### Windows
 - GitHub Actions 已可构建 Windows x64 portable EXE 与 NSIS installer；

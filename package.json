@@ -10,7 +10,7 @@
     "pnpm": ">=9"
   },
   "scripts": {
-    "start": "python3 bridge/main.py --open",
+    "start": "pnpm build:cm6 && python3 bridge/main.py --open",
     "build": "pnpm -r --if-present run build",
     "build:cm6": "pnpm --filter @diffusion/editor-cm6 run build",
     "watch:cm6": "pnpm --filter @diffusion/editor-cm6 run watch",

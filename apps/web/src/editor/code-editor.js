@@ -81,6 +81,12 @@ export class CodeEditor {
   getScroll() { return { top: this.el.scrollTop, left: this.el.scrollLeft }; }
   setScroll(s) { this.el.scrollTop = s.top; this.el.scrollLeft = s.left; }
   focus() { this.input.focus(); }
+  revealOffset(offset) {
+    const line = this.text.slice(0, Math.max(0, Math.min(this.text.length, offset))).split("\n").length - 1;
+    const cs = getComputedStyle(this.el);
+    const lh = parseFloat(cs.getPropertyValue("--editor-lh")) || parseFloat(cs.lineHeight) || 23;
+    this.el.scrollTop = Math.max(0, line * lh - this.el.clientHeight * 0.35);
+  }
 
   _renderLines(text) {
     const next = text.split("\n");
@@ -214,7 +220,7 @@ export class CodeEditor {
    * Replace the document with `after`. When `animate` is true and the change is worth animating, the old code
    * flows into the new code. The real text is already final underneath; the overlay is purely visual.
    */
-  async applyExternal(after, { animate = false } = {}) {
+  async applyExternal(after, { animate = false, reveal = false } = {}) {
     const before = this.text;
     if (before === after) return { plan: null };
     this.cancelAnimation();
@@ -226,6 +232,11 @@ export class CodeEditor {
     this.input.value = after;
     this._renderLines(after);
     try { this.input.setSelectionRange(Math.min(keepSel[0], after.length), Math.min(keepSel[1], after.length)); } catch { /* not focused */ }
+    if (reveal) {
+      let from = 0;
+      while (from < before.length && from < after.length && before[from] === after[from]) from++;
+      this.revealOffset(from);
+    }
 
     if (!plan || !plan.changed) return { plan };
     if (reducedMotion(s)) { this._crossfade(120); return { plan }; }

@@ -54,12 +54,13 @@
 #app.mode-port .files { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(84vw, 320px); transform: translateX(-102%); transition: transform .3s var(--ease-decel); box-shadow: var(--shadow); padding-top: env(safe-area-inset-top); }
 #app.mode-port .resizer { display: none; }
 #app.mode-port .ai {
-  position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; height: var(--sheet-h, 30dvh); border-radius: var(--r-xl) var(--r-xl) 0 0;
-  box-shadow: 0 -4px 24px oklch(0 0 0 / .35); transition: height .34s var(--ease-decel), border-radius .3s; will-change: height;
+  position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; height: var(--sheet-h, 50dvh); border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: 0 -4px 24px oklch(0 0 0 / .35); transition: height .34s var(--ease-decel), border-radius .3s, padding-top .2s; will-change: height;
 }
 #app.mode-port .ai.dragging { transition: none; }
-#app.mode-port .ai.full { border-radius: 0; }
-#app.mode-port { --ce-bottom: calc(var(--sheet-h, 30dvh) + 60px); }
+/* 全屏时背景仍延伸到屏幕最顶端，但交互内容从状态栏安全区下方开始。 */
+#app.mode-port .ai.full { border-radius: 0; padding-top: env(safe-area-inset-top); }
+#app.mode-port { --ce-bottom: calc(var(--sheet-h, 50dvh) + 60px); }
 
 /* mode switches animate the grid instead of re-building the page */
 #app .work { transition: grid-template-columns .3s var(--ease-decel); }

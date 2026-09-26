@@ -192,23 +192,58 @@ runtime.on("profiles.changed", (d) => state.set({ profiles: d.profiles }));
 runtime.on("workspace.recent_changed", (d) => state.set((s) => ({ hello: s.hello ? { ...s.hello, recent: d.recent || [] } : s.hello })));
 runtime.on("permissions.changed", (d) => state.set((s) => ({ permissions: { ...s.permissions, ...d } })));
 
-runtime.on("fs.changed", (c) => {
-  events.emit("tree:refresh", c);
+function seedAgentFollowTab(c) {
+  if (tabOf(c.path)) { state.set({ active: c.path }); return tabOf(c.path); }
+  const before = typeof c.before_text === "string" ? c.before_text : "";
+  const tab = {
+    path: c.path, text: before, savedText: before, revision: c.before_rev || "absent",
+    binary: false, dirty: false, preview: false, pinned: false, conflict: false,
+  };
+  state.set((s) => ({ tabs: [...s.tabs.filter((t) => !(t.preview && !t.dirty)), tab], active: c.path }));
+  return tabOf(c.path);
+}
+
+async function followAgentChangeFromDisk(c) {
+  if (!settingsStore.get().followAgentEdits || c.actor !== "agent" || c.kind === "delete") return;
+  try {
+    const disk = await runtime.files.read({ path: c.path });
+    if (disk.binary) return;
+    const synthetic = { ...c, after_text: disk.content || "", after_rev: disk.revision };
+    applyFsChanged(synthetic);
+  } catch { /* folders and files removed again before the read are intentionally ignored */ }
+}
+
+function applyFsChanged(c) {
+  const settings = settingsStore.get();
+  const follow = c.actor === "agent" && !!settings.followAgentEdits && c.kind !== "delete";
+  if (follow && typeof c.after_text === "string") seedAgentFollowTab(c);
+
   const t = tabOf(c.path);
-  if (c.kind === "rename" && c.old_path && tabOf(c.old_path)) {
-    state.set((s) => ({ tabs: s.tabs.map((x) => (x.path === c.old_path ? { ...x, path: c.path } : x)), active: s.active === c.old_path ? c.path : s.active }));
-    return;
-  }
   if (!t) return;
   if (c.kind === "delete") { if (!t.dirty) closeTab(c.path); else patchTab(c.path, { conflict: true }); return; }
   if (c.after_text == null) { refreshTabFromDisk(c.path).catch(() => {}); return; }
   if (c.after_text === t.savedText && c.after_rev === t.revision) return;   // our own save echoing back
   if (c.actor === "user" && c.after_rev === t.revision) return;
   if (t.dirty && t.text !== c.after_text) { patchTab(c.path, { conflict: true }); return; }   // never clobber unsaved typing
-  const s = settingsStore.get();
-  const animate = (c.actor === "agent" && s.anim.playFor.ai) || (c.actor === "system" && s.anim.playFor.undo);
+  const animate = (c.actor === "agent" && settings.anim.playFor.ai) || (c.actor === "system" && settings.anim.playFor.undo);
   patchTab(c.path, { text: c.after_text, savedText: c.after_text, revision: c.after_rev, dirty: false, conflict: false });
-  events.emit("editor:external", { path: c.path, before: c.before_text, after: c.after_text, actor: c.actor, animate });
+  events.emit("editor:external", { path: c.path, before: c.before_text, after: c.after_text, actor: c.actor, animate, reveal: follow });
+}
+
+runtime.on("fs.changed", (c) => {
+  events.emit("tree:refresh", c);
+  if (c.actor === "agent" && c.kind !== "delete") {
+    events.emit("tree:reveal", { path: c.path, scroll: !!settingsStore.get().followAgentEdits });
+  }
+  if (c.kind === "rename" && c.old_path && tabOf(c.old_path)) {
+    state.set((s) => ({ tabs: s.tabs.map((x) => (x.path === c.old_path ? { ...x, path: c.path } : x)), active: s.active === c.old_path ? c.path : s.active }));
+  }
+  if (c.actor === "agent" && c.kind !== "delete" && c.after_text == null && settingsStore.get().followAgentEdits) {
+    // 复制/重命名等事件可能只带路径；跟随模式下先读回真实内容，避免先刷新一次又重复播放动画。
+    followAgentChangeFromDisk(c);
+    return;
+  }
+  applyFsChanged(c);
 });
 
 runtime.on("fs.external", async (d) => {
@@ -227,7 +262,7 @@ runtime.on("fs.external", async (d) => {
 
 // ---- agent -------------------------------------------------------------------------------------------------
 const callPaths = new Map();
-const WRITERS = new Set(["fs_patch", "fs_write", "fs_delete", "fs_rename"]);
+const WRITERS = new Set(["fs_patch", "fs_write", "fs_create", "fs_delete", "fs_rename", "fs_copy"]);
 
 runtime.on("agent.started", (d) => setAgent({ running: true, taskId: d.task_id, state: "thinking", detail: "" }));
 runtime.on("agent.status", (d) => setAgent({ state: d.state, detail: d.detail || "", running: !["idle", "stopped", "error"].includes(d.state), taskId: d.task_id }));

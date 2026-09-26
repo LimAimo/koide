@@ -109,6 +109,10 @@ class CM6Editor {
   getScroll() { return { top: this.view.scrollDOM.scrollTop, left: this.view.scrollDOM.scrollLeft }; }
   setScroll(s) { this.view.scrollDOM.scrollTop = s.top; this.view.scrollDOM.scrollLeft = s.left; }
   focus() { this.view.focus(); }
+  revealOffset(offset) {
+    const pos = Math.max(0, Math.min(this.view.state.doc.length, offset));
+    this.view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+  }
 
   insertText(text) { if (!this.readOnly) this.view.dispatch(this.view.state.replaceSelection(text), { scrollIntoView: true, userEvent: "input" }); }
   indent(dir) { (dir > 0 ? indentMore : indentLess)(this.view); }
@@ -153,7 +157,7 @@ class CM6Editor {
     this.view.dom.classList.remove("dfx-playing-cm");
   }
 
-  async applyExternal(after, { animate = false } = {}) {
+  async applyExternal(after, { animate = false, reveal = false } = {}) {
     const before = this.getValue();
     if (before === after) return { plan: null };
     this.cancelAnimation();
@@ -166,6 +170,11 @@ class CM6Editor {
       selection: { anchor: Math.min(sel.anchor, after.length), head: Math.min(sel.head, after.length) },
       annotations: External.of(true), userEvent: "input.diffusion",
     });
+    if (reveal) {
+      let from = 0;
+      while (from < before.length && from < after.length && before[from] === after[from]) from++;
+      this.revealOffset(from);
+    }
     if (!plan || !plan.changed) return { plan };
     if (this.o.isReducedMotion && this.o.isReducedMotion()) return { plan };
     if (plan.granularity === "simplified") { this.view.contentDOM.animate && this.view.contentDOM.animate([{ opacity: 0.25 }, { opacity: 1 }], { duration: 320 }); return { plan }; }

@@ -6,7 +6,6 @@ import { openReplay } from "./timeline.js";
 import { runtime, state, connectManual, openWorkspace } from "../services/app.js";
 import { settingsStore, saveSettings, exportSettings, importSettings, resetSettings, applyTheme } from "../services/store.js";
 import { listPacks, installPack, KINDS } from "../animations/diffusion/packs.js";
-import { loadCM6 } from "../services/editor-factory.js";
 import { qrSvg } from "../services/qr.js";
 
 // ---- control builders ------------------------------------------------------------------------------------
@@ -67,7 +66,6 @@ function appearance(rerender) {
         slider({ min: 0, max: 360, step: 1, value: s.hue, label: "主题色色相", onInput: (v) => { saveSettings({ hue: v }); applyTheme(); }, fmt: (v) => `${v}°` })) }));
   }
   rows.push(row({ label: "密度", ctl: segmented([["compact", "紧凑"], ["comfortable", "舒适"]], s.density, (v) => { saveSettings({ density: v }); applyTheme(); }) }));
-  rows.push(btnRow("切换全屏", "fullscreen", () => { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.().catch(() => toast("当前环境不支持全屏")); }, "沉浸 全屏 immersive"));
   return section("appearance", "外观", rows);
 }
 
@@ -75,9 +73,8 @@ function editorSection() {
   const s = settingsStore.get();
   return section("editor", "编辑器", [
     row({ label: "字号", stack: true, ctl: slider({ min: 10, max: 22, step: 1, value: s.fontSize, label: "字号", onInput: (v) => { saveSettings({ fontSize: v }); applyTheme(); }, fmt: (v) => `${v}px` }) }),
-    row({ label: "编辑器内核", desc: "自动：检测到 CodeMirror 6 就使用它，否则用内置轻量编辑器。CodeMirror 需要在电脑上执行 pnpm install && pnpm build:cm6 生成。", keywords: "codemirror cm6 内核 折叠 补全",
-      ctl: segmented([["auto", "自动"], ["builtin", "内置"], ["cm6", "CodeMirror 6"]], s.editorKind, (v) => { saveSettings({ editorKind: v }); loadCM6().then((f) => { if (v === "cm6" && !f) toast("还没有检测到 CodeMirror 6：请先运行 pnpm build:cm6"); }); }) }),
-    row({ label: "缩略图", desc: "在内置编辑器右侧显示整个文件的缩略图，点击或拖动可以快速跳转。手机上默认关闭。", ctl: switchCtl(s.showMinimap, (v) => saveSettings({ showMinimap: v }), "缩略图"), keywords: "minimap 缩略 导航" }),
+    row({ label: "CodeMirror 6", desc: "Diffusion 的正式编辑器。桌面与 Android 原生构建会自动打包，加载失败时会直接显示错误而不是静默降级。", keywords: "codemirror cm6 内核 折叠 补全" }),
+    row({ label: "跟随 AI 编辑", desc: "AI 创建或修改文件时，自动打开对应文件并定位到修改位置。", ctl: switchCtl(s.followAgentEdits !== false, (v) => saveSettings({ followAgentEdits: v }), "跟随 AI 编辑"), keywords: "AI 智能体 自动打开 定位 动画 follow agent edit" }),
     row({ label: "显示隐藏文件", desc: "在文件树里显示 .git、.DS_Store 等默认隐藏项；不会改变搜索范围。", ctl: switchCtl(s.showHiddenFiles, (v) => saveSettings({ showHiddenFiles: v }), "显示隐藏文件"), keywords: "隐藏文件 .git hidden files" }),
     row({ label: "缩进宽度", ctl: selectCtl([["2", "2 个空格"], ["4", "4 个空格"], ["8", "8 个空格"]], String(s.tabWidth), (v) => { saveSettings({ tabWidth: Number(v) }); applyTheme(); }, "缩进宽度") }),
     row({ label: "代码符号栏按键", desc: "用英文逗号分隔，显示在手机键盘上方", stack: true, keywords: "键盘 符号 keyboard symbols",
@@ -88,7 +85,7 @@ function editorSection() {
 function providers(rerender) {
   const st = state.get();
   const rows = st.profiles.map((p) => h("button", { class: "row-btn", type: "button", dataset: { search: search(p.name, p.model, p.kind) }, onclick: () => editProfile(p, rerender) },
-    icon("spark", 20), h("span", { style: { flex: 1, minWidth: 0 } }, p.name, h("small", { class: "muted", style: { display: "block" } }, `${p.kind} · ${p.model}`)),
+    icon("spark", 20), h("span", { style: { flex: 1, minWidth: 0 } }, p.name, h("small", { class: "muted", style: { display: "block" } }, `${p.kind || "provider"} · ${String(p.model ?? p.id ?? "未命名模型")}`)),
     h("span", { class: "pill " + (p.has_key ? "" : "warn") }, p.has_key ? "已保存密钥" : "没有密钥")));
   rows.push(btnRow("添加服务商配置", "add", () => editProfile(null, rerender), "服务商 密钥 接口 模型 openai deepseek kimi ollama openrouter gemini minimax endpoint model api key"));
   return section("providers", "AI 模型服务商", rows);

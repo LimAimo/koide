@@ -69,14 +69,17 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
     });
     const prof = st.profiles.find((p) => p.id === s.agent.profile) || st.profiles[0];
     clear(profileChip);
-    profileChip.append(icon("spark", 15), h("span", null, prof ? prof.name : "添加服务商"));
+    profileChip.append(icon("spark", 15), h("span", null, prof ? providerName(prof) : "添加服务商"));
     renderModelPopover();
   }
 
   // ---- model + thinking popover (a dropup anchored on the composer, not a modal) --------------------------------
   let popoverEl = null;
-  const closePopover = () => { if (popoverEl) { popoverEl.remove(); popoverEl = null; document.removeEventListener("pointerdown", onOutsidePopover, true); } };
+  const closePopover = () => { if (popoverEl) { popoverEl.remove(); popoverEl = null; document.removeEventListener?.("pointerdown", onOutsidePopover, true); } };
   function onOutsidePopover(e) { if (popoverEl && !popoverEl.contains(e.target) && !profileChip.contains(e.target)) closePopover(); }
+  const cleanLabel = (value) => { const text = String(value ?? "").trim(); return /^(?:null|undefined)$/i.test(text) ? "" : text; };
+  const providerName = (p) => cleanLabel(p?.name) || cleanLabel(p?.id) || "未命名服务商";
+  const modelName = (p) => cleanLabel(p?.model) || cleanLabel(p?.model_id) || cleanLabel(p?.id) || "未命名模型";
   function switchCtl(on, onToggle) {
     return h("button", { class: "switch" + (on ? " on" : ""), type: "button", role: "switch", "aria-checked": String(on),
       onclick: (e) => { e.stopPropagation(); onToggle(); } }, h("span", { class: "switch-knob" }));
@@ -87,16 +90,19 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
     const prof = st.profiles.find((p) => p.id === s.agent.profile) || st.profiles[0];
     const thinking = s.agent.reasoning || "auto";
     clear(popoverEl);
+    const providerList = h("div", { class: "popover-list" }, ...st.profiles.map((p) => h("button", {
+      class: "popover-item" + (prof && p.id === prof.id ? " active" : ""), type: "button",
+      onclick: () => {
+        saveSettings({ agent: { profile: p.id, ...(p.kind === "deepseek" ? {} : { webSearch: false }) } });
+        closePopover();
+      },
+    }, icon("spark", 16), h("span", null, `${providerName(p)} · ${modelName(p)}`), p.has_key ? null : h("span", { class: "pill warn" }, "无密钥"))));
+    const thinkingRow = h("div", { class: "popover-row" }, h("span", null, "思考"),
+      switchCtl(thinking !== "off", () => { saveSettings({ agent: { reasoning: thinking === "off" ? "auto" : "off" } }); renderModelPopover(); }));
+    popoverEl.append(providerList, h("div", { class: "popover-divider" }), thinkingRow);
+    if (prof?.kind === "deepseek") popoverEl.append(h("div", { class: "popover-row" }, h("span", null, "联网搜索（DeepSeek）"),
+      switchCtl(!!s.agent.webSearch, () => { saveSettings({ agent: { webSearch: !s.agent.webSearch } }); renderModelPopover(); })));
     popoverEl.append(
-      h("div", { class: "popover-list" }, ...st.profiles.map((p) => h("button", {
-        class: "popover-item" + (prof && p.id === prof.id ? " active" : ""), type: "button",
-        onclick: () => { saveSettings({ agent: { profile: p.id } }); closePopover(); },
-      }, icon("spark", 16), h("span", null, `${p.name} · ${p.model}`), p.has_key ? null : h("span", { class: "pill warn" }, "无密钥")))),
-      h("div", { class: "popover-divider" }),
-      h("div", { class: "popover-row" }, h("span", null, "思考"),
-        switchCtl(thinking !== "off", () => { saveSettings({ agent: { reasoning: thinking === "off" ? "auto" : "off" } }); renderModelPopover(); })),
-      prof && prof.kind === "deepseek" ? h("div", { class: "popover-row" }, h("span", null, "联网搜索（DeepSeek）"),
-        switchCtl(!!s.agent.webSearch, () => { saveSettings({ agent: { webSearch: !s.agent.webSearch } }); renderModelPopover(); })) : null,
       h("button", { class: "popover-item", type: "button",
         disabled: runtime.kind === "native" && !(st.hello?.native_migration?.implemented || []).includes("conversation.compact"),
         title: runtime.kind === "native" && !(st.hello?.native_migration?.implemented || []).includes("conversation.compact") ? "Native Core 仍在迁移上下文压缩" : "",

@@ -1,7 +1,7 @@
 # Diffusion IDE
 
 > **0.8.0-alpha.7 · Native 功能等价收口（开发中）**  
-> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。当前 Runtime API 72 个业务方法已经做到 **72 / 72 Native dispatch 覆盖**；这不代表 Python 删除线已经通过——`devices.pair_code` 仍明确返回 `LAN_OFF`，Remote Runtime 等语义门禁仍未完成。Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit/agent 四种模式、PermissionEngine、Instructions、Git、Terminal/Process/Ports、Export 与 External Watcher 已进入本地 Native 主链。Android SAF 原地 WorkspaceBackend 也已进入源码：系统目录选择器、持久 URI 授权、DocumentsContract I/O、revision/conflict、search/glob、Checkpoint/Trash、recent 和 Git/Terminal capability 降级均已接线；当前还需要 Android CI 与真实设备 smoke 才能把 SAF 最终门禁标为通过。完整门禁见 `docs/NATIVE_PARITY_AUDIT.md`。
+> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。当前 Runtime API 72 个业务方法已经做到 **72 / 72 Native dispatch 覆盖**；这不代表 Python 删除线已经通过——`devices.pair_code` 仍明确返回 `LAN_OFF`，Remote Runtime 等语义门禁仍未完成。Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit/agent 四种模式、PermissionEngine、Instructions、Git、Terminal/Process/Ports、Export 与 External Watcher 已进入本地 Native 主链。Android SAF 原地 WorkspaceBackend 也已进入源码并通过当前 Alpha7 的 Rust / Windows / Android CI：系统目录选择器、持久 URI 授权、DocumentsContract I/O、revision/conflict、search/glob、Checkpoint/Trash、recent 和 Git/Terminal capability 降级均已接线；真实 Android 设备 smoke 仍是最终门禁之一。完整门禁见 `docs/NATIVE_PARITY_AUDIT.md`。
 >
 > **这个 alpha 仍然没有完成 Python 删除线。** 旧 Bridge 继续作为迁移期兼容实现和行为基准；在 `docs/NATIVE_PARITY_AUDIT.md` 的硬门禁全部通过前不会删除。原生构建说明见 `docs/NATIVE_BUILD.md`。
 
@@ -14,14 +14,16 @@
 
 ## 迁移期快速开始（旧 Bridge 兼容模式）
 
-在 Native Core 全部替代 Python 之前，旧功能回归仍可用 **Python 3.10 或更高版本**启动。不需要 Node，不需要 pip 安装，也不需要构建。（想用更强的 CodeMirror 6 编辑器，见下面的 pnpm 章节，那一步是可选的。）
+在 Native Core 全部替代 Python 之前，旧功能回归仍可继续使用 Python Bridge。**CodeMirror 6 现在是唯一正式编辑器**，因此首次运行需要 Node 20+、pnpm 9+ 与 `pnpm install`；`start.sh`、`start.bat`、`pnpm start` 和 Tauri 原生构建都会先生成 CM6 产物。Python 运行时本身仍只要求 Python 3.10+，且不需要 pip 安装第三方包。
 
 **安卓（Termux）**
 ```bash
-pkg install python
+pkg install python nodejs-lts
+corepack enable
+pnpm install
 bash start.sh
 ```
-**Linux / macOS：** `bash start.sh`　**Windows：** 双击 `start.bat`　**任意系统：** `python bridge/main.py`
+**Linux / macOS：** 首次执行 `pnpm install`，之后 `bash start.sh`。**Windows：** 首次执行 `pnpm install`，之后双击 `start.bat`。如果直接执行 `python bridge/main.py`，请先确保已经运行过 `pnpm build:cm6`。
 
 浏览器会自动打开 `http://127.0.0.1:8765`。（请不要直接双击 `index.html`，它必须由桥接服务提供。）
 
@@ -46,7 +48,7 @@ bash start.sh
   所以 AI 永远不会悄悄覆盖你刚刚输入的内容。
 - shell 可以运行任何你批准的命令。使用「自主」模式时，请像对待任何脚本运行器一样谨慎。
 
-## 开发者：pnpm 工作区与 CodeMirror 6（可选）
+## 开发者：pnpm 工作区与 CodeMirror 6
 
 项目用 **pnpm 工作区**组织（`pnpm-workspace.yaml`），需要 Node 20+ 和 pnpm 9+。
 
@@ -54,17 +56,15 @@ bash start.sh
 corepack enable          # 推荐：Node 自带的 corepack 会按 package.json 里的版本准备好 pnpm
 # 或者手动安装 pnpm：https://pnpm.io/installation
 pnpm install             # 首次运行会生成 pnpm-lock.yaml，请把它一起提交到 Git
-pnpm build:cm6           # 下载并打包 CodeMirror 6，生成 apps/web/vendor/cm6.js
-pnpm start               # 启动桥接服务并打开浏览器
+pnpm build:cm6           # 打包 CodeMirror 6，生成 apps/web/vendor/cm6.js
+pnpm start               # 先构建 CodeMirror 6，再启动桥接服务并打开浏览器
 pnpm test                # 运行全部测试
 ```
 
 `pnpm build:cm6` 会自动从 npm 下载 CodeMirror 6，你不需要手动下载任何东西。参考地址：
 CodeMirror 官网 https://codemirror.net/ 　npm 主页 https://www.npmjs.com/package/codemirror 　源码 https://github.com/codemirror/dev
 
-构建完成后，重新加载页面即可：设置 › 编辑器 › 「编辑器内核」默认为「自动」，检测到 `vendor/cm6.js` 就会切换到 CodeMirror 6
-（带来代码折叠、按语言补全、多行注释和字符串的语法高亮、更好的输入法与触屏支持、上百种语言）。没有构建时会继续使用内置的轻量编辑器。
-安卓 Termux 里也可以装 pnpm，但只构建一次就够了：可以在电脑上构建好，把 `apps/web/vendor/` 整个文件夹拷到手机上。
+CodeMirror 6 不再是可选内核：产品界面固定使用它（代码折叠、按语言补全、多行注释和字符串的语法高亮、更好的输入法与触屏支持、上百种语言）。如果 `vendor/cm6.js` 缺失或加载失败，编辑器会明确显示错误，而不会偷偷退回 textarea。Tauri 的 `beforeBuildCommand` / `beforeDevCommand` 会自动执行 CM6 构建；Bridge 启动脚本也会先构建。`apps/web/vendor/` 仍是生成目录，不提交到 Git。
 
 | 命令 | 作用 |
 |---|---|
@@ -80,8 +80,8 @@ apps/web/src/services/runtime/  UI 唯一运行时边界；Native / Bridge 适�
 bridge/               Python 服务（只用标准库）：文件系统、安全规则、模型接口、智能体、检查点、Git、终端
 apps/web/             网页界面，纯 ES 模块（无需构建，由桥接服务直接提供）
   src/animations/diffusion/   引擎（纯逻辑）、渲染器、动画包
-  src/editor/                 内置编辑器与语法高亮   src/components/  界面组件   src/services/  状态与桥接客户端
-packages/editor-cm6/  可选的 CodeMirror 6 适配器（pnpm 构建，输出到 apps/web/vendor/）
+  src/editor/                 编辑器适配器测试/动画辅助   src/components/  界面组件   src/services/  状态与运行时
+packages/editor-cm6/  正式 CodeMirror 6 编辑器适配器（pnpm 构建，输出到 apps/web/vendor/）
 animation-packs/      由桥接服务提供的额外 JSON 动画包
 docs/                 协议、编辑器适配、进度状态       tests/   Python 与 Node 测试
 pnpm-workspace.yaml   pnpm 工作区定义（apps/*、packages/*）
@@ -91,14 +91,13 @@ pnpm-workspace.yaml   pnpm 工作区定义（apps/*、packages/*）
 智能体（读 / 搜 / 改 / 运行命令，多步循环，限制与停止）· 三种模型接口（OpenAI 兼容、Anthropic 原生、Gemini 原生）·
 四种权限模式 + 硬性安全规则 + 路径与命令规则 + 审批模型 · 时光机（重播 / 撤销单步 / 单文件 / 整个任务）· 会话历史与全局指令 ·
 Git 面板（改动、差异、暂存、提交、分支、拉取推送、追溯）· 真正的 PTY 终端（多标签、颜色、快捷键行）·
-导入导出 · 查找替换、括号自动补全、词语补全、分屏、缩略图 · 扫码配对 · 可关闭的 AI 面板与「返回首页」 · 手机与电脑自适应布局 · PWA。
+导入导出 · CodeMirror 6、查找替换、分屏 · AI 创建/修改文件时可自动打开并定位到改动 · 扫码配对 · 可自由拖动高度的移动端 AI 抽屉与「返回首页」 · 手机与电脑自适应布局 · PWA。
 
 ## 测试
 `bash tests/run-all.sh` 或 `pnpm test`（只有测试需要 Node 20+）。
 
 ## 已知限制
-- Android / Windows 原生安装包已有成功 CI 基线；本次新增的 SAF 原地 WorkspaceBackend 仍需当前提交的 Android CI 和真实设备 smoke 验证，不能仅凭源码存在宣称实机完成。
-- CodeMirror 6 适配器需要联网构建，编写时没有条件在真实浏览器里运行，属于「未经验证」。
-- 内置编辑器没有代码折叠（CodeMirror 版有，但未经验证）；「块」识别是按缩进和括号推断的，不是真正的语法树。
+- Android / Windows 原生安装包与 SAF WorkspaceBackend 已通过当前 Alpha7 CI；真实 Android 设备上的 SAF 打开 → 编辑 → Agent → Checkpoint 仍需最终 smoke。
+- CodeMirror 6 的真实依赖构建已加入 Alpha7 CI 门禁；离线源码环境如果尚未生成 `apps/web/vendor/cm6.js`，必须先安装依赖并执行 `pnpm build:cm6`。
 - Windows Native PTY 已接通；Android interactive PTY 仍在迁移，SAF 工作区也会明确禁用依赖普通 cwd 的 Terminal/Git 能力，不伪装支持。
 - 字体使用系统字体，不会下载任何东西。

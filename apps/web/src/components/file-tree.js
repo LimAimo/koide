@@ -2,7 +2,7 @@
 // expand smoothly. Long-press opens a touch-friendly action sheet.
 
 import { h, icon, toast, debounce } from "./dom.js";
-import { openMenu, confirmDialog, promptDialog } from "./overlays.js";
+import { openMenu, openDialog, confirmDialog, promptDialog } from "./overlays.js";
 import { runtime, events, state } from "../services/app.js";
 import { settingsStore } from "../services/store.js";
 import { importFiles, exportPath } from "./transfer.js";
@@ -20,6 +20,8 @@ export function createFileTree({ onOpen, onNavigate }) {
   const el = h("div", { class: "tree", role: "tree", "aria-label": "项目文件" });
   const expanded = new Set();
   const cache = new Map();           // dir path -> nodes
+  let selectedPath = null;           // 创建目标跟随最近点选的文件/文件夹
+  let lastActive = null;
   const inner = h("div");
   el.appendChild(inner);
 
@@ -68,7 +70,13 @@ export function createFileTree({ onOpen, onNavigate }) {
     row.addEventListener("pointerup", cancel);
     row.addEventListener("pointercancel", cancel);
     row.addEventListener("contextmenu", (e) => { e.preventDefault(); cancel(); menuFor(n); });
-    row.addEventListener("click", () => { if (long) { long = false; return; } n.type === "dir" ? toggle(n.path) : onOpen(n.path, { preview: true }); if (n.type !== "dir") onNavigate && onNavigate(); });
+    row.addEventListener("click", () => {
+      if (long) { long = false; return; }
+      selectedPath = n.path;
+      paint();
+      n.type === "dir" ? toggle(n.path) : onOpen(n.path, { preview: true });
+      if (n.type !== "dir") onNavigate && onNavigate();
+    });
     row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); } });
   }
 
@@ -137,16 +145,31 @@ export function createFileTree({ onOpen, onNavigate }) {
     await refresh(".");
   }
 
-  const refreshSoon = debounce((dir) => refresh(dir), 220);
+  const refreshSoon = debounce((dir) => refresh(dir), 90);
   events.on("tree:refresh", (c) => refreshSoon(c ? parentOf(c.path) : null));
+
+  async function revealPath({ path, scroll = false } = {}) {
+    if (!path || !state.get().workspace) return;
+    const parts = path.split("/").filter(Boolean);
+    const dirs = [];
+    for (let i = 1; i < parts.length; i++) dirs.push(parts.slice(0, i).join("/"));
+    try {
+      await load(".");
+      for (const dir of dirs) { expanded.add(dir); await load(dir); }
+      reconcile(inner, cache.get(".") || [], 0);
+      if (scroll) requestAnimationFrame(() => nodeFor(path)?.scrollIntoView?.({ block: "nearest" }));
+    } catch { /* workspace may have changed while the agent was working */ }
+  }
+  events.on("tree:reveal", (d) => revealPath(d));
 
   // selection + agent-activity indicators follow global state
   function paint() {
     const s = state.get();
+    if (s.active !== lastActive) { lastActive = s.active; if (s.active) selectedPath = s.active; }
     const gf = s.git ? s.git.files : {}, gkeys = Object.keys(gf);
     for (const node of el.querySelectorAll(".node")) {
       const p = node.dataset.path, row = node.querySelector(".row");
-      node.classList.toggle("selected", p === s.active);
+      node.classList.toggle("selected", p === selectedPath);
       let letter = gf[p];
       if (!letter && node.dataset.type === "dir" && gkeys.some((k) => k.startsWith(p + "/"))) letter = "•";
       let badge = row.querySelector(".git-badge");
@@ -167,15 +190,58 @@ export function createFileTree({ onOpen, onNavigate }) {
   });
 
   // ---- actions -------------------------------------------------------------------------------------------------
+  const selectedNode = () => selectedPath ? nodeFor(selectedPath) : null;
+  const createDir = () => {
+    const node = selectedNode();
+    if (!node) return ".";
+    return node.dataset.type === "dir" ? node.dataset.path : parentOf(node.dataset.path);
+  };
+
+  async function createNamed(dir, name, kind) {
+    name = String(name || "").trim();
+    if (!name) return false;
+    if (name.includes("/") || name.includes("\\")) { toast("名称不能包含 / 或 \\"); return false; }
+    const path = join(dir, name);
+    try {
+      await runtime.files.create({ path, kind });
+      if (dir !== "." && !expanded.has(dir)) expanded.add(dir);
+      await refresh(dir);
+      if (kind === "file") onOpen(path, { preview: false });
+      selectedPath = path;
+      paint();
+      return true;
+    } catch (e) { toast(e.message); return false; }
+  }
+
+  function openCreateDialog(dir = createDir()) {
+    const input = h("input", { class: "text-field", type: "text", placeholder: "名称", "aria-label": "名称", autocapitalize: "off", spellcheck: "false" });
+    let dialog;
+    const run = async (kind) => { if (await createNamed(dir, input.value, kind)) dialog.close(); };
+    dialog = openDialog({
+      title: "你想要创建...?",
+      body: h("label", { class: "field" }, input),
+      actions: [
+        { label: "取消" },
+        { label: "文件", onClick: () => createNamed(dir, input.value, "file") },
+        { label: "文件夹", primary: true, onClick: () => createNamed(dir, input.value, "dir") },
+      ],
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const name = input.value.trim();
+      // Enter 只在明显像文件名时快捷创建文件；普通名称仍让用户明确点「文件」或「文件夹」。
+      if (!name || name.startsWith(".") || !/\.[^./\\]+$/.test(name)) return;
+      e.preventDefault();
+      run("file");
+    });
+    setTimeout(() => input.focus(), 60);
+    return dialog;
+  }
+
   async function createIn(dir, kind) {
     const name = await promptDialog({ title: kind === "dir" ? "新建文件夹" : "新建文件", label: dir === "." ? "名称" : `位于 ${dir}/`, confirmLabel: "创建" });
     if (!name) return;
-    try {
-      await runtime.files.create({ path: join(dir, name), kind });
-      if (dir !== "." && !expanded.has(dir)) await toggle(dir);
-      await refresh(dir);
-      if (kind === "file") onOpen(join(dir, name), { preview: false });
-    } catch (e) { toast(e.message); }
+    await createNamed(dir, name, kind);
   }
 
   function menuFor(n) {
@@ -203,5 +269,5 @@ export function createFileTree({ onOpen, onNavigate }) {
     ]);
   }
 
-  return { el, refresh, reset, newFile: () => createIn(".", "file"), newFolder: () => createIn(".", "dir") };
+  return { el, refresh, reset, create: () => openCreateDialog(), newFile: () => createIn(".", "file"), newFolder: () => createIn(".", "dir") };
 }

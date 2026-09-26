@@ -5,7 +5,6 @@ import { h, icon, iconButton, toast } from "./dom.js";
 import { openMenu, openSheet } from "./overlays.js";
 import { createCodingToolbar } from "./coding-toolbar.js";
 import { renderMarkdown } from "./markdown.js";
-import { CodeEditor } from "../editor/code-editor.js";
 import { loadCM6 } from "../services/editor-factory.js";
 import { settingsStore, reducedMotion } from "../services/store.js";
 import {
@@ -21,7 +20,7 @@ export function createEditorPane() {
   let toolbar = null;
   let focused = null;              // 最近获得焦点的编辑器：符号栏、查找栏、保存都作用在它上面
   let origin = null;               // 正在把用户输入同步出去的窗格（"main" | "split"），用来同步同一文件的另一个窗格
-  let cm6 = null;                  // 已加载的 CodeMirror 6 工厂（没有构建时为 null）
+  let cm6 = null;                  // CodeMirror 6 工厂；加载失败会显示明确错误，不会回退到 textarea
   let mdPreviewMode = false;
 
   const optsFor = (which) => ({
@@ -32,8 +31,28 @@ export function createEditorPane() {
     onFocus: () => { focused = which === "main" ? editor : splitEditor; if (toolbar) toolbar.show(); },
     onBlur: () => toolbar && setTimeout(() => toolbar.hide(), 120),
   });
-  const makeEditor = (which) => (cm6 ? cm6({ ...optsFor(which), getSettings: () => settingsStore.get(), isReducedMotion: () => reducedMotion() }) : new CodeEditor(optsFor(which)));
-  let editor = new CodeEditor(optsFor("main"));
+  function statusEditor(kind, detail = "") {
+    let value = "";
+    const title = kind === "error" ? "CodeMirror 6 加载失败" : "正在加载 CodeMirror 6…";
+    const message = kind === "error"
+      ? (detail || "编辑器构建产物不可用。请重新安装依赖并执行 pnpm build:cm6，然后重新打开 Diffusion。")
+      : "编辑器正在初始化。";
+    const el = h("div", { class: `editor-empty cm6-status ${kind}`, role: kind === "error" ? "alert" : "status" },
+      h("div", null, h("h2", null, title), h("p", null, message)));
+    return {
+      el, isCM6: false, isPlaceholder: true,
+      setDocument: ({ text = "" } = {}) => { value = text; }, getValue: () => value, getSelectionText: () => "",
+      getScroll: () => ({ top: 0, left: 0 }), setScroll: () => {}, focus: () => {}, revealOffset: () => {},
+      insertText: () => {}, indent: () => {}, moveCaret: () => {}, applySettings: () => {}, cancelAnimation: () => {},
+      applyExternal: async (after) => { value = String(after ?? ""); }, countMatches: () => 0,
+      find: () => null, replaceCurrent: () => null, replaceAll: () => 0, clearFind: () => {},
+      destroy: () => el.remove(),
+    };
+  }
+  const makeEditor = (which) => cm6
+    ? cm6({ ...optsFor(which), getSettings: () => settingsStore.get(), isReducedMotion: () => reducedMotion() })
+    : statusEditor("loading");
+  let editor = makeEditor("main");
   let splitEditor = null;
   const fe = () => focused || editor;
   toolbar = createCodingToolbar(() => fe());
@@ -256,16 +275,16 @@ export function createEditorPane() {
   });
 
   // AI 或撤销引起的修改：两个窗格里显示这个文件的，都播放动画
-  events.on("editor:external", ({ path, after, animate }) => {
-    if (path === shownPath) { editor.applyExternal(after, { animate }); if (mdPreviewMode) paintContent(); }
-    if (splitEditor && path === splitPath) splitEditor.applyExternal(after, { animate });
+  events.on("editor:external", ({ path, after, animate, reveal }) => {
+    if (path === shownPath) { editor.applyExternal(after, { animate, reveal }); if (mdPreviewMode) paintContent(); }
+    if (splitEditor && path === splitPath) splitEditor.applyExternal(after, { animate, reveal });
   });
   events.on("editor:replace", ({ path, text }) => {
     if (path === shownPath) { editor.applyExternal(text, { animate: false }); if (mdPreviewMode) paintContent(); }
     if (splitEditor && path === splitPath) splitEditor.applyExternal(text, { animate: false });
   });
 
-  // ---- 编辑器内核：自动（有 CodeMirror 6 就用）/ 内置轻量 / 强制 CodeMirror 6 ----------------------------------------------
+  // ---- 正式编辑器：CodeMirror 6 ----------------------------------------------------------------------------------------
   function swapEditor(which, next) {
     const old = which === "main" ? editor : splitEditor;
     old.el.parentNode.insertBefore(next.el, old.el);
@@ -274,16 +293,21 @@ export function createEditorPane() {
     if (which === "main") { editor = next; shownPath = null; paintContent(); }
     else { splitEditor = next; const t = tabOf(splitPath); if (t) next.setDocument({ path: splitPath, text: t.text }); }
   }
-  async function useEditorKind() {
-    cm6 = settingsStore.get().editorKind === "builtin" ? null : await loadCM6();
-    if (!!cm6 !== !!editor.isCM6) swapEditor("main", makeEditor("main"));
-    if (splitEditor && !!cm6 !== !!splitEditor.isCM6) swapEditor("split", makeEditor("split"));
+  async function loadRequiredEditor() {
+    try {
+      cm6 = await loadCM6();
+      if (!editor.isCM6) swapEditor("main", makeEditor("main"));
+      if (splitEditor && !splitEditor.isCM6) swapEditor("split", makeEditor("split"));
+    } catch (error) {
+      const detail = error?.message ? `加载错误：${error.message}` : "编辑器构建产物不可用。";
+      if (editor.isPlaceholder) swapEditor("main", statusEditor("error", detail));
+      if (splitEditor?.isPlaceholder) swapEditor("split", statusEditor("error", detail));
+      toast("CodeMirror 6 加载失败，请检查编辑器构建产物");
+    }
   }
-  let lastKind = null;
-  settingsStore.subscribe((s) => { if (s.editorKind !== lastKind) { lastKind = s.editorKind; useEditorKind(); } });
 
   paintTabs();
   paintContent();
-  useEditorKind();
+  loadRequiredEditor();
   return { el, get editor() { return editor; }, get splitEditor() { return splitEditor; }, save, openSplit, closeSplit, toggleSplit };
 }

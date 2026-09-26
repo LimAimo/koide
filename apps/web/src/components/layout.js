@@ -1,15 +1,14 @@
 // Layout controller. Three modes, chosen from the viewport (no page rebuild, just a class swap + CSS transitions):
 //   wide  (>=900px)          files | editor | AI       resizable panels
 //   land  (narrow landscape) editor | AI               files in a drawer
-//   port  (portrait phone)   editor + draggable AI bottom sheet (30% / 60% / full), files in a drawer
+//   port  (portrait phone)   editor + freely draggable AI bottom sheet, files in a drawer
 
 import { pushLayer } from "./overlays.js";
 
-const SNAPS = [0.3, 0.6, 1];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const vh = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
 
-export function setupLayout({ app, files, ai, grip, scrim, resizers }) {
+export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }) {
   // ---- mode ------------------------------------------------------------------------------------------------
   let mode = "";
   function updateMode() {
@@ -20,8 +19,9 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers }) {
       app.classList.add("mode-" + next);
       mode = next;
       if (next === "wide") closeDrawer();
-      applySnap(false);
-    } else if (mode === "port") applySnap(false);
+      if (next === "port") clampSheetToViewport(false);
+      else { app.style.removeProperty("--sheet-h"); ai.classList.remove("full"); }
+    } else if (mode === "port") clampSheetToViewport(false);
   }
 
   // ---- drawer ------------------------------------------------------------------------------------------------
@@ -74,28 +74,70 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers }) {
   window.addEventListener("pointercancel", endDrawerDrag);
 
   // ---- AI bottom sheet (portrait) ---------------------------------------------------------------------------------
-  let snap = 0, fullClose = null;
-  const snapPx = (i) => Math.round(vh() * SNAPS[i]);
-  function setH(px) { app.style.setProperty("--sheet-h", `${px}px`); }
-  function applySnap() {
-    if (mode !== "port") { app.style.removeProperty("--sheet-h"); ai.classList.remove("full"); return; }
-    setH(snapPx(snap));
-    ai.classList.toggle("full", snap === SNAPS.length - 1);
+  // Closed is represented by the global aiVisible setting. Once visible, 50% is only the opening height:
+  // dragging upward/downward leaves the sheet exactly where the user releases it, except near the two natural
+  // boundaries (close and full-screen). Full-screen keeps its background edge-to-edge, but CSS pads interactive
+  // content below Android/iOS's top safe area.
+  let sheetH = null, isFull = false, fullClose = null;
+  const maxSheetH = () => Math.max(1, vh());
+  const halfSheetH = () => Math.round(maxSheetH() * 0.5);
+  const minOpenH = () => Math.round(maxSheetH() * 0.24);
+  function setH(px) {
+    sheetH = clamp(Math.round(px), 1, maxSheetH());
+    app.style.setProperty("--sheet-h", `${sheetH}px`);
   }
-  function snapTo(i, viaBack = false) {
-    const wasFull = snap === SNAPS.length - 1;
-    snap = clamp(i, 0, SNAPS.length - 1);
-    applySnap();
-    if (snap === SNAPS.length - 1 && !fullClose) fullClose = pushLayer(() => { fullClose = null; if (snap === SNAPS.length - 1) { snap = 1; applySnap(); } });
-    else if (wasFull && snap !== SNAPS.length - 1 && fullClose && !viaBack) { const c = fullClose; fullClose = null; c(); }
+  function syncFullLayer(viaBack = false) {
+    if (isFull && !fullClose) {
+      fullClose = pushLayer(() => {
+        fullClose = null;
+        if (isFull) {
+          isFull = false;
+          ai.classList.remove("full");
+          setH(halfSheetH());
+        }
+      });
+    } else if (!isFull && fullClose && !viaBack) {
+      const c = fullClose; fullClose = null; c();
+    }
   }
-  function expandSheet(min = 1) { if (mode === "port" && snap < min) snapTo(min); }
+  function setFull(on, viaBack = false) {
+    isFull = !!on;
+    ai.classList.toggle("full", isFull);
+    if (isFull) setH(maxSheetH());
+    syncFullLayer(viaBack);
+  }
+  function openSheetHalf() {
+    if (mode !== "port") return;
+    setFull(false);
+    setH(halfSheetH());
+  }
+  function expandSheet(minRatio = 0.5) {
+    if (mode !== "port") return;
+    const target = Math.round(maxSheetH() * clamp(minRatio, 0.25, 1));
+    if (isFull || (sheetH ?? 0) >= target) return;
+    setFull(false);
+    setH(target);
+  }
+  function closeSheet() {
+    if (mode !== "port") return;
+    if (isFull) setFull(false);
+    onCloseAI && onCloseAI();
+  }
+  function clampSheetToViewport(openAtHalfWhenUnset = false) {
+    if (mode !== "port") return;
+    if (isFull) { setH(maxSheetH()); return; }
+    if (sheetH == null) {
+      if (openAtHalfWhenUnset) setH(halfSheetH());
+      return;
+    }
+    setH(Math.min(sheetH, maxSheetH()));
+  }
 
   let sd = null;
   grip.addEventListener("pointerdown", (e) => {
     if (mode !== "port") return;
     grip.setPointerCapture && grip.setPointerCapture(e.pointerId);
-    sd = { y: e.clientY, h: ai.offsetHeight, lastY: e.clientY, lastT: performance.now(), v: 0, moved: false };
+    sd = { y: e.clientY, h: ai.offsetHeight || sheetH || halfSheetH(), lastY: e.clientY, lastT: performance.now(), v: 0, moved: false };
     ai.classList.add("dragging");
   });
   grip.addEventListener("pointermove", (e) => {
@@ -104,25 +146,29 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers }) {
     sd.v = (sd.lastY - e.clientY) / Math.max(1, now - sd.lastT);      // px/ms, upward positive
     sd.lastY = e.clientY; sd.lastT = now;
     if (Math.abs(e.clientY - sd.y) > 4) sd.moved = true;
-    const min = snapPx(0) * 0.55, max = vh();
+    const max = maxSheetH();
     let h = sd.h + (sd.y - e.clientY);
-    if (h > max) h = max + (h - max) * 0.22;                           // elastic edges
-    if (h < min) h = min - (min - h) * 0.22;
-    setH(h);
+    if (h > max) h = max + (h - max) * 0.18;                           // elastic edge
+    if (h < 1) h *= 0.18;
+    if (isFull && h < max - 2) { isFull = false; ai.classList.remove("full"); }
+    setH(clamp(h, 1, max));
   });
   const release = () => {
     if (!sd) return;
     const s = sd; sd = null;
     ai.classList.remove("dragging");
-    if (!s.moved) { snapTo((snap + 1) % SNAPS.length); return; }       // tap cycles
-    const projected = ai.offsetHeight + s.v * 220;
-    let best = 0;
-    SNAPS.forEach((_, i) => { if (Math.abs(snapPx(i) - projected) < Math.abs(snapPx(best) - projected)) best = i; });
-    snapTo(best);
+    if (!s.moved) return;
+    const max = maxSheetH();
+    const current = ai.offsetHeight || sheetH || halfSheetH();
+    const projected = current + s.v * 180;
+    if (projected < minOpenH() || s.v < -0.75) { closeSheet(); return; }
+    if (projected >= max * 0.96 || current >= max - 24) { setFull(true); return; }
+    setFull(false);
+    setH(clamp(current, minOpenH(), max - 1));
   };
   grip.addEventListener("pointerup", release);
   grip.addEventListener("pointercancel", release);
-  if (window.visualViewport) window.visualViewport.addEventListener("resize", () => applySnap());
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", () => clampSheetToViewport(false));
 
   // ---- resizable panels (wide + landscape) -------------------------------------------------------------------------
   const store = { get: (k, d) => { try { return Number(localStorage.getItem(k)) || d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, String(v)); } catch { /* ignore */ } } };
@@ -142,6 +188,8 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers }) {
   window.addEventListener("resize", updateMode);
   window.addEventListener("orientationchange", () => setTimeout(updateMode, 60));
   updateMode();
-  snapTo(0);
-  return { openDrawer, closeDrawer, expandSheet, get mode() { return mode; } };
+  return {
+    openDrawer, closeDrawer, openSheetHalf, closeSheet, expandSheet,
+    get mode() { return mode; },
+  };
 }

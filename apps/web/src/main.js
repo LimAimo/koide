@@ -40,7 +40,7 @@ function boot() {
   const filesName = h("span", { class: "name" }, "文件");
   const files = h("aside", { class: "files", "aria-label": "文件" },
     h("div", { class: "files-head" }, filesName,
-      iconButton("add", "新建文件", () => tree.newFile()), iconButton("folder", "新建文件夹", () => tree.newFolder()),
+      iconButton("add", "新建文件或文件夹", () => tree.create()),
       iconButton("more", "更多操作", () => {
         const st = settingsStore.get();
         openMenu("项目", [
@@ -64,7 +64,7 @@ function boot() {
   const editorPane = createEditorPane();
   const grip = h("div", { class: "grip", role: "separator", "aria-label": "调整 AI 面板高度", "aria-orientation": "horizontal" }, h("span"));
   const chat = createChat({
-    onNeedExpand: () => { if (!settingsStore.get().aiVisible) saveSettings({ aiVisible: true }); if (layout) layout.expandSheet(1); },   // 需要你审批时，即使面板被关掉也会自动弹出
+    onNeedExpand: () => { if (!settingsStore.get().aiVisible) saveSettings({ aiVisible: true }); if (layout) layout.expandSheet(0.5); },   // 需要你审批时，即使面板被关掉也会自动弹出
     onOpenTimeline: (id) => openTimeMachine(id),
     onOpenProviders: () => openSettings("providers"),
   });
@@ -86,7 +86,12 @@ function boot() {
   }
   const homeBtn = iconButton("home", "返回首页", () => backHome(), "home-btn");
   const filesBtn = iconButton("folder", "显示或隐藏文件面板", () => saveSettings({ filesVisible: !settingsStore.get().filesVisible }), "panel-files-toggle");
-  const aiBtn = iconButton("spark", "显示或隐藏 AI 面板", () => saveSettings({ aiVisible: !settingsStore.get().aiVisible }), "ai-toggle");
+  const aiBtn = iconButton("spark", "显示或隐藏 AI 面板", () => {
+    const show = !settingsStore.get().aiVisible;
+    saveSettings({ aiVisible: show });
+    if (show) requestAnimationFrame(() => layout?.openSheetHalf());
+    else layout?.closeSheet();
+  }, "ai-toggle");
   const gitBtn = iconButton("branch", "Git", () => openGitPanel());
   const tmBtn = iconButton("history", "时光机", () => openTimeMachine());
   const termBtn = iconButton("terminal", "显示或隐藏终端", () => {
@@ -99,7 +104,10 @@ function boot() {
   app.append(bar, work, scrim);
   document.body.appendChild(app);
 
-  layout = setupLayout({ app, files, ai: chat.el, grip, scrim, resizers: { r1, r2 } });
+  layout = setupLayout({
+    app, files, ai: chat.el, grip, scrim, resizers: { r1, r2 },
+    onCloseAI: () => { if (settingsStore.get().aiVisible) saveSettings({ aiVisible: false }); },
+  });
 
   state.subscribe((s) => {
     const ws = s.workspace;
@@ -116,7 +124,17 @@ function boot() {
     termBtn.title = !canTerminal ? "Android SAF 原地项目不能把系统终端 cwd 设为该目录；复制到 Diffusion 私有工作区后可用" : "显示或隐藏终端";
   });
   let lastWs = null;
-  state.subscribe((s) => { const k = s.workspace ? s.workspace.roots.join("|") : null; if (k !== lastWs) { lastWs = k; if (k) { tree.reset(); events.emit("conversation:load", null); restoreConversation(); refreshGit(); } } });
+  state.subscribe((s) => {
+    const k = s.workspace ? s.workspace.roots.join("|") : null;
+    if (k === lastWs) return;
+    const enteringProject = !!k && k !== lastWs;
+    lastWs = k;
+    if (enteringProject) {
+      // 每次进入项目都从安静的编辑器开始；AI 由用户点击顶部按钮后以半屏打开。
+      if (settingsStore.get().aiVisible) saveSettings({ aiVisible: false });
+      tree.reset(); events.emit("conversation:load", null); restoreConversation(); refreshGit();
+    }
+  });
 
   // Android back: if nothing is layered on top, the browser leaves the app as usual.
   window.addEventListener("keydown", (e) => { if (e.key === "Escape" && hasLayers()) history.back(); });

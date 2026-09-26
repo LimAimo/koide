@@ -18,7 +18,7 @@ const SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "target", "__pycache__", ".venv", "venv", ".gradle", ".idea",
 ];
 
-type Stamp = (u128, u64);
+type Stamp = (u128, u64, bool);
 type Snapshot = HashMap<String, Stamp>;
 
 #[derive(Clone, Serialize)]
@@ -41,11 +41,11 @@ impl WorkspaceWatcher {
         thread::spawn(move || {
             let mut last = snapshot(&root);
             while !flag.load(Ordering::SeqCst) {
-                for _ in 0..15 {
+                for _ in 0..4 {
                     if flag.load(Ordering::SeqCst) {
                         return;
                     }
-                    thread::sleep(Duration::from_millis(100));
+                    thread::sleep(Duration::from_millis(90));
                 }
                 let current = snapshot(&root);
                 let changes = diff(&last, &current);
@@ -108,6 +108,20 @@ fn scan(root: &Path, dir: &Path, out: &mut Snapshot) {
             if SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
+            if let Ok(meta) = entry.metadata() {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.insert(rel, (modified, 0, true));
+            }
             scan(root, &path, out);
             continue;
         }
@@ -126,7 +140,7 @@ fn scan(root: &Path, dir: &Path, out: &mut Snapshot) {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        out.insert(rel, (modified, meta.len()));
+        out.insert(rel, (modified, meta.len(), false));
     }
 }
 
@@ -155,12 +169,12 @@ mod tests {
     #[test]
     fn diff_detects_create_delete_modify() {
         let old = HashMap::from([
-            ("a".into(), (1, 1)),
-            ("b".into(), (1, 1)),
+            ("a".into(), (1, 1, false)),
+            ("b".into(), (1, 1, false)),
         ]);
         let new = HashMap::from([
-            ("a".into(), (2, 1)),
-            ("c".into(), (1, 1)),
+            ("a".into(), (2, 1, false)),
+            ("c".into(), (1, 1, false)),
         ]);
         assert_eq!(
             diff(&old, &new),

@@ -91,7 +91,10 @@ export function openDialog({ title, body, actions = [], onClose } = {}) {
   const scrim = h("div", { class: "scrim" });
   const buttons = actions.map((a) => h("button", {
     class: "btn " + (a.primary ? "filled" : "text") + (a.danger ? " danger" : ""), type: "button",
-    onclick: () => { if (a.onClick) a.onClick(); request(); },
+    onclick: async () => {
+      const result = a.onClick ? await a.onClick() : undefined;
+      if (result !== false) request();
+    },
   }, a.label));
   const dlg = h("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-label": title },
     h("h2", null, title), h("div", { class: "dialog-body" }, body), h("div", { class: "dialog-actions" }, buttons));

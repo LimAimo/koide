@@ -11,4 +11,10 @@ if [ -z "$PY" ]; then
   echo "Termux 安装方法：pkg install python"
   exit 1
 fi
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "CodeMirror 6 是 Diffusion 的正式编辑器，需要 pnpm 9 或更高版本。"
+  echo "请先安装 Node.js 20+ 和 pnpm，然后执行：pnpm install"
+  exit 1
+fi
+pnpm build:cm6
 exec "$PY" bridge/main.py --open "$@"

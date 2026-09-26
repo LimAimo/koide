@@ -2,6 +2,11 @@
 
 ## 0.8.0-alpha.7（开发中）
 
+- **移动端 AI 抽屉重做**：进入项目默认关闭，点击 AI 以半屏打开；之后可以连续自由拖动高度，向下越过阈值关闭，拉到顶部进入全屏。全屏背景保持 edge-to-edge，但标题、拖动条和交互内容使用 `safe-area-inset-top` 给 Android/iOS 状态栏让位。
+- **文件树实时同步与创建流程收口**：Native watcher 同时跟踪文件与目录并缩短轮询间隔；AI、用户、终端或外部程序造成的变化都会刷新目录树。侧栏只保留一个「+」，统一弹出「你想要创建...?」对话框，可选择取消 / 文件 / 文件夹，并按当前选择确定创建位置。
+- **AI 编辑跟随**：新增默认开启的「跟随 AI 编辑」设置；Agent 创建或修改文件后，编辑器实时打开对应文件、展开文件树、定位到变化位置并播放 Diffusion 动画。
+- **CodeMirror 6 固定为正式编辑器**：移除运行时内核切换和 textarea 静默回退；Tauri dev/build 与 Bridge 启动脚本会先生成 CM6 产物，加载失败直接显示明确错误。
+- **模型菜单与设置清理**：修复非 DeepSeek 模型菜单把 JavaScript `null` 渲染成文字的问题，并为缺失名称提供 model/id 回退；非 DeepSeek 会关闭过期的联网搜索状态。设置页移除「切换全屏」按钮，底层窗口全屏能力不受影响。
 - **Native 功能等价门禁正式建立**：新增 `docs/NATIVE_PARITY_AUDIT.md` 与 Runtime dispatch parity CI。Runtime API 共 72 个业务方法，当前已达到 72 / 72 Native dispatch 覆盖；其中 `devices.pair_code` 仍是明确的 `LAN_OFF` 语义缺口，因此 dispatch 全覆盖不等于 Python 删除线完成。只要以后漏掉 Runtime 路由，CI 会直接失败。
 - **Android SAF 原地 WorkspaceBackend 已进入源码**：新增不会被 `tauri android init` 覆盖的 Tauri Android SAF 插件，使用 `ACTION_OPEN_DOCUMENT_TREE` + `takePersistableUriPermission` + `DocumentsContract` 原地读写用户授权目录；Rust Workspace 抽象同时支持 LocalFS / SAF，覆盖 tree/read/write/patch/create/delete/rename/copy、revision/conflict、search/glob、事务式大文件写入、Checkpoint、Diffusion-managed Trash、ZIP Export 与项目 `AGENTS.md`。SAF recent 保存 tree URI；Git / Terminal 对 content URI 显式 capability=false。当前提交仍需 Android CI 与真实设备 smoke 后才算最终门禁通过。
 - **四种 Native Agent 模式已齐**：chat / read / edit / agent 均进入 Rust。Edit 写入链为 HardPolicy → PermissionEngine → 审批 → Checkpoint → mutation；支持 ask_user、fs_glob、fs_multi_read、shell_run、terminal_read、web_fetch，以及工具次数/运行时间/修复次数限制。

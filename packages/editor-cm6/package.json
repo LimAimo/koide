@@ -3,7 +3,7 @@
   "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "CodeMirror 6 编辑器适配器：构建后输出到 apps/web/vendor/cm6.js，网页界面会自动检测并使用。",
+  "description": "Diffusion IDE 的正式 CodeMirror 6 编辑器适配器；构建输出到 apps/web/vendor/cm6.js。",
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch"

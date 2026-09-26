@@ -68,6 +68,9 @@ before(async () => {
   llm = await startMockLlm();
 
   dom = installFakeDom({ width: 400, height: 800 });
+  // 产品运行时必须加载真正的 CM6；UI 测试注入同一适配器接口，避免依赖测试机上的构建产物。
+  const { CodeEditor } = await import("../../apps/web/src/editor/code-editor.js");
+  globalThis.__DIFFUSION_CM6_FACTORY__ = (opts) => { const ed = new CodeEditor(opts); ed.isCM6 = true; return ed; };
   globalThis.location = { protocol: "http:", host: `127.0.0.1:${port}`, hostname: "127.0.0.1", port: String(port) };
   await import("../../apps/web/src/main.js");           // boots the real UI
   appMod = await import("../../apps/web/src/services/app.js");
@@ -103,7 +106,23 @@ test("provider + workspace: tree renders real files from the Bridge", async () =
   assert.ok(names.includes("src") && names.includes("README.md"), names.join(","));
   assert.equal($$(body(), ".welcome")[0].hidden, true, "start screen hides once a project is open");
   assert.match(text($$(body(), ".title")[0]), /proj/);
+  assert.ok(globalThis.document.getElementById("app").classList.contains("ai-hidden"), "进入项目时 AI 抽屉默认关闭");
   await until(() => appMod.state.get().profiles.length === 1, "profiles");
+});
+
+test("文件树加号使用统一创建弹窗；外部新文件也会实时出现", async () => {
+  const add = $$(body(), ".files-head .icon-btn").find((b) => b.getAttribute("aria-label") === "新建文件或文件夹");
+  add.click();
+  const dlg = await until(() => $$(body(), ".dialog").find((d) => /你想要创建\.\.\.\?/.test(text(d))), "统一创建弹窗");
+  const input = $$(dlg, "input")[0];
+  input.value = "created-by-ui.js";
+  $$(dlg, ".btn").find((b) => text(b) === "文件").click();
+  await until(() => fs.existsSync(path.join(proj, "created-by-ui.js")), "文件被创建");
+  await until(() => $$(body(), ".node").some((n) => n.dataset.path === "created-by-ui.js"), "新文件出现在目录树");
+
+  fs.writeFileSync(path.join(proj, "external-created.txt"), "outside\n");
+  await until(() => $$(body(), ".node").some((n) => n.dataset.path === "external-created.txt"), "外部创建的文件实时出现在目录树", 5000);
+  appMod.closeTab("created-by-ui.js");
 });
 
 test("opening a file shows highlighted lines in the editor", async () => {
@@ -139,6 +158,15 @@ test("模型可以用 ask_user 工具暂停并等待界面回答", async () => {
   choice.click();
   assert.equal((await done).status, "done");
   await until(() => card.classList.contains("done"), "question resolved");
+});
+
+test("模型上拉菜单不会渲染 null，非 DeepSeek 不显示联网开关", async () => {
+  const button = $$(body(), ".composer-model-pill")[0];
+  button.click();
+  const pop = await until(() => $$(body(), ".model-popover")[0], "模型菜单");
+  assert.doesNotMatch(text(pop), /(?:^|\s)null(?:$|\s)/i);
+  assert.doesNotMatch(text(pop), /联网搜索/);
+  button.click();
 });
 
 test("AI edit: chat streams, tool cards render, editor plays Diffusion, tab stays clean", async () => {
@@ -180,6 +208,10 @@ test("manual mode: approval card appears inline and Allow once lets the agent co
   assert.equal(fs.readFileSync(path.join(proj, "notes.txt"), "utf8"), "hello from the agent\n");
   await until(() => $$(body(), ".approval.done").length === 1, "approval card resolved");
   await until(() => $$(body(), ".node").some((n) => n.dataset.path === "notes.txt"), "new file appears in tree");
+  await until(() => appMod.state.get().active === "notes.txt", "AI 创建文件后编辑器实时跟随");
+  assert.equal($$(body(), ".ce-input")[0].value, "hello from the agent\n");
+  appMod.closeTab("notes.txt");
+  appMod.activate("src/app.py");
 });
 
 test("Time Machine lists the tasks and can restore the whole first task", async () => {
@@ -208,6 +240,10 @@ test("Settings page renders every section and search filters them", async () => 
   for (const want of ["appearance", "editor", "providers", "agent", "permissions", "animation", "bridge", "workspace", "privacy", "advanced"]) assert.ok(ids.includes(want), "missing " + want);
   const perm = secs.find((s) => s.dataset.id === "permissions");
   assert.ok($$(perm, "select").length >= 8, "a permission selector per tool");
+  const editorSec = secs.find((s) => s.dataset.id === "editor");
+  assert.match(text(editorSec), /CodeMirror 6/);
+  assert.match(text(editorSec), /跟随 AI 编辑/);
+  assert.doesNotMatch(text($$(body(), ".page")[0]), /切换全屏/);
   const q = $$($$(body(), ".page")[0], ".search-box .text-field")[0];        // 只取设置页里的搜索框（编辑器的查找栏里也有 search 类型的输入框）
   q.value = "hue";
   q.dispatchEvent({ type: "input" });
@@ -254,15 +290,17 @@ test("手机代码工具栏在 AI 输入框获得焦点时会收起，不再挡�
   assert.equal(bar.classList.contains("show"), false);
 });
 
-test("AI 面板可以关闭；需要审批时即使被关掉也会自动弹出", async () => {
+test("AI 面板默认关闭；点击以半屏打开；需要审批时会自动弹出", async () => {
   const app = globalThis.document.getElementById("app");
   const toggle = $$(body(), ".ai-toggle")[0];
+  if (!app.classList.contains("ai-hidden")) $$(body(), ".ai-close")[0].click();
+  assert.ok(app.classList.contains("ai-hidden"), "AI 抽屉可以回到关闭状态");
   toggle.click();
-  assert.ok(app.classList.contains("ai-hidden"), "点击顶部栏开关后面板被隐藏");
-  toggle.click();
-  assert.ok(!app.classList.contains("ai-hidden"), "再点一次恢复");
+  assert.ok(!app.classList.contains("ai-hidden"), "第一次点击 AI 按钮打开抽屉");
+  const ai = $$(body(), ".ai")[0];
+  assert.equal(app.style.getPropertyValue("--sheet-h"), "400px", "400×800 手机视口默认打开一半");
   $$(body(), ".ai-close")[0].click();
-  assert.ok(app.classList.contains("ai-hidden"), "面板里的关闭按钮同样有效");
+  assert.ok(app.classList.contains("ai-hidden"), "面板里的关闭按钮关闭抽屉");
   await bridge.rpc("permissions.set", { mode: "manual" });
   const done = new Promise((r) => bridge.on("agent.done", r));
   await appMod.startAgent("write notes again");
