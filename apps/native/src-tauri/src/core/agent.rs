@@ -993,7 +993,7 @@ fn execute_edit_tool(
             let path = required_arg(&call.arguments, "path")?;
             let content = required_arg(&call.arguments, "content")?;
             let before = workspace.read(path).ok();
-            let base = if let Some(current) = before.as_ref() {
+            let base = if before.is_some() {
                 let rev = read_revisions.get(path).ok_or_else(|| RuntimeError::new(
                     "NEEDS_READ",
                     format!("修改 {path} 之前请先用 fs_read 读取它"),
@@ -1094,7 +1094,7 @@ fn execute_edit_tool(
             let from = required_arg(&call.arguments, "from")?;
             let to = required_arg(&call.arguments, "to")?;
             let before = workspace.read(from)?;
-            let text = before.get("content").and_then(Value::as_str)
+            before.get("content").and_then(Value::as_str)
                 .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许复制 UTF-8 文本文件"))?;
             checkpoints.record_before(task_id, to, None)?;
             let result = workspace.copy(from, to)?;
