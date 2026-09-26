@@ -14,7 +14,7 @@ use std::{
 
 const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT: usize = 512 * 1024;
-const TMP_PREFIX: &str = ".diffusion-tmp-";
+const TMP_PREFIX: &str = ".koide-tmp-";
 const EXPORT_MAX_TOTAL: u64 = 300 * 1024 * 1024;
 const EXPORT_SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".gradle", ".idea",
