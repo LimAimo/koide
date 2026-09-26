@@ -239,7 +239,7 @@ test("Settings page renders every section and search filters them", async () => 
   const ids = secs.map((s) => s.dataset.id);
   for (const want of ["appearance", "editor", "providers", "agent", "permissions", "animation", "bridge", "workspace", "privacy", "advanced"]) assert.ok(ids.includes(want), "missing " + want);
   const perm = secs.find((s) => s.dataset.id === "permissions");
-  assert.ok($$(perm, "select").length >= 8, "a permission selector per tool");
+  assert.ok($(perm, ".select-button").length >= 8, "a Koide permission menu per tool");
   const editorSec = secs.find((s) => s.dataset.id === "editor");
   assert.match(text(editorSec), /CodeMirror 6/);
   assert.match(text(editorSec), /跟随 AI 编辑/);
