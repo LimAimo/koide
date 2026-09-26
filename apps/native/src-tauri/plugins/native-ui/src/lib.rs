@@ -16,13 +16,15 @@ pub struct NativeUi<R: Runtime> {
 
 impl<R: Runtime> NativeUi<R> {
     #[cfg(target_os = "android")]
-    pub fn set_state(&self, payload: Value) -> Result<Value, String> {
-        self.handle.run_mobile_plugin("setState", payload).map_err(|e| e.to_string())
+    fn call(&self, command: &str, payload: Value) -> Result<Value, String> {
+        self.handle.run_mobile_plugin(command, payload).map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "android"))]
-    pub fn set_state(&self, _payload: Value) -> Result<Value, String> {
+    fn call(&self, _command: &str, _payload: Value) -> Result<Value, String> {
         Ok(json!({"native": false}))
     }
+    pub fn ready(&self) -> Result<Value, String> { self.call("ready", json!({})) }
+    pub fn set_state(&self, payload: Value) -> Result<Value, String> { self.call("setState", payload) }
 }
 pub trait NativeUiExt<R: Runtime> { fn native_ui(&self) -> tauri::State<'_, NativeUi<R>>; }
 impl<R: Runtime, T: Manager<R>> NativeUiExt<R> for T {
