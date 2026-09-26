@@ -1,0 +1,190 @@
+use crate::core::RuntimeError;
+use serde_json::{json, Map, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const MODES: &[&str] = &["restricted", "manual", "ai", "autonomous"];
+const TOOL_SETTINGS: &[&str] = &["deny", "ask", "session", "always", "ai_review"];
+
+#[derive(Clone)]
+pub struct SettingsStore {
+    path: PathBuf,
+}
+
+impl SettingsStore {
+    pub fn new(data_dir: &Path) -> Self {
+        Self { path: data_dir.join("settings.json") }
+    }
+
+    fn load(&self) -> Map<String, Value> {
+        fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, root: &Map<String, Value>) -> Result<(), RuntimeError> {
+        let tmp = self.path.with_extension("tmp");
+        let bytes = serde_json::to_vec_pretty(&Value::Object(root.clone()))
+            .map_err(|e| RuntimeError::new("SETTINGS_WRITE_FAILED", e.to_string()))?;
+        fs::write(&tmp, bytes)
+            .map_err(|e| RuntimeError::new("SETTINGS_WRITE_FAILED", format!("{}: {e}", tmp.display())))?;
+        #[cfg(windows)]
+        if self.path.exists() {
+            fs::remove_file(&self.path)
+                .map_err(|e| RuntimeError::new("SETTINGS_WRITE_FAILED", format!("{}: {e}", self.path.display())))?;
+        }
+        fs::rename(&tmp, &self.path)
+            .map_err(|e| RuntimeError::new("SETTINGS_WRITE_FAILED", format!("{}: {e}", self.path.display())))
+    }
+
+    pub fn recent(&self) -> Vec<String> {
+        self.load()
+            .get("recent")
+            .and_then(Value::as_array)
+            .map(|xs| xs.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn touch_recent(&self, path: &Path) -> Result<Vec<String>, RuntimeError> {
+        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let value = canonical.to_string_lossy().into_owned();
+        let mut root = self.load();
+        let mut recent = self.recent();
+        recent.retain(|item| item != &value);
+        recent.insert(0, value);
+        recent.truncate(12);
+        root.insert("recent".into(), json!(recent));
+        self.save(&root)?;
+        Ok(recent)
+    }
+
+    pub fn remove_recent(&self, raw: &str) -> Result<Vec<String>, RuntimeError> {
+        let target = fs::canonicalize(raw)
+            .unwrap_or_else(|_| PathBuf::from(raw))
+            .to_string_lossy()
+            .into_owned();
+        let mut root = self.load();
+        let mut recent = self.recent();
+        recent.retain(|item| {
+            fs::canonicalize(item)
+                .unwrap_or_else(|_| PathBuf::from(item))
+                .to_string_lossy()
+                != target
+        });
+        root.insert("recent".into(), json!(recent));
+        self.save(&root)?;
+        Ok(recent)
+    }
+
+    pub fn permissions(&self) -> Value {
+        let root = self.load();
+        let src = root.get("permissions").and_then(Value::as_object);
+        json!({
+            "mode": src.and_then(|x| x.get("mode")).and_then(Value::as_str).filter(|x| MODES.contains(x)).unwrap_or("manual"),
+            "tool_settings": src.and_then(|x| x.get("tool_settings")).and_then(Value::as_object).cloned().unwrap_or_default(),
+            "tool_rules": src.and_then(|x| x.get("tool_rules")).and_then(Value::as_object).cloned().unwrap_or_default()
+        })
+    }
+
+    pub fn approval_profile(&self) -> Option<String> {
+        self.load()
+            .get("approval_profile")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn update_permissions(&self, patch: &Value) -> Result<Value, RuntimeError> {
+        let patch = patch.as_object()
+            .ok_or_else(|| RuntimeError::new("BAD_REQUEST", "权限设置必须是对象"))?;
+        let mut root = self.load();
+        let mut perm = self.permissions().as_object().cloned().unwrap_or_default();
+
+        if let Some(mode) = patch.get("mode").and_then(Value::as_str) {
+            if !MODES.contains(&mode) {
+                return Err(RuntimeError::new("BAD_PERMISSION_MODE", format!("未知权限模式：{mode}")));
+            }
+            perm.insert("mode".into(), Value::String(mode.to_owned()));
+        }
+
+        if let Some(changes) = patch.get("tool_settings").and_then(Value::as_object) {
+            let settings = perm.entry("tool_settings").or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| RuntimeError::new("SETTINGS_CORRUPT", "tool_settings 损坏"))?;
+            for (tool, value) in changes {
+                if value.is_null() || value.as_str() == Some("") {
+                    settings.remove(tool);
+                    continue;
+                }
+                let setting = value.as_str()
+                    .ok_or_else(|| RuntimeError::new("BAD_TOOL_SETTING", format!("{tool} 的设置不是字符串")))?;
+                if !TOOL_SETTINGS.contains(&setting) {
+                    return Err(RuntimeError::new("BAD_TOOL_SETTING", format!("未知工具设置：{setting}")));
+                }
+                settings.insert(tool.clone(), Value::String(setting.to_owned()));
+            }
+        }
+
+        if let Some(changes) = patch.get("tool_rules").and_then(Value::as_object) {
+            let rules = perm.entry("tool_rules").or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| RuntimeError::new("SETTINGS_CORRUPT", "tool_rules 损坏"))?;
+            for (tool, raw) in changes {
+                let mut clean = Map::new();
+                let obj = raw.as_object();
+                for kind in ["allow", "deny"] {
+                    let xs = obj
+                        .and_then(|o| o.get(kind))
+                        .and_then(Value::as_array)
+                        .map(|xs| xs.iter().filter_map(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(|s| Value::String(s.to_owned())).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    clean.insert(kind.into(), Value::Array(xs));
+                }
+                let empty = clean.values().all(|v| v.as_array().is_some_and(Vec::is_empty));
+                if empty { rules.remove(tool); } else { rules.insert(tool.clone(), Value::Object(clean)); }
+            }
+        }
+
+        if patch.contains_key("approval_profile") {
+            match patch.get("approval_profile").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                Some(id) => { root.insert("approval_profile".into(), Value::String(id.to_owned())); }
+                None => { root.remove("approval_profile"); }
+            }
+        }
+
+        root.insert("permissions".into(), Value::Object(perm));
+        self.save(&root)?;
+        Ok(self.permissions())
+    }
+}
+
+pub fn tool_descriptions() -> Vec<Value> {
+    vec![
+        tool("fs_read", "read", "low"),
+        tool("fs_list", "read", "low"),
+        tool("fs_search", "read", "low"),
+        tool("fs_glob", "read", "low"),
+        tool("fs_multi_read", "read", "low"),
+        tool("fs_patch", "write", "medium"),
+        tool("fs_write", "write", "medium"),
+        tool("fs_create", "write", "medium"),
+        tool("fs_delete", "delete", "medium"),
+        tool("fs_rename", "write", "medium"),
+        tool("fs_copy", "write", "medium"),
+        tool("ask_user", "interaction", "low"),
+        tool("terminal_read", "exec", "low"),
+        tool("shell_run", "exec", "medium"),
+        tool("web_fetch", "network", "medium"),
+    ]
+}
+
+fn tool(id: &str, permission_class: &str, risk: &str) -> Value {
+    json!({
+        "id": id,
+        "permission_class": permission_class,
+        "risk": risk,
+        "environment": "workspace"
+    })
+}
