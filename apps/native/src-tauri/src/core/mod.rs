@@ -266,7 +266,6 @@ impl NativeCore {
                 Ok(result)
             },
             "workspace.open" => {
-                if let Some(watcher) = self.watcher.take() { watcher.stop(); }
                 let mut location = params.get("location").cloned().or_else(|| {
                     params.get("path").and_then(Value::as_str).map(|path| Value::String(path.to_owned()))
                 }).ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "缺少工作区位置"))?;
@@ -276,6 +275,7 @@ impl NativeCore {
                     location = Workspace::pick_saf(app)?;
                 }
                 let ws = Workspace::open_location(app, &location, &self.data_dir)?;
+                if let Some(watcher) = self.watcher.take() { watcher.stop(); }
                 let info = ws.info();
                 let canonical_location = ws.location();
                 let conversations = ConversationStore::new(

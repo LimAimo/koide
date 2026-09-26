@@ -49,9 +49,11 @@ function boot() {
           { label: "导出整个项目为 zip", icon: "download", onClick: () => exportPath(".") },
           { label: st.showHiddenFiles ? "隐藏隐藏文件" : "显示隐藏文件（含 .git）", icon: "file", onClick: () => saveSettings({ showHiddenFiles: !st.showHiddenFiles }) },
           { label: "从最近项目移除", icon: "trash", danger: true, onClick: async () => {
-            const p = state.get().workspace?.roots?.[0];
-            if (!p) return;
-            try { await runtime.workspace.removeRecent({ path: p }); toast("已从最近项目移除，不会删除任何文件"); } catch (e) { toast(e.message); }
+            const ws = state.get().workspace;
+            const location = ws?.location || (ws?.roots?.[0] ? ws.roots[0] : null);
+            if (!location) return;
+            const params = typeof location === "string" ? { path: location } : { location };
+            try { await runtime.workspace.removeRecent(params); toast("已从最近项目移除，不会删除任何文件"); } catch (e) { toast(e.message); }
           } },
           { label: "关闭项目，返回首页", icon: "home", onClick: () => backHome() },
         ]);

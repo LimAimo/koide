@@ -2,7 +2,8 @@
 
 ## 0.8.0-alpha.7（开发中）
 
-- **Native 功能等价门禁正式建立**：新增 `docs/NATIVE_PARITY_AUDIT.md` 与 Runtime dispatch parity CI。Runtime API 共 72 个业务方法，当前 Rust NativeCore 已真实覆盖 69 / 72；只要 Native dispatch 再漏掉 Runtime 方法，CI 会直接失败。Python Bridge 在最终门禁全部通过前明确禁止删除。
+- **Native 功能等价门禁正式建立**：新增 `docs/NATIVE_PARITY_AUDIT.md` 与 Runtime dispatch parity CI。Runtime API 共 72 个业务方法，当前已达到 72 / 72 Native dispatch 覆盖；其中 `devices.pair_code` 仍是明确的 `LAN_OFF` 语义缺口，因此 dispatch 全覆盖不等于 Python 删除线完成。只要以后漏掉 Runtime 路由，CI 会直接失败。
+- **Android SAF 原地 WorkspaceBackend 已进入源码**：新增不会被 `tauri android init` 覆盖的 Tauri Android SAF 插件，使用 `ACTION_OPEN_DOCUMENT_TREE` + `takePersistableUriPermission` + `DocumentsContract` 原地读写用户授权目录；Rust Workspace 抽象同时支持 LocalFS / SAF，覆盖 tree/read/write/patch/create/delete/rename/copy、revision/conflict、search/glob、事务式大文件写入、Checkpoint、Diffusion-managed Trash、ZIP Export 与项目 `AGENTS.md`。SAF recent 保存 tree URI；Git / Terminal 对 content URI 显式 capability=false。当前提交仍需 Android CI 与真实设备 smoke 后才算最终门禁通过。
 - **四种 Native Agent 模式已齐**：chat / read / edit / agent 均进入 Rust。Edit 写入链为 HardPolicy → PermissionEngine → 审批 → Checkpoint → mutation；支持 ask_user、fs_glob、fs_multi_read、shell_run、terminal_read、web_fetch，以及工具次数/运行时间/修复次数限制。
 - **PermissionEngine 已迁入 Rust**：restricted / manual / ai / autonomous、逐工具 deny / ask / session / always / ai_review、allow/deny wildcard、approval_profile、AI reviewer 与失败回退 ASK_USER 均已接入；HardPolicy 始终优先。
 - **Aimo 宪法与 Instructions 原生化**：内置宪法、全局 instructions、项目 `AGENTS.md` 真正进入 Native Agent 上下文；recent / permissions / approval_profile 均由 Native settings 持久化。
@@ -12,7 +13,7 @@
 - **Provider Streaming 大幅推进**：OpenAI-compatible SSE、reasoning delta、MiniMax `<think>` 分离、streamed tool-call 聚合已经通过 Windows / Android CI；服务端长时间沉默时的 blocking read 仍缺真正 hard-cancel。Anthropic / Gemini 的完整流式等价仍需最终核验。
 - **Native-only 测试门禁已经跑通**：Alpha7 Run #61 已通过 Native-only Rust tests、Windows x64 EXE、Android ARM64 APK 与 APK 签名验证；Run #66 又通过 Runtime dispatch parity gate。
 - **Remote Devices 只迁了存储层，不伪造 LAN server**：device token hashing / revoke 等 Rust 基础已存在，但 Rust Remote Runtime server 与一次性配对码尚未完成，因此远程连接仍不能作为“已迁完”。
-- **当前真正硬缺口**：Android SAF 原地 WorkspaceBackend；Android interactive PTY；Rust Remote Runtime / pairing；Provider 沉默连接 hard-cancel 与全协议最终等价；最终 Native-only/UI/实机回归。
+- **当前真正硬缺口**：Android SAF 的 CI / 真实设备最终验证；Android interactive PTY；Rust Remote Runtime / pairing；Provider 沉默连接 hard-cancel 与全协议最终等价；最终 Native-only/UI/实机回归。
 - **版本策略不变**：以上硬缺口和已知 bug 全部收口前继续保持 alpha，且不删除 Python Bridge。
 
 ## 0.8.0-alpha.4

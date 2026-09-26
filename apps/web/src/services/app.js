@@ -64,13 +64,15 @@ export async function openWorkspace(location) {
   const params = typeof location === "string" ? { path: location } : { location };
   const ws = await runtime.workspace.open(params);
   state.set({ workspace: ws, tabs: [], active: null, editing: {}, conversationId: null });
-  refreshGit();
+  if (ws?.capabilities?.git === false) state.set({ git: { is_repo: false, files: {} } });
+  else refreshGit();
   return ws;
 }
 
 // ---- Git 状态（文件树上的角标、Git 面板的分支信息）-----------------------------------------------------------------------
 export async function refreshGit() {
-  if (runtime.status !== "online" || !state.get().workspace) return state.set({ git: { is_repo: false, files: {} } });
+  const workspace = state.get().workspace;
+  if (runtime.status !== "online" || !workspace || workspace?.capabilities?.git === false) return state.set({ git: { is_repo: false, files: {} } });
   try {
     const st = await runtime.git.status();
     const files = {};

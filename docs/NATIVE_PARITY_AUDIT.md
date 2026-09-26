@@ -10,18 +10,20 @@
 
 - Runtime API：72 个业务方法。
 - Python Bridge：72 / 72 均有 RPC 实现。
-- Rust NativeCore：**69 / 72** 已有真实 dispatch。
-- 仅剩 3 个 Runtime RPC 未迁：`devices.pair_code / devices.list / devices.revoke`。
+- Rust NativeCore：**72 / 72 dispatch 路由已覆盖**，`node scripts/check-native-parity.mjs` 当前通过。
+- 但 dispatch 全覆盖不等于语义全完成：`devices.pair_code` 当前仍明确返回 `LAN_OFF`，因为 Rust Remote Runtime server 尚未实现；它不能算 Remote pairing 已迁完。
 - 本地 IDE 主链已经包含 Workspace、Files、Trash、Checkpoint、Profiles、Conversations、4 种 Agent 模式、Permissions、Instructions、Git、Terminal、Ports、Export、External Watcher。
-- 仍有三个会阻止“彻底删除 Python”的硬缺口：
-  1. Provider 全协议流式 / reasoning / 即时取消尚未全部完成；
-  2. Android SAF 原地工作区尚未完成；
-  3. 旧 Bridge 的 LAN / Devices / Remote Runtime 尚无 Rust 替代。
+- Android SAF 原地 WorkspaceBackend 已进入源码：系统 picker、持久 URI、DocumentsContract I/O、revision/conflict、search/glob、Checkpoint/Trash、recent 与 Git/Terminal capability 降级均已接线；**当前还需要本提交 Android CI 与真实设备 smoke**。
+- 仍会阻止“彻底删除 Python”的主要硬缺口：
+  1. Provider 全协议流式 / reasoning / 即时 hard-cancel 尚未全部完成；
+  2. Android interactive PTY 尚未完成；
+  3. 旧 Bridge 的 LAN / Remote Runtime 尚无 Rust 替代；
+  4. SAF 尚缺当前实现的 Android 编译与真实设备最终验证。
 - 因此当前 **仍禁止删除 Python Bridge**。
 
 ## A. Runtime RPC 覆盖
 
-### 已迁（69 / 72）
+### Dispatch 路由（72 / 72）
 - [x] Workspace：open / close / browse / remove_recent
 - [x] Files：read / tree / search / hash / write / patch / create / delete / rename / copy
 - [x] Large write：begin / chunk / commit / abort
@@ -37,13 +39,9 @@
 - [x] Git：status / diff / stage / unstage / discard / reset / commit / branches / checkout / log / blame / pull / push / init
 - [x] Terminal：run / kill / open / input / resize / close / list / history
 - [x] Ports：list
+- [x] Devices：pair_code / list / revoke 均有 Native dispatch 路由
 
-### 未迁（3 / 72）
-- [ ] `devices.pair_code`
-- [x] `devices.list`
-- [x] `devices.revoke`
-
-> Native 设置页已经把 Remote 明确隔离为可选模块，因此这 3 项不是本机 IDE 的使用阻塞项；但如果最终删除 Python Bridge，就必须先提供 Rust Remote Runtime / 配对替代，或正式从产品中移除远程能力并迁移 API/UI。
+> 注意：`devices.pair_code` 的路由当前会明确返回 `LAN_OFF`，因为 Rust Remote Runtime server 尚不存在。这是**语义门禁未完成**，不是 dispatch 漏接。`devices.list/revoke` 使用 Rust DeviceStore。
 
 ## B. Workspace / IDE 基础能力
 
@@ -58,8 +56,8 @@
 - [x] Windows PTY
 - [x] Terminal 命令运行 / 取消 / history
 - [x] Ports 列表
-- [ ] Android SAF：持久 URI 授权 + 原地 WorkspaceBackend
-- [ ] SAF 下 read/write/patch/tree/search/checkpoint/trash 与普通路径后端行为一致
+- [~] Android SAF：持久 URI 授权 + 原地 WorkspaceBackend 已实现，等待当前提交 Android CI / 实机验证
+- [~] SAF 下 read/write/patch/tree/search/checkpoint/trash 已接线，等待 Android 实机行为验证
 
 ## C. Agent / Permissions
 
@@ -173,18 +171,24 @@
 
 ## H. Android SAF
 
-- [ ] 系统目录选择器返回 SAF tree URI
-- [ ] `takePersistableUriPermission`
-- [ ] 持久化已授权项目
-- [ ] DocumentFile / DocumentsContract backend
-- [ ] 原地 tree/list/read/write/create/delete/rename/copy
-- [ ] 原地 hash / revision / conflict detection
-- [ ] search / glob
-- [ ] Checkpoint blob 与 SAF 文件联动
-- [ ] Trash 语义定义（SAF 无原生 trash 时使用 Diffusion-managed recovery）
-- [ ] Git 能力检测与明确降级（普通 content URI 不保证系统 Git 可直接访问）
-- [ ] Terminal cwd 能力检测与明确降级
-- [ ] UI 不再把“导入私有工作区”作为唯一 Android 打开项目方式
+> 当前状态：源码接线完成；由于当前执行环境没有 Rust / Android toolchain，本节先记为 `[~]`，待 `native-alpha7` CI 编译通过后可把“源码/构建”项转为 `[x]`。真实设备 smoke 仍属于 I 节最终门禁。
+
+- [~] 系统目录选择器返回 SAF tree URI
+- [~] `takePersistableUriPermission` + 完整读写授权检查
+- [~] recent 持久化已授权项目（tree URI + display name）
+- [~] 独立 Tauri Android plugin + `ContentResolver` / `DocumentsContract` backend
+- [~] 原地 tree/list/read/write/create/delete/rename/copy
+- [~] 原地 hash / revision / `base_revision` conflict detection
+- [~] search / glob
+- [~] 事务式 large write：chunk 先落 app-private staging，commit 后写回 SAF
+- [~] Checkpoint blob 与 SAF 文件联动，包括 Agent 新建目录回滚
+- [~] Diffusion-managed Trash：删除前 stage 到应用私有 recovery，restore 再写回 SAF
+- [~] ZIP Export 从 SAF backend staging 后生成归档
+- [~] 项目 `AGENTS.md` 从 Workspace backend 读取，Agent 不再依赖 `PathBuf`
+- [~] Git 能力检测与明确降级：SAF capability=false，返回 `WORKSPACE_CAPABILITY`
+- [~] Terminal cwd 能力检测与明确降级：SAF capability=false，不把 content URI 当 cwd
+- [~] UI：Android 可“从手机选择项目文件夹”原地打开 SAF；旧“复制到 Diffusion 私有工作区”保留为兼容入口
+- [~] DocumentsProvider 兼容：child lookup 不依赖 provider selection；写模式提供 `rwt` → `w` fallback，Rust 层失败时尽力恢复原内容/清理半成品
 
 ## I. 删除 Python 前的最终硬门禁
 
@@ -195,17 +199,17 @@
 - [x] Git UI 与 Native backend 接通
 - [x] Terminal Runtime 接通
 - [x] Export / watcher / recent / instructions 已迁
-- [ ] Android SAF 原地项目可用
+- [~] Android SAF 原地项目源码已接线；仍需当前提交 Android CI + 真实设备 smoke
 - [ ] Provider 全协议 streaming / cancel 可用
 - [ ] Rust Remote Runtime 替代 Python LAN/Devices
 - [ ] Bridge 行为测试迁为 Rust / Native integration tests
-- [ ] Web/UI regression 全绿
+- [x] Web/UI regression 当前全绿（本次修改后 `bash tests/run-all.sh` 通过；Bridge 47、Node 43、界面集成全通过）
 - [x] Android ARM64 CI 已成功构建并验证 APK 签名（仍需 SAF 功能完成后再做最终门禁）
 - [x] Windows x64 CI 已成功构建
 - [ ] Native-only smoke：完全不启动 Python，覆盖打开项目 → 编辑 → Agent → Checkpoint → Git → Terminal → Export
 - [ ] Android Native-only smoke：SAF 打开项目 → 编辑 → Agent → Checkpoint
 - [ ] 最后代码搜索：产品 Native 路径无 Python / localhost Bridge 必需假设
-- [ ] README / MIGRATION_STATUS / 架构图更新完成
+- [~] README / MIGRATION_STATUS / SAF / Runtime API 文档已随本次实现更新；最终删 Python 前还需再做一次架构收口
 
 只有以上全部完成后：
 1. 删除 `bridge/`
@@ -217,11 +221,11 @@
 
 ## 当前剩余硬缺口（更新）
 
-1. **Android SAF 原地 WorkspaceBackend**：尚未完成。当前 Android 私有 workspace 不能冒充 SAF。
+1. **Android SAF 最终验证**：原地 WorkspaceBackend 已进入源码；待当前提交 Android CI 编译和真实设备“选择目录 → 编辑 → Agent → Checkpoint/revert → 重启重新打开” smoke。
 2. **Android interactive PTY**：一次性 `/system/bin/sh` 命令可运行，但 `terminal.open/input/resize/history` 在 Android 明确返回 `NO_PTY`。
-3. **Remote Runtime LAN server**：DeviceStore 已迁 Rust；LAN server 尚未接，因此 3 个 devices RPC 暂不伪实现。
-4. **Provider hard-cancel**：SSE streaming 已通过 Windows/Android CI；服务端沉默时 blocking read 仍需 async hard-cancel。
-5. **Native-only Rust smoke gate**：已通过，运行时完全不启动 Python Bridge。
+3. **Remote Runtime LAN server**：DeviceStore 已迁 Rust；`devices.list/revoke` 已接，`devices.pair_code` 仅有明确 `LAN_OFF` 路由，LAN server / pairing 语义尚未实现。
+4. **Provider hard-cancel**：SSE streaming 已通过既有 Windows/Android CI；服务端沉默时 blocking read 仍需 async hard-cancel，Anthropic/Gemini 全协议 parity 也需最终核验。
+5. **Native-only Rust smoke gate**：既有基线已通过；本次 SAF 变更还需要重新跑当前分支 CI。
 
 
 ### 已验证构建基线

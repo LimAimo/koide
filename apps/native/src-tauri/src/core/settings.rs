@@ -400,6 +400,19 @@ mod permission_tests {
         assert_eq!(recent.len(), 1);
         assert!(recent[0].as_str().unwrap().contains("project"));
 
+        let saf = json!({"kind":"saf","uri":"content://com.example.documents/tree/project","name":"手机项目"});
+        let recent = store.touch_recent_location(&saf).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0]["kind"], "saf");
+        assert_eq!(recent[0]["uri"], "content://com.example.documents/tree/project");
+        let renamed = json!({"kind":"saf","uri":"content://com.example.documents/tree/project","name":"同一个项目的新名称"});
+        let recent = store.touch_recent_location(&renamed).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0]["name"], "同一个项目的新名称");
+        let recent = store.remove_recent_value(&saf).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert!(recent[0].as_str().unwrap().contains("project"));
+
         store.update_permissions(&json!({
             "mode":"autonomous",
             "tool_settings":{"fs_delete":"deny","fs_write":"always"},

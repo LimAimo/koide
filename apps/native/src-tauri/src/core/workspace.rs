@@ -200,7 +200,6 @@ impl Workspace {
     pub fn location(&self) -> Value { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => json!({"kind":"local","path":x.root_path().to_string_lossy(),"name":x.info()["name"]}), WorkspaceBackend::Saf(x) => x.location() } }
     pub fn is_saf(&self) -> bool { matches!(&*self.lock().expect("workspace lock"), WorkspaceBackend::Saf(_)) }
     pub fn local_root_path(&self) -> Option<PathBuf> { match &*self.lock().ok()? { WorkspaceBackend::Local(x) => Some(x.root_path()), WorkspaceBackend::Saf(_) => None } }
-    pub fn root_path(&self) -> PathBuf { self.local_root_path().unwrap_or_default() }
     pub fn storage_key(&self) -> String { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.storage_key(), WorkspaceBackend::Saf(x) => x.storage_key() } }
     pub(crate) fn checkpoint_handle(&self) -> CheckpointStore { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.checkpoint_handle(), WorkspaceBackend::Saf(x) => x.checkpoint_handle() } }
     pub fn supports_git(&self) -> bool { !self.is_saf() }
@@ -1594,7 +1593,17 @@ impl SafWorkspace {
         if before.as_deref() == Some(data) {
             return Ok(Mutation{changed:false,result:json!({"path":rel,"revision":current,"changed":false}),event:json!({})});
         }
-        self.write_raw(&rel, data)?;
+        if let Err(error) = self.write_raw(&rel, data) {
+            match before.as_deref() {
+                Some(previous) => {
+                    let _ = self.write_raw(&rel, previous);
+                }
+                None => {
+                    let _ = self.app.saf().delete(&self.uri, &rel);
+                }
+            }
+            return Err(error);
+        }
         let after_rev = revision_of(Some(data));
         let kind = if before.is_some(){"modify"}else{"create"};
         Ok(Mutation{changed:true,result:json!({"path":rel,"revision":after_rev,"changed":true}),event:json!({
@@ -1663,7 +1672,7 @@ impl SafWorkspace {
         if self.exists(&rel)?{return Err(RuntimeError::new("ALREADY_EXISTS",format!("{rel} 已存在")));}
         match kind{
             "dir"|"folder"=>{self.app.saf().create(&self.uri,&rel,"dir").map_err(|e|RuntimeError::new("CREATE_FAILED",format!("{rel}: {e}")))?;Ok(Mutation{changed:true,result:json!({"path":rel,"type":"dir"}),event:json!({"kind":"create","path":rel,"before_text":null,"after_text":null,"before_rev":"absent","after_rev":"absent","actor":"user","task_id":null})})}
-            "file"=>{self.ensure_parent_dirs(&rel)?;self.app.saf().create(&self.uri,&rel,"file").map_err(|e|RuntimeError::new("CREATE_FAILED",format!("{rel}: {e}")))?;if !content.is_empty(){self.write_raw(&rel,content.as_bytes())?;}let rev=revision_of(Some(content.as_bytes()));Ok(Mutation{changed:true,result:json!({"path":rel,"revision":rev,"changed":true}),event:json!({"kind":"create","path":rel,"before_text":null,"after_text":event_text(Some(content.as_bytes())),"before_rev":"absent","after_rev":rev,"actor":"user","task_id":null})})}
+            "file"=>self.commit_bytes(&rel,content.as_bytes(),Some("absent"))
             _=>Err(RuntimeError::new("BAD_REQUEST","kind 只能是 file 或 dir"))
         }
     }
@@ -1723,9 +1732,29 @@ impl SafWorkspace {
     fn checkpoint_task(&self,id:&str)->Result<Value,RuntimeError>{self.checkpoints.load(id)}
 
     fn restore_checkpoint_state(&self,rel:&str,existed:bool,blob:Option<&str>)->Result<Option<Value>,RuntimeError>{
-        let stat=self.stat(rel)?;let current=if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)==Some("file"){Some(self.read_bytes_unbounded(rel)?)}else{None};
-        if existed{let blob=blob.ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","Checkpoint 缺少 blob"))?;let data=self.checkpoints.get_blob(blob)?;if current.as_deref()==Some(data.as_slice()){return Ok(None);}if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)!=Some("file"){return Err(RuntimeError::new("NOT_A_FILE",format!("{rel} 当前不是文件")));}self.write_raw(rel,&data)?;let kind=if current.is_some(){"modify"}else{"create"};return Ok(Some(json!({"kind":kind,"path":rel,"before_text":event_text(current.as_deref()),"after_text":event_text(Some(&data)),"before_rev":revision_of(current.as_deref()),"after_rev":revision_of(Some(&data)),"actor":"system","task_id":null})));}
-        if current.is_some(){let before=current.unwrap_or_default();let _=self.delete(rel)?;return Ok(Some(json!({"kind":"delete","path":rel,"before_text":event_text(Some(&before)),"after_text":null,"before_rev":revision_of(Some(&before)),"after_rev":"absent","actor":"system","task_id":null})));}Ok(None)
+        let stat=self.stat(rel)?;
+        let exists=stat.get("exists").and_then(Value::as_bool)==Some(true);
+        let is_file=stat.get("type").and_then(Value::as_str)==Some("file");
+        let current=if exists&&is_file{Some(self.read_bytes_unbounded(rel)?)}else{None};
+        if existed{
+            let blob=blob.ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","Checkpoint 缺少 blob"))?;
+            let data=self.checkpoints.get_blob(blob)?;
+            if current.as_deref()==Some(data.as_slice()){return Ok(None);}
+            if exists&&!is_file{return Err(RuntimeError::new("NOT_A_FILE",format!("{rel} 当前不是文件")));}
+            self.write_raw(rel,&data)?;
+            let kind=if current.is_some(){"modify"}else{"create"};
+            return Ok(Some(json!({"kind":kind,"path":rel,"before_text":event_text(current.as_deref()),"after_text":event_text(Some(&data)),"before_rev":revision_of(current.as_deref()),"after_rev":revision_of(Some(&data)),"actor":"system","task_id":null})));
+        }
+        if exists{
+            if is_file{
+                let before=current.unwrap_or_default();
+                let _=self.delete(rel)?;
+                return Ok(Some(json!({"kind":"delete","path":rel,"before_text":event_text(Some(&before)),"after_text":null,"before_rev":revision_of(Some(&before)),"after_rev":"absent","actor":"system","task_id":null})));
+            }
+            self.app.saf().delete(&self.uri,rel).map_err(|e|RuntimeError::new("DELETE_FAILED",format!("{rel}: {e}")))?;
+            return Ok(Some(json!({"kind":"delete","path":rel,"before_text":null,"after_text":null,"before_rev":"absent","after_rev":"absent","actor":"system","task_id":null})));
+        }
+        Ok(None)
     }
 
     fn checkpoint_diff(&self,task_id:&str,seq:usize)->Result<Value,RuntimeError>{

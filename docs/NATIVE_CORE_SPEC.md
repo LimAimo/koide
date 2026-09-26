@@ -70,7 +70,8 @@ BridgeRuntimeAdapter ── 旧 Python Bridge
 ```js
 runtime.files.read({ path })
 runtime.files.write({ path, content, base_revision })
-runtime.workspace.open({ path })
+runtime.workspace.open({ path }) // 兼容 LocalFS
+runtime.workspace.open({ location: { kind: "saf", uri, name } }) // Android SAF
 runtime.git.status()
 runtime.terminal.open({ cols, rows })
 runtime.agent.start({...})

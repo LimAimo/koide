@@ -77,6 +77,10 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
       val uri = result.data?.data ?: throw IllegalStateException("系统没有返回目录 URI")
       val takeFlags = (result.data?.flags ?: 0) and
         (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+      val requiredFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+      if ((takeFlags and requiredFlags) != requiredFlags) {
+        throw IllegalStateException("所选目录没有授予完整读写权限")
+      }
       resolver.takePersistableUriPermission(uri, takeFlags)
       val root = rootDocument(uri)
       val out = JSObject()
@@ -179,12 +183,7 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
       target = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name)
         ?: throw IllegalStateException("无法创建 $path")
     }
-    val mode = if ((queryLong(target, DocumentsContract.Document.COLUMN_FLAGS) ?: 0L) and
-      DocumentsContract.Document.FLAG_SUPPORTS_WRITE.toLong() != 0L) "rwt" else "w"
-    resolver.openOutputStream(target, mode)?.use { output ->
-      output.write(bytes)
-      output.flush()
-    } ?: throw IllegalStateException("无法写入 $path")
+    writeBytes(target, bytes, path)
     statObject(target)
   }
 
@@ -271,6 +270,23 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
     try { invoke.resolve(body()) } catch (ex: Exception) { invoke.reject(ex.message ?: "SAF 操作失败") }
   }
 
+
+  private fun writeBytes(uri: Uri, bytes: ByteArray, path: String) {
+    var lastError: Exception? = null
+    for (mode in arrayOf("rwt", "wt", "w")) {
+      try {
+        resolver.openOutputStream(uri, mode)?.use { output ->
+          output.write(bytes)
+          output.flush()
+          return
+        }
+      } catch (ex: Exception) {
+        lastError = ex
+      }
+    }
+    throw IllegalStateException("无法写入 $path", lastError)
+  }
+
   private fun cleanPath(raw: String): String {
     val normalized = raw.replace('\\', '/').trim('/').ifEmpty { "." }
     if (normalized == ".") return normalized
@@ -305,7 +321,7 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
     resolver.query(
       children,
       arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-      "${DocumentsContract.Document.COLUMN_DISPLAY_NAME}=?", arrayOf(name), null
+      null, null, null
     )?.use { cursor ->
       val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
       val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)

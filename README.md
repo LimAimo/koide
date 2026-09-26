@@ -1,7 +1,7 @@
 # Diffusion IDE
 
 > **0.8.0-alpha.7 · Native 功能等价收口（开发中）**  
-> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。当前 Runtime API 72 个业务方法中已有 69 个接入 NativeCore；Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit/agent 四种模式、PermissionEngine、Instructions、Git、Terminal/Process/Ports、Export 与 External Watcher 已进入本地 Native 主链。Alpha7 已通过 Native-only Rust tests、Windows x64 构建、Android ARM64 APK 构建与签名验证，并新增 Runtime dispatch parity CI。当前真正的硬缺口集中在 Android SAF 原地工作区、Android interactive PTY、Rust Remote Runtime / pairing、Provider hard-cancel / 全协议流式最终等价和最终实机回归。完整门禁见 `docs/NATIVE_PARITY_AUDIT.md`。
+> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。当前 Runtime API 72 个业务方法已经做到 **72 / 72 Native dispatch 覆盖**；这不代表 Python 删除线已经通过——`devices.pair_code` 仍明确返回 `LAN_OFF`，Remote Runtime 等语义门禁仍未完成。Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit/agent 四种模式、PermissionEngine、Instructions、Git、Terminal/Process/Ports、Export 与 External Watcher 已进入本地 Native 主链。Android SAF 原地 WorkspaceBackend 也已进入源码：系统目录选择器、持久 URI 授权、DocumentsContract I/O、revision/conflict、search/glob、Checkpoint/Trash、recent 和 Git/Terminal capability 降级均已接线；当前还需要 Android CI 与真实设备 smoke 才能把 SAF 最终门禁标为通过。完整门禁见 `docs/NATIVE_PARITY_AUDIT.md`。
 >
 > **这个 alpha 仍然没有完成 Python 删除线。** 旧 Bridge 继续作为迁移期兼容实现和行为基准；在 `docs/NATIVE_PARITY_AUDIT.md` 的硬门禁全部通过前不会删除。原生构建说明见 `docs/NATIVE_BUILD.md`。
 
@@ -97,8 +97,8 @@ Git 面板（改动、差异、暂存、提交、分支、拉取推送、追溯�
 `bash tests/run-all.sh` 或 `pnpm test`（只有测试需要 Node 20+）。
 
 ## 已知限制
-- Android / Windows 原生安装包已经由 CI 真实构建并验证产物结构；真实设备上的交互、SAF、终端与大项目体验仍需要持续实机回归。
+- Android / Windows 原生安装包已有成功 CI 基线；本次新增的 SAF 原地 WorkspaceBackend 仍需当前提交的 Android CI 和真实设备 smoke 验证，不能仅凭源码存在宣称实机完成。
 - CodeMirror 6 适配器需要联网构建，编写时没有条件在真实浏览器里运行，属于「未经验证」。
 - 内置编辑器没有代码折叠（CodeMirror 版有，但未经验证）；「块」识别是按缩进和括号推断的，不是真正的语法树。
-- Native Terminal / PTY 仍在迁移；迁移完成前，旧 Bridge 的终端能力仍是行为基线。
+- Windows Native PTY 已接通；Android interactive PTY 仍在迁移，SAF 工作区也会明确禁用依赖普通 cwd 的 Terminal/Git 能力，不伪装支持。
 - 字体使用系统字体，不会下载任何东西。

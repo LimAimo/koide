@@ -1,6 +1,6 @@
 # Android SAF WorkspaceBackend 设计
 
-状态：实现前设计门禁。目标是让 Android 能**原地**打开用户通过 Storage Access Framework 授权的目录，而不是复制到 Diffusion 私有目录后编辑。
+状态：**源码实现完成，等待当前提交的 Android CI 与真实设备 smoke。** 目标仍是让 Android **原地**打开用户通过 Storage Access Framework 授权的目录，而不是复制到 Diffusion 私有目录后编辑。
 
 ## 原则
 
@@ -99,3 +99,19 @@ Trash 对 SAF 不依赖系统回收站：
 - Agent edit/checkpoint/revert 对 SAF 生效。
 - LocalFs Windows/Android 私有 workspace 回归测试全绿。
 - Git/Terminal 对 SAF workspace 显示明确 capability，不报误导性“空仓库/空终端”。
+
+
+## alpha.7 实现记录（2026-09-26）
+
+当前源码已经落地：
+
+- `apps/native/src-tauri/plugins/saf/`：独立 Tauri Android plugin，Kotlin 层只提供 SAF I/O 原语；
+- `WorkspaceBackend::Local / Saf`：Rust Core 统一承载 revision、conflict、Checkpoint、Trash 与 Agent 文件语义；
+- `workspace.open` 支持 `{kind:"saf", uri, name}`，Android 欢迎页可直接唤起系统目录选择器；
+- recent 保存稳定 tree URI + display name，重启后会重新验证持久授权；
+- SAF 工作区禁用 Git / Terminal cwd，并在 UI 上明确能力降级；
+- SAF 没有依赖系统回收站，删除前先 stage 到 Diffusion 私有 Trash；
+- Agent 项目指令从 backend 读取 `AGENTS.md`，不再假定项目一定有 `PathBuf`；
+- 写入失败会尽力恢复原内容，新建文件写失败会清理半成品；DocumentsProvider 的写模式使用兼容 fallback。
+
+尚未宣称完成的部分只有验证门禁：当前工作环境没有 Rust/Android toolchain，因此必须由 `native-alpha7` CI 编译 Rust/Kotlin，再由真实 Android 设备跑“选择 SAF 项目 → 编辑 → Agent → Checkpoint / revert → 重启后重新打开”的 smoke。

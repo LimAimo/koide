@@ -15,7 +15,7 @@
 
 ## 2. 当前真实完成度
 
-Runtime API 共 72 个业务方法。当前 NativeCore 已有 **69 / 72** 真实 dispatch，并有 CI parity gate 防止以后漏接。
+Runtime API 共 72 个业务方法。当前 NativeCore 已有 **72 / 72 dispatch 路由覆盖**，`node scripts/check-native-parity.mjs` 当前通过；但 `devices.pair_code` 仍明确返回 `LAN_OFF`，所以不能把 dispatch 全覆盖写成 Remote Runtime 已等价。
 
 已经进入 Native 主链：
 - Workspace / Files / Revision / Patch / transactional large write；
@@ -41,7 +41,8 @@ Runtime API 共 72 个业务方法。当前 NativeCore 已有 **69 / 72** 真实
 - External filesystem watcher；
 - OpenAI-compatible SSE streaming / reasoning delta / MiniMax think split / streamed tool-call aggregation；
 - Device token hashing/revoke 的 Rust 存储基础；
-- Native-only Rust test gate。
+- Native-only Rust test gate；
+- Android SAF 原地 WorkspaceBackend 源码：独立 Tauri Android plugin、持久 tree URI、DocumentsContract I/O、Local/SAF Workspace 抽象、revision/conflict、search/glob、Checkpoint/Trash、recent、Agent `AGENTS.md`、Git/Terminal capability 降级。
 
 ## 3. 已验证构建
 
@@ -59,21 +60,23 @@ CI 文件：`.github/workflows/native-alpha7.yml`
 
 ## 4. 仍未完成的硬缺口
 
-### A. Android SAF 原地 WorkspaceBackend —— 最高优先级
-必须做真正的 Storage Access Framework，而不是把目录复制进 app 私有目录后冒充“原地编辑”。
+### A. Android SAF 原地 WorkspaceBackend —— 源码已完成，等待验证
 
-需要：
+本次交接点之后已经实现：
 1. 系统目录选择器返回 tree URI；
-2. `takePersistableUriPermission`；
-3. 持久化授权项目；
-4. DocumentsContract / DocumentFile backend；
-5. 原地 tree/list/read/write/create/delete/rename/copy；
-6. hash / revision / base_revision conflict；
-7. search / glob；
-8. Checkpoint blob 与 SAF 文件联动；
-9. Diffusion-managed recovery / Trash 语义；
-10. Git / Terminal 对 content URI 的能力检测与明确降级；
-11. UI 不再把“导入私有工作区”作为 Android 唯一打开方式。
+2. `takePersistableUriPermission` 并要求完整读写授权；
+3. recent 持久化 tree URI + display name；
+4. 独立 Tauri Android plugin，Kotlin 只承载 `ContentResolver` / `DocumentsContract` I/O；
+5. Rust `WorkspaceBackend::Local / Saf`；
+6. 原地 tree/list/read/write/create/delete/rename/copy；
+7. hash / revision / base_revision conflict；
+8. search / glob + transactional large write；
+9. Checkpoint blob 与 SAF 文件联动；
+10. Diffusion-managed Trash / restore；
+11. Git / Terminal 对 content URI 的 capability=false 明确降级；
+12. Android UI 可直接“从手机选择项目文件夹”，旧私有 workspace import 只作为兼容入口。
+
+**还没有完成的是门禁验证，不是源码入口：** 当前执行环境没有 Rust/Android toolchain，需要由 `native-alpha7` CI 编译本次提交，并在真实 Android 设备完成“SAF 打开 → 编辑 → Agent → Checkpoint/revert → 重启后 recent 重开”。在这两个验证完成前，审计文件仍把 SAF 标为 `[~]`。
 
 ### B. Android interactive PTY
 当前 Android 支持一次性 `/system/bin/sh` 命令，但 interactive `terminal.open/input/resize/history` 仍明确返回 `NO_PTY`。
@@ -140,16 +143,17 @@ OpenAI-compatible SSE 已通过 Android/Windows CI，但：
 
 ## 7. 推荐继续顺序
 
-1. Android SAF WorkspaceBackend；
-2. Android interactive PTY；
-3. Provider hard-cancel + Anthropic/Gemini streaming parity；
-4. Rust Remote Runtime / pairing；
-5. Native integration + UI + 实机 smoke；
-6. 再跑 Runtime 72/72 parity；
-7. Android + Windows 全绿；
-8. 最后才删除 Python；
-9. 删除后再跑一次完整 Native-only 门禁；
-10. 更新架构图、README、MIGRATION_STATUS，并决定是否合并 main / 创建 alpha prerelease。
+1. 先跑当前 SAF 提交的 Android/Windows CI，并修到绿；
+2. Android SAF 真实设备 smoke；
+3. Android interactive PTY；
+4. Provider hard-cancel + Anthropic/Gemini streaming parity；
+5. Rust Remote Runtime / pairing；
+6. Native integration + UI + 实机 smoke；
+7. 再跑 Runtime 72/72 parity；
+8. Android + Windows 全绿；
+9. 最后才删除 Python；
+10. 删除后再跑一次完整 Native-only 门禁；
+11. 更新架构图、README、MIGRATION_STATUS，并决定是否合并 main / 创建 alpha prerelease。
 
 ## 8. 当前分支策略
 
@@ -172,4 +176,4 @@ OpenAI-compatible SSE 已通过 Android/Windows CI，但：
 
 ## 10. 一句话状态
 
-**Diffusion IDE 已经从“Native 壳 + 文件核心”推进到“绝大多数本地 IDE 能力都在 Rust 主链中”，但 Android SAF、Android interactive PTY、Rust Remote Runtime 和 Provider hard-cancel/全协议流式等价仍是真正的最后硬骨头；Python Bridge 现在仍是行为基线，不能删。**
+**Diffusion IDE 的 Android SAF 原地 WorkspaceBackend 已进入源码，Native dispatch 也达到 72/72；但 SAF 仍需当前提交的 CI / 实机验证，Android interactive PTY、Rust Remote Runtime 和 Provider hard-cancel/全协议流式等价仍是真正的最后硬骨头；Python Bridge 现在仍是行为基线，不能删。**

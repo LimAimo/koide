@@ -27,29 +27,31 @@
 - [x] Android + Windows 双平台成功后自动创建 prerelease；
 - [x] alpha.6 Build #33 已真实产出 APK、portable EXE 与 NSIS installer。
 
-### alpha.7 当前正在完成
+### alpha.7 当前状态
 
-- [ ] PermissionEngine 全量行为对齐：restricted/manual/ai/autonomous + per-tool + rules + AI reviewer；
-- [ ] fs_glob / fs_multi_read；
-- [ ] 完整 agent 模式：shell_run / terminal_read / web_fetch；
-- [ ] limits / repair / web_search / zero-tool incomplete protection；
-- [ ] Provider streaming / reasoning delta / 可取消请求；
-- [ ] Terminal / Process / Ports；
-- [ ] fs.export；
-- [ ] 外部磁盘 watcher；
-- [ ] Android SAF 原地 WorkspaceBackend；
-- [ ] Remote Runtime（可选，不得成为本地模式依赖）；
-- [ ] secrets 平台安全加固；
-- [ ] Native-only 行为测试与 UI 回归补齐。
+- [x] PermissionEngine：restricted/manual/ai/autonomous + per-tool + rules + AI reviewer；
+- [x] fs_glob / fs_multi_read；
+- [x] 完整 agent 模式：shell_run / terminal_read / web_fetch；
+- [x] limits / repair / web_search / zero-tool incomplete protection；
+- [~] Provider streaming / reasoning delta / 可取消请求：OpenAI-compatible 已推进，Anthropic/Gemini 与沉默连接 hard-cancel 仍需收口；
+- [x] Terminal / Process / Ports（Windows PTY；Android interactive PTY 仍是单独硬缺口）；
+- [x] fs.export；
+- [x] 外部磁盘 watcher（LocalFS）；
+- [~] Android SAF 原地 WorkspaceBackend：源码实现完成，等待当前提交 Android CI / 真实设备 smoke；
+- [ ] Android interactive PTY；
+- [ ] Rust Remote Runtime / pairing（可选，不得成为本地模式依赖）；
+- [~] secrets 平台安全加固：Unix / Android 0600 已有，Windows credential store 属可选加强；
+- [x] Native-only 行为测试与 Web/UI 回归已有通过基线；本次 SAF 变更需 CI 重新验证 Rust/Android。
 
 ### Python 删除硬门禁
 
-当前 Runtime API 共 72 个业务方法。最近一次完整审计时：
+当前 Runtime API 共 72 个业务方法：
 - Python Bridge：72 / 72 有 RPC 实现；
-- NativeCore：仍存在未接 dispatch 与语义缩水项；
+- NativeCore：72 / 72 dispatch 路由已覆盖，parity gate 当前通过；
+- 但 `devices.pair_code` 等仍存在明确的语义缺口，dispatch 全覆盖不能替代功能等价审计；
 - 详细逐项状态以 `docs/NATIVE_PARITY_AUDIT.md` 为准。
 
-只有该审计文件 F 节全部通过，才允许：
+只有该审计文件 I 节最终硬门禁全部通过，才允许：
 1. 删除 `bridge/`；
 2. 删除 `pyproject.toml`；
 3. 迁移/删除 Bridge tests；
@@ -62,7 +64,7 @@
 - GitHub Actions 已可从源码构建 ARM64 Tauri APK；
 - APK 会在 Release 前执行 `apksigner verify`；
 - alpha.6 Build #33 已成功；
-- 当前最终产品缺口不是“能否生成 APK”，而是 SAF、Android Terminal、完整 Native Agent 等运行时能力。
+- 当前最终产品缺口不是“能否生成 APK”；SAF 源码已接线但需要当前提交重新编译与实机验证，Android interactive Terminal / Remote Runtime / Provider 最终 parity 仍未完成。
 
 ### Windows
 - GitHub Actions 已可构建 Windows x64 portable EXE 与 NSIS installer；
