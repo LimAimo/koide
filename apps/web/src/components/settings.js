@@ -25,10 +25,21 @@ function switchCtl(value, onChange, label) {
   return h("label", { class: "switch" }, input, h("span", { class: "track" }), h("span", { class: "thumb" }));
 }
 function selectCtl(options, value, onChange, label) {
-  const sel = h("select", { class: "text-field", "aria-label": label }, options.map(([v, l]) => h("option", { value: v }, l)));
-  sel.value = value ?? "";
-  sel.addEventListener("change", () => onChange(sel.value));
-  return sel;
+  let current = String(value ?? "");
+  const button = h("button", { class: "select-button", type: "button", "aria-label": label, "aria-haspopup": "menu" });
+  const paint = () => {
+    const found = options.find(([v]) => String(v) === current);
+    clear(button);
+    button.append(h("span", null, found?.[1] ?? current), icon("chevron", 18));
+  };
+  button.addEventListener("click", () => openMenu(label, options.map(([v, text]) => ({
+    label: text,
+    icon: String(v) === current ? "check" : null,
+    onClick: () => { current = String(v); paint(); onChange(current); },
+  }))));
+  Object.defineProperty(button, "value", { get: () => current, set: (v) => { current = String(v ?? ""); paint(); } });
+  paint();
+  return button;
 }
 function segmented(options, value, onChange) {
   const wrap = h("div", { class: "segmented", role: "group" });
@@ -73,7 +84,7 @@ function editorSection() {
   const s = settingsStore.get();
   return section("editor", "编辑器", [
     row({ label: "字号", stack: true, ctl: slider({ min: 10, max: 22, step: 1, value: s.fontSize, label: "字号", onInput: (v) => { saveSettings({ fontSize: v }); applyTheme(); }, fmt: (v) => `${v}px` }) }),
-    row({ label: "CodeMirror 6", desc: "Diffusion 的正式编辑器。桌面与 Android 原生构建会自动打包，加载失败时会直接显示错误而不是静默降级。", keywords: "codemirror cm6 内核 折叠 补全" }),
+    row({ label: "CodeMirror 6", desc: "Koide 的正式编辑器。桌面与 Android 原生构建会自动打包，加载失败时会直接显示错误而不是静默降级。", keywords: "codemirror cm6 内核 折叠 补全" }),
     row({ label: "跟随 AI 编辑", desc: "AI 创建或修改文件时，自动打开对应文件并定位到修改位置。", ctl: switchCtl(s.followAgentEdits !== false, (v) => saveSettings({ followAgentEdits: v }), "跟随 AI 编辑"), keywords: "AI 智能体 自动打开 定位 动画 follow agent edit" }),
     row({ label: "显示隐藏文件", desc: "在文件树里显示 .git、.DS_Store 等默认隐藏项；不会改变搜索范围。", ctl: switchCtl(s.showHiddenFiles, (v) => saveSettings({ showHiddenFiles: v }), "显示隐藏文件"), keywords: "隐藏文件 .git hidden files" }),
     row({ label: "缩进宽度", ctl: selectCtl([["2", "2 个空格"], ["4", "4 个空格"], ["8", "8 个空格"]], String(s.tabWidth), (v) => { saveSettings({ tabWidth: Number(v) }); applyTheme(); }, "缩进宽度") }),
