@@ -40,8 +40,8 @@
 
 ### 未迁（3 / 72）
 - [ ] `devices.pair_code`
-- [ ] `devices.list`
-- [ ] `devices.revoke`
+- [x] `devices.list`
+- [x] `devices.revoke`
 
 > Native 设置页已经把 Remote 明确隔离为可选模块，因此这 3 项不是本机 IDE 的使用阻塞项；但如果最终删除 Python Bridge，就必须先提供 Rust Remote Runtime / 配对替代，或正式从产品中移除远程能力并迁移 API/UI。
 
@@ -200,8 +200,8 @@
 - [ ] Rust Remote Runtime 替代 Python LAN/Devices
 - [ ] Bridge 行为测试迁为 Rust / Native integration tests
 - [ ] Web/UI regression 全绿
-- [ ] Android ARM64 CI 全绿 + APK 签名通过
-- [ ] Windows x64 CI 全绿
+- [x] Android ARM64 CI 已成功构建并验证 APK 签名（仍需 SAF 功能完成后再做最终门禁）
+- [x] Windows x64 CI 已成功构建
 - [ ] Native-only smoke：完全不启动 Python，覆盖打开项目 → 编辑 → Agent → Checkpoint → Git → Terminal → Export
 - [ ] Android Native-only smoke：SAF 打开项目 → 编辑 → Agent → Checkpoint
 - [ ] 最后代码搜索：产品 Native 路径无 Python / localhost Bridge 必需假设
