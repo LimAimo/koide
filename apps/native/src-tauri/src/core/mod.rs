@@ -292,6 +292,10 @@ impl NativeCore {
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
             ),
+            "fs.export" => self.ws()?.export_zip(
+                params.get("path").and_then(Value::as_str).unwrap_or("."),
+                &self.data_dir,
+            ),
             "fs.search" => self.ws()?.search(
                 req_str(&params, "query")?,
                 params
@@ -576,7 +580,7 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit/agent)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.export", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit/agent)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
             },
             "data_dir": self.data_dir
         })
