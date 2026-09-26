@@ -278,7 +278,8 @@ impl ProfileStore {
 
 fn client() -> Result<Client, RuntimeError> {
     Client::builder()
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(20))
+        .read_timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| provider_error(format!("无法创建网络客户端：{e}")))
 }
@@ -462,9 +463,8 @@ pub fn test_profile(profile: &Value, api_key: Option<&str>) -> Result<String, Ru
 }
 
 
-/// One complete non-streaming chat turn used by the first Native Agent milestone.
-/// Tool calling is intentionally not accepted here yet: alpha.5 initially exposes only the honest
-/// "chat" mode, while read/edit/agent stay disabled until their native tool loop is migrated.
+/// Complete chat helper used for profile tests and approval review.
+/// Interactive Agent turns use the streaming path below so stop/reasoning/tool deltas remain responsive.
 pub fn chat_complete(
     profile: &Value,
     api_key: Option<&str>,
