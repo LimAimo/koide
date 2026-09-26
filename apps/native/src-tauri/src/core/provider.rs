@@ -1084,6 +1084,89 @@ pub enum StreamEvent {
     Reasoning(String),
 }
 
+
+
+pub fn anthropic_stream_turn<F>(
+    profile: &Value,
+    api_key: Option<&str>,
+    messages: &[Value],
+    tools: &[Value],
+    reasoning: &str,
+    cancel: &AtomicBool,
+    mut on_event: F,
+) -> Result<ProviderTurn, RuntimeError>
+where
+    F: FnMut(StreamEvent),
+{
+    let endpoint=profile.get("endpoint").and_then(Value::as_str).filter(|s|!s.is_empty())
+        .ok_or_else(||RuntimeError::new("BAD_PROFILE","请先填写接口地址"))?;
+    let model=profile.get("model").and_then(Value::as_str).filter(|s|!s.is_empty())
+        .ok_or_else(||RuntimeError::new("BAD_PROFILE","请先填写模型 ID"))?;
+    let(system,request_messages)=anthropic_request_messages(messages);
+    let mut body=json!({
+        "model":model,
+        "max_tokens":profile.pointer("/sampling/max_tokens").and_then(Value::as_u64).unwrap_or(8192),
+        "messages":request_messages,
+        "stream":true,
+        "tools":tools.iter().filter_map(|tool|{
+            let function=tool.get("function")?;
+            Some(json!({"name":function.get("name")?,"description":function.get("description").cloned().unwrap_or(Value::String(String::new())),"input_schema":function.get("parameters").cloned().unwrap_or_else(||json!({"type":"object"}))}))
+        }).collect::<Vec<_>>()
+    });
+    if let Some(system)=system{body["system"]=Value::String(system);}
+    if reasoning=="on"{body["thinking"]=json!({"type":"adaptive"});}
+    if let Some(sampling)=profile.get("sampling").and_then(Value::as_object){
+        for key in ["temperature","top_p"]{if let Some(v)=sampling.get(key){if !v.is_null(){body[key]=v.clone();}}}
+    }
+    if let Some(extra)=profile.get("extra_body").and_then(Value::as_object){for(k,v)in extra{body[k]=v.clone();}}
+    let resp=add_headers(client()?.post(format!("{}/messages",endpoint.trim_end_matches('/'))),profile,api_key,true)
+        .json(&body).send().map_err(|e|provider_error(format!("模型请求失败：{e}")))?;
+    if !resp.status().is_success(){return Err(response_error(resp));}
+    let mut reader=BufReader::new(resp);
+    let mut line=String::new();
+    let mut text=String::new();
+    let mut calls:Vec<ToolCall>=Vec::new();
+    let mut active_tool:Option<(usize,String,String,String)>=None;
+    loop{
+        if cancel.load(Ordering::SeqCst){return Err(RuntimeError::new("STOPPED","已由你停止"));}
+        line.clear();
+        let n=reader.read_line(&mut line).map_err(|e|provider_error(format!("读取 Anthropic 流失败：{e}")))?;
+        if n==0{break;}
+        let raw=line.trim();
+        let Some(data)=raw.strip_prefix("data:")else{continue;};
+        let Ok(event)=serde_json::from_str::<Value>(data.trim())else{continue;};
+        match event.get("type").and_then(Value::as_str){
+            Some("content_block_start")=>{
+                let idx=event.get("index").and_then(Value::as_u64).unwrap_or(0)as usize;
+                if event.pointer("/content_block/type").and_then(Value::as_str)==Some("tool_use"){
+                    active_tool=Some((idx,
+                        event.pointer("/content_block/id").and_then(Value::as_str).unwrap_or("").to_owned(),
+                        event.pointer("/content_block/name").and_then(Value::as_str).unwrap_or("").to_owned(),
+                        String::new()));
+                }
+            }
+            Some("content_block_delta")=>{
+                match event.pointer("/delta/type").and_then(Value::as_str){
+                    Some("text_delta")=>if let Some(piece)=event.pointer("/delta/text").and_then(Value::as_str){text.push_str(piece);on_event(StreamEvent::Text(piece.to_owned()));},
+                    Some("thinking_delta")=>if let Some(piece)=event.pointer("/delta/thinking").and_then(Value::as_str){on_event(StreamEvent::Reasoning(piece.to_owned()));},
+                    Some("input_json_delta")=>if let(Some((idx,id,name,args)),Some(piece))=(active_tool.as_mut(),event.pointer("/delta/partial_json").and_then(Value::as_str)){let _=idx;let _=id;let _=name;args.push_str(piece);},
+                    _=>{}
+                }
+            }
+            Some("content_block_stop")=>{
+                let idx=event.get("index").and_then(Value::as_u64).unwrap_or(usize::MAX as u64)as usize;
+                if active_tool.as_ref().is_some_and(|x|x.0==idx){
+                    if let Some((_,id,name,args))=active_tool.take(){if !name.is_empty(){calls.push(ToolCall{id:if id.is_empty(){unique_id("call-")}else{id},name,arguments:parse_json_object(&args)});}}
+                }
+            }
+            Some("error")=>return Err(provider_error(event.pointer("/error/message").and_then(Value::as_str).unwrap_or("Anthropic 流返回错误"))),
+            _=>{}
+        }
+    }
+    let assistant_message=json!({"role":"assistant","content":text,"tool_calls":canonical_tool_calls(&calls)});
+    Ok(ProviderTurn{text,tool_calls:calls,assistant_message})
+}
+
 pub fn openai_stream_turn<F>(
     profile: &Value,
     api_key: Option<&str>,
