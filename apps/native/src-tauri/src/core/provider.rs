@@ -1086,6 +1086,69 @@ pub enum StreamEvent {
 
 
 
+
+
+pub fn gemini_stream_turn<F>(
+    profile:&Value,
+    api_key:Option<&str>,
+    messages:&[Value],
+    tools:&[Value],
+    reasoning:&str,
+    cancel:&AtomicBool,
+    mut on_event:F,
+)->Result<ProviderTurn,RuntimeError>
+where F:FnMut(StreamEvent)
+{
+    let endpoint=profile.get("endpoint").and_then(Value::as_str).filter(|s|!s.is_empty()).ok_or_else(||RuntimeError::new("BAD_PROFILE","请先填写接口地址"))?;
+    let model=profile.get("model").and_then(Value::as_str).filter(|s|!s.is_empty()).ok_or_else(||RuntimeError::new("BAD_PROFILE","请先填写模型 ID"))?;
+    let(system,contents)=gemini_request(messages);
+    let mut body=json!({
+        "contents":contents,
+        "tools":[{"functionDeclarations":tools.iter().filter_map(|tool|{
+            let f=tool.get("function")?;
+            Some(json!({"name":f.get("name")?,"description":f.get("description").cloned().unwrap_or(Value::String(String::new())),"parameters":f.get("parameters").cloned().unwrap_or_else(||json!({"type":"object"}))}))
+        }).collect::<Vec<_>>()}]
+    });
+    if let Some(system)=system{body["systemInstruction"]=json!({"parts":[{"text":system}]});}
+    if let Some(sampling)=profile.get("sampling").and_then(Value::as_object){
+        let mut config=Map::new();
+        for(key,out)in[("temperature","temperature"),("top_p","topP"),("max_tokens","maxOutputTokens")]{
+            if let Some(v)=sampling.get(key){if !v.is_null(){config.insert(out.into(),v.clone());}}
+        }
+        if reasoning=="on"{config.insert("thinkingConfig".into(),json!({"includeThoughts":true}));}
+        if !config.is_empty(){body["generationConfig"]=Value::Object(config);}
+    }else if reasoning=="on"{body["generationConfig"]=json!({"thinkingConfig":{"includeThoughts":true}});}
+    if let Some(extra)=profile.get("extra_body").and_then(Value::as_object){for(k,v)in extra{body[k]=v.clone();}}
+    let url=format!("{}/models/{}:streamGenerateContent?alt=sse",endpoint.trim_end_matches('/'),model.strip_prefix("models/").unwrap_or(model));
+    let resp=add_headers(client()?.post(url),profile,api_key,true).json(&body).send().map_err(|e|provider_error(format!("模型请求失败：{e}")))?;
+    if !resp.status().is_success(){return Err(response_error(resp));}
+    let mut reader=BufReader::new(resp);
+    let mut line=String::new();
+    let mut text=String::new();
+    let mut calls=Vec::new();
+    loop{
+        if cancel.load(Ordering::SeqCst){return Err(RuntimeError::new("STOPPED","已由你停止"));}
+        line.clear();
+        let n=reader.read_line(&mut line).map_err(|e|provider_error(format!("读取 Gemini 流失败：{e}")))?;
+        if n==0{break;}
+        let raw=line.trim();
+        let Some(data)=raw.strip_prefix("data:")else{continue;};
+        let Ok(chunk)=serde_json::from_str::<Value>(data.trim())else{continue;};
+        for part in chunk.pointer("/candidates/0/content/parts").and_then(Value::as_array).into_iter().flatten(){
+            if let Some(piece)=part.get("text").and_then(Value::as_str){
+                if part.get("thought").and_then(Value::as_bool)==Some(true){on_event(StreamEvent::Reasoning(piece.to_owned()));}
+                else{text.push_str(piece);on_event(StreamEvent::Text(piece.to_owned()));}
+            }
+            if let Some(fc)=part.get("functionCall").and_then(Value::as_object){
+                let name=fc.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+                if !name.is_empty(){calls.push(ToolCall{id:unique_id("call-"),name,arguments:fc.get("args").cloned().filter(Value::is_object).unwrap_or_else(||json!({}))});}
+            }
+        }
+    }
+    let assistant_message=json!({"role":"assistant","content":text,"tool_calls":canonical_tool_calls(&calls)});
+    Ok(ProviderTurn{text,tool_calls:calls,assistant_message})
+}
+
 pub fn anthropic_stream_turn<F>(
     profile: &Value,
     api_key: Option<&str>,
