@@ -1,4 +1,4 @@
-// Diffusion IDE entry point.
+// Koide entry point.
 
 import { h, icon, iconButton, toast } from "./components/dom.js";
 import { createCapsule } from "./components/status-capsule.js";
@@ -17,6 +17,7 @@ import { runtime, state, events, openFile, initConnection, connectManual, goHome
 import { pairFromLocation } from "./services/pairing.js";
 import { settingsStore, saveSettings, applyTheme } from "./services/store.js";
 import { loadServedPacks } from "./animations/diffusion/packs.js";
+import { installAndroidNativeShell } from "./services/android-native-ui.js";
 
 // Native shells should behave like apps, not zoomable web pages.
 if (runtime.kind === "native") {
@@ -78,7 +79,7 @@ function boot() {
   welcome.style.cssText = "position:absolute;inset:0;z-index:15;background:var(--surface)";
 
   // ---- top bar ---------------------------------------------------------------------------------------------------------
-  const title = h("div", { class: "title" }, "Diffusion");
+  const title = h("div", { class: "title" }, "Koide");
   async function backHome() {
     const dirty = state.get().tabs.filter((t) => t.dirty);
     if (dirty.length && !(await confirmDialog({ title: "返回首页？", message: `有 ${dirty.length} 个文件的修改还没保存，返回首页会丢掉这些修改。`, confirmLabel: "仍然返回", danger: true }))) return;
@@ -109,9 +110,20 @@ function boot() {
     onCloseAI: () => { if (settingsStore.get().aiVisible) saveSettings({ aiVisible: false }); },
   });
 
+  installAndroidNativeShell({
+    onFiles: () => layout.openDrawer(),
+    onAI: () => {
+      const show = !settingsStore.get().aiVisible;
+      saveSettings({ aiVisible: show });
+      if (show) requestAnimationFrame(() => layout.openSheetHalf());
+      else layout.closeSheet();
+    },
+    onSettings: () => openSettings(),
+  });
+
   state.subscribe((s) => {
     const ws = s.workspace;
-    title.textContent = ws ? ws.name : "Diffusion";
+    title.textContent = ws ? ws.name : "Koide";
     filesName.textContent = ws ? ws.name : "Files";
     app.classList.toggle("no-ws", !ws);
     homeBtn.hidden = !ws && !s.tabs.length;                          // 项目里或草稿本里都能一键回到首页
@@ -120,8 +132,8 @@ function boot() {
     const canTerminal = ws?.capabilities?.terminal_cwd !== false;
     gitBtn.disabled = !!ws && !canGit;
     termBtn.disabled = !!ws && !canTerminal;
-    gitBtn.title = !canGit ? "Android SAF 原地项目不提供 Git；复制到 Diffusion 私有工作区后可用" : (ws && s.git.is_repo ? `Git：${s.git.branch}` : "Git");
-    termBtn.title = !canTerminal ? "Android SAF 原地项目不能把系统终端 cwd 设为该目录；复制到 Diffusion 私有工作区后可用" : "显示或隐藏终端";
+    gitBtn.title = !canGit ? "Android SAF 原地项目不提供 Git；复制到 Koide 私有工作区后可用" : (ws && s.git.is_repo ? `Git：${s.git.branch}` : "Git");
+    termBtn.title = !canTerminal ? "Android SAF 原地项目不能把系统终端 cwd 设为该目录；复制到 Koide 私有工作区后可用" : "显示或隐藏终端";
   });
   let lastWs = null;
   state.subscribe((s) => {
