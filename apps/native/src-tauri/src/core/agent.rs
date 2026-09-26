@@ -2,7 +2,8 @@ use crate::core::checkpoint::CheckpointStore;
 use crate::core::conversation::ConversationStore;
 use crate::core::id::unique_id;
 use crate::core::policy::{check_read_path, check_write_path};
-use crate::core::provider::{agent_turn, chat_complete, ToolCall};
+use crate::core::provider::{agent_turn, chat_complete, ProfileStore, ToolCall};
+use crate::core::settings::{PermissionAction, SettingsStore};
 use crate::core::workspace::Workspace;
 use crate::core::RuntimeError;
 use serde::Serialize;
@@ -467,6 +468,9 @@ fn run_tool_mode(
                         checkpoints,
                         &call,
                         &mut read_revisions,
+                        profile,
+                        api_key,
+                        data_dir,
                         approvals.clone(),
                         session_grants.clone(),
                     )
@@ -970,6 +974,9 @@ fn execute_edit_tool(
     checkpoints: &CheckpointStore,
     call: &ToolCall,
     read_revisions: &mut HashMap<String, String>,
+    profile: &Value,
+    api_key: Option<&str>,
+    data_dir: &Path,
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<Value, RuntimeError> {
@@ -983,8 +990,19 @@ fn execute_edit_tool(
         check_write_path(to)?;
     }
 
-    request_write_approval(
-        app, cancel, task_id, call, approvals, session_grants
+    authorize_tool(
+        app,
+        cancel,
+        task_id,
+        call,
+        "write",
+        if call.name == "fs_delete" { "medium" } else { "medium" },
+        primary,
+        data_dir,
+        profile,
+        api_key,
+        approvals,
+        session_grants,
     )?;
     ensure_not_cancelled(cancel)?;
 
@@ -1114,18 +1132,149 @@ fn execute_edit_tool(
     }
 }
 
-fn request_write_approval(
+fn authorize_tool(
     app: &AppHandle,
     cancel: &AtomicBool,
     task_id: &str,
     call: &ToolCall,
+    permission_class: &str,
+    risk: &str,
+    target: &str,
+    data_dir: &Path,
+    main_profile: &Value,
+    main_key: Option<&str>,
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<(), RuntimeError> {
-    if session_grants.lock().map(|g| g.contains(&call.name)).unwrap_or(false) {
-        return Ok(());
+    let settings = SettingsStore::new(data_dir);
+    let granted = session_grants
+        .lock()
+        .map(|g| g.contains(&call.name))
+        .unwrap_or(false);
+    let decision = settings.evaluate_tool(&call.name, permission_class, risk, target, granted);
+
+    match decision.action {
+        PermissionAction::Allow => return Ok(()),
+        PermissionAction::Deny => {
+            return Err(RuntimeError::new("POLICY_DENIED", decision.reason));
+        }
+        PermissionAction::AiReview => {
+            match review_tool_with_ai(
+                &settings,
+                main_profile,
+                main_key,
+                call,
+                permission_class,
+                risk,
+                target,
+                data_dir,
+            ) {
+                Ok(("ALLOW", _)) => return Ok(()),
+                Ok(("DENY", reason)) => {
+                    return Err(RuntimeError::new(
+                        "POLICY_DENIED",
+                        if reason.is_empty() { "审批模型已拒绝".into() } else { reason },
+                    ));
+                }
+                Ok(("ASK_USER", reason)) => {
+                    return request_user_approval(
+                        app, cancel, task_id, call, permission_class, risk,
+                        if reason.is_empty() { "审批模型建议由你确认".into() } else { reason },
+                        "approval_agent",
+                        approvals, session_grants,
+                    );
+                }
+                Ok(_) | Err(_) => {
+                    return request_user_approval(
+                        app, cancel, task_id, call, permission_class, risk,
+                        "审批模型没有给出可靠结论，需要你确认".into(),
+                        "approval_agent",
+                        approvals, session_grants,
+                    );
+                }
+            }
+        }
+        PermissionAction::Ask => {}
     }
 
+    request_user_approval(
+        app,
+        cancel,
+        task_id,
+        call,
+        permission_class,
+        risk,
+        decision.reason,
+        decision.source,
+        approvals,
+        session_grants,
+    )
+}
+
+fn review_tool_with_ai(
+    settings: &SettingsStore,
+    main_profile: &Value,
+    main_key: Option<&str>,
+    call: &ToolCall,
+    permission_class: &str,
+    risk: &str,
+    target: &str,
+    data_dir: &Path,
+) -> Result<(&'static str, String), RuntimeError> {
+    let profiles = ProfileStore::new(data_dir.to_path_buf());
+    let (profile, key) = if let Some(id) = settings.approval_profile() {
+        profiles.get(&id)?
+    } else {
+        (main_profile.clone(), main_key.map(str::to_owned))
+    };
+    let cfg = settings.permissions();
+    let system = "You are the approval reviewer for an AI coding agent working in a user's local project. Judge exactly ONE tool call. Reply with ONLY compact JSON: {\"decision\":\"ALLOW\"|\"ASK_USER\"|\"DENY\",\"reason\":\"<one short sentence>\"}. ALLOW only if the call clearly serves the task, stays inside the workspace and is easy to undo. ASK_USER if unsure, destructive, irreversible, touching credentials, or installing/downloading software. DENY if it is clearly malicious, unrelated to the task, or tries to weaken safety controls.";
+    let payload = json!({
+        "requested_tool": call.name,
+        "risk_level": risk,
+        "permission_class": permission_class,
+        "arguments": call.arguments,
+        "target": target,
+        "permission_config": cfg
+    });
+    let text = chat_complete(
+        &profile,
+        key.as_deref(),
+        &[
+            json!({"role":"system","content":system}),
+            json!({"role":"user","content":serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into())})
+        ],
+        "off",
+    )?;
+    let start = text.find('{');
+    let end = text.rfind('}');
+    let Some((start, end)) = start.zip(end).filter(|(a,b)| b >= a) else {
+        return Ok(("ASK_USER", "审批模型没有给出结论".into()));
+    };
+    let value: Value = serde_json::from_str(&text[start..=end])
+        .map_err(|_| RuntimeError::new("APPROVAL_REVIEW_INVALID", "审批模型的结论不是有效 JSON"))?;
+    let reason = value.get("reason").and_then(Value::as_str).unwrap_or("").chars().take(300).collect();
+    match value.get("decision").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase().as_str() {
+        "ALLOW" => Ok(("ALLOW", reason)),
+        "DENY" => Ok(("DENY", reason)),
+        "ASK_USER" => Ok(("ASK_USER", reason)),
+        _ => Ok(("ASK_USER", "审批模型的结论无法识别".into())),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn request_user_approval(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    call: &ToolCall,
+    permission_class: &str,
+    risk: &str,
+    reason: String,
+    source: &str,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
+) -> Result<(), RuntimeError> {
     let approval_id = unique_id("approval-");
     let (tx, rx) = mpsc::channel();
     let payload = json!({
@@ -1135,9 +1284,10 @@ fn request_write_approval(
         "tool":call.name,
         "title":tool_title(call),
         "args":call.arguments,
-        "risk": if matches!(call.name.as_str(),"fs_delete"|"fs_rename") {"high"} else {"medium"},
-        "permission_class":"files.write",
-        "reason":"智能体将修改工作区文件。Diffusion 会先写入 Checkpoint，以便你随后撤销。",
+        "risk":risk,
+        "permission_class":permission_class,
+        "reason":reason,
+        "source":source,
         "forced":false
     });
     approvals.lock()
@@ -1157,7 +1307,7 @@ fn request_write_approval(
         match rx.recv_timeout(Duration::from_millis(120)) {
             Ok(decision) => {
                 if !decision.allow {
-                    return Err(RuntimeError::new("USER_DECLINED","你已拒绝这次文件修改"));
+                    return Err(RuntimeError::new("USER_DECLINED","你已拒绝这次操作"));
                 }
                 if decision.scope == "session" {
                     if let Ok(mut grants)=session_grants.lock() { grants.insert(call.name.clone()); }
