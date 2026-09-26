@@ -281,7 +281,6 @@ impl ProfileStore {
 fn client() -> Result<Client, RuntimeError> {
     Client::builder()
         .connect_timeout(Duration::from_secs(20))
-        .read_timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| provider_error(format!("无法创建网络客户端：{e}")))
 }
@@ -321,6 +320,16 @@ fn add_headers(
         }
     }
     req
+}
+
+fn response_error(resp: reqwest::blocking::Response) -> RuntimeError {
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+    provider_error(format!(
+        "模型接口返回 HTTP {}：{}",
+        status.as_u16(),
+        body.chars().take(1000).collect::<String>()
+    ))
 }
 
 fn response_json(resp: reqwest::blocking::Response) -> Result<Value, RuntimeError> {
