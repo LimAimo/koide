@@ -1,9 +1,13 @@
 use crate::core::checkpoint::CheckpointStore;
 use crate::core::conversation::ConversationStore;
 use crate::core::id::unique_id;
-use crate::core::policy::{check_read_path, check_write_path};
+use crate::core::policy::{
+    check_command, check_read_path, check_write_path, ensure_public_http_url,
+    CommandPolicyAction,
+};
 use crate::core::provider::{agent_turn, chat_complete, ProfileStore, ToolCall};
 use crate::core::settings::{wildcard_match, PermissionAction, SettingsStore};
+use crate::core::terminal::{run_capture, TerminalManager};
 use crate::core::workspace::Workspace;
 use crate::core::RuntimeError;
 use serde::Serialize;
@@ -16,12 +20,45 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 const MAX_TOOL_ROUNDS: usize = 12;
 const MAX_TOOL_CALLS: usize = 32;
 const MAX_AGENT_READ_BYTES: u64 = 8 * 1024 * 1024;
+
+const HARD_MAX_TOOL_CALLS: usize = 128;
+const WEB_FETCH_MAX_BYTES: usize = 800_000;
+const WEB_FETCH_MAX_CHARS: usize = 20_000;
+
+#[derive(Debug, Clone)]
+pub struct AgentLimits {
+    pub max_tool_calls: usize,
+    pub max_seconds: u64,
+    pub max_repair_attempts: usize,
+    pub web_search: bool,
+}
+
+impl AgentLimits {
+    pub fn from_params(limits: Option<&Value>, web_search: bool) -> Self {
+        let max_tool_calls = limits
+            .and_then(|v| v.get("max_tool_calls"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(HARD_MAX_TOOL_CALLS as u64) as usize;
+        let max_seconds = limits
+            .and_then(|v| v.get("max_seconds"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(3600);
+        let max_repair_attempts = limits
+            .and_then(|v| v.get("max_repair_attempts"))
+            .and_then(Value::as_u64)
+            .unwrap_or(8)
+            .clamp(1, 32) as usize;
+        Self { max_tool_calls, max_seconds, max_repair_attempts, web_search }
+    }
+}
 
 #[derive(Clone)]
 pub struct AgentState {
@@ -166,13 +203,15 @@ impl AgentState {
         data_dir: PathBuf,
         task_id: String,
         checkpoints: CheckpointStore,
+        terminal: TerminalManager,
+        limits: AgentLimits,
     ) -> Result<Value, RuntimeError> {
-        if !matches!(mode.as_str(), "chat" | "read" | "edit") {
+        if !matches!(mode.as_str(), "chat" | "read" | "edit" | "agent") {
             return Err(RuntimeError::new(
                 "MIGRATION_PENDING",
-                format!("Native Core 的「{mode}」模式仍在迁移；当前开放聊天、只读和编辑模式"),
+                format!("Native Core 不支持未知模式「{mode}」"),
             )
-            .with_data(json!({"mode":mode,"available_modes":["chat","read","edit"]})));
+            .with_data(json!({"mode":mode,"available_modes":["chat","read","edit","agent"]})));
         }
         if self.running.swap(true, Ordering::SeqCst) {
             return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
@@ -203,6 +242,7 @@ impl AgentState {
                 "chat" => "You are Diffusion IDE in CHAT mode. Converse naturally and ask the user when needed. You cannot inspect or modify project files and cannot execute commands.",
                 "read" => "You are Diffusion IDE in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list, read and search files, but cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy.",
                 "edit" => "You are Diffusion IDE in EDIT mode. Inspect files before modifying them. You may list, read and search files, then request guarded file edits using the provided tools. Every write is subject to HardPolicy, permission policy and Checkpoint. Never bypass a denied action and never edit Git/Diffusion internal metadata directly.",
+                "agent" => "You are Diffusion IDE in full AGENT mode. Explore first, then perform the task using tools. You may read and edit workspace files, run shell commands, inspect terminal output, fetch public web pages and ask the user. Verify concrete work with tools before claiming completion. HardPolicy, permission rules and Checkpoint always outrank you.",
                 _ => "You are Diffusion IDE.",
             };
             messages.insert(
@@ -271,7 +311,7 @@ impl AgentState {
                 }
             };
 
-            let outcome = if matches!(mode.as_str(), "read" | "edit") {
+            let outcome = if matches!(mode.as_str(), "read" | "edit" | "agent") {
                 run_tool_mode(
                     &app,
                     &cancel,
@@ -283,7 +323,10 @@ impl AgentState {
                     &workspace_root,
                     &data_dir,
                     &checkpoints,
-                    mode == "edit",
+                    matches!(mode.as_str(), "edit" | "agent"),
+                    mode == "agent",
+                    terminal.clone(),
+                    limits.clone(),
                     approvals.clone(),
                     questions.clone(),
                     session_grants.clone(),
@@ -388,24 +431,32 @@ fn run_tool_mode(
     data_dir: &Path,
     checkpoints: &CheckpointStore,
     editable: bool,
+    full_agent: bool,
+    terminal: TerminalManager,
+    limits: AgentLimits,
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     questions: Arc<Mutex<HashMap<String, PendingQuestion>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<String, RuntimeError> {
-    let tools = if editable { edit_tool_specs() } else { read_tool_specs() };
+    let tools = if full_agent { agent_tool_specs() } else if editable { edit_tool_specs() } else { read_tool_specs() };
     let workspace = Workspace::open(&workspace_root.to_string_lossy(), data_dir)?;
     let mut read_revisions: HashMap<String, String> = HashMap::new();
     let mut visible = String::new();
     let mut total_calls = 0usize;
+    let mut repair_attempts = 0usize;
+    let started = Instant::now();
 
     for _round in 0..MAX_TOOL_ROUNDS {
+        if limits.max_seconds > 0 && started.elapsed() >= Duration::from_secs(limits.max_seconds) {
+            return Err(RuntimeError::new("LIMIT_REACHED", format!("已停止：任务运行时间达到上限（{} 秒）", limits.max_seconds)));
+        }
         ensure_not_cancelled(cancel)?;
         emit(
             app,
             "agent.status",
             json!({"task_id":task_id,"state":"thinking","detail":""}),
         );
-        let turn = agent_turn(profile, api_key, &messages, &tools, reasoning)?;
+        let turn = agent_turn(profile, api_key, &messages, &tools, reasoning, limits.web_search)?;
         ensure_not_cancelled(cancel)?;
 
         if !turn.text.is_empty() {
@@ -433,10 +484,15 @@ fn run_tool_mode(
 
         for call in turn.tool_calls {
             total_calls += 1;
-            if total_calls > MAX_TOOL_CALLS {
+            let configured_limit = if limits.max_tool_calls == 0 { HARD_MAX_TOOL_CALLS } else { limits.max_tool_calls };
+            if total_calls > configured_limit {
                 return Err(RuntimeError::new(
-                    "TOOL_LIMIT",
-                    "只读智能体调用工具次数过多，已停止以避免无限循环",
+                    "LIMIT_REACHED",
+                    if limits.max_tool_calls == 0 {
+                        "智能体调用工具次数异常过多，已停止以避免无限循环".to_owned()
+                    } else {
+                        format!("已停止：工具调用次数达到上限（{} 次）", limits.max_tool_calls)
+                    },
                 ));
             }
             ensure_not_cancelled(cancel)?;
@@ -459,6 +515,21 @@ fn run_tool_mode(
                     app, cancel, task_id, &call, "interaction", "low", "",
                     data_dir, profile, api_key, approvals.clone(), session_grants.clone()
                 ).and_then(|_| execute_ask_user(app, cancel, task_id, &call, questions.clone()))
+            } else if full_agent && call.name == "shell_run" {
+                execute_shell_tool(
+                    app, cancel, task_id, &call, workspace_root, data_dir,
+                    profile, api_key, approvals.clone(), session_grants.clone()
+                )
+            } else if full_agent && call.name == "terminal_read" {
+                execute_terminal_read(
+                    app, cancel, task_id, &call, &terminal, data_dir,
+                    profile, api_key, approvals.clone(), session_grants.clone()
+                )
+            } else if full_agent && call.name == "web_fetch" {
+                execute_web_fetch(
+                    app, cancel, task_id, &call, data_dir,
+                    profile, api_key, approvals.clone(), session_grants.clone()
+                )
             } else if matches!(call.name.as_str(), "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy") {
                 if !editable {
                     Err(RuntimeError::new("UNKNOWN_TOOL", "当前模式没有写入工具"))
@@ -515,6 +586,9 @@ fn run_tool_mode(
                         "fs_multi_read" => format!("{} 个文件", value.get("files").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
                         "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy" => "已修改".to_owned(),
                         "ask_user" => "已回答".to_owned(),
+                        "shell_run" => format!("退出码 {}", value.get("exit_code").and_then(Value::as_i64).unwrap_or(-1)),
+                        "terminal_read" => "已读取终端".to_owned(),
+                        "web_fetch" => format!("HTTP {}", value.get("status").and_then(Value::as_u64).unwrap_or(0)),
                         _ => "完成".to_owned(),
                     };
                     if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search" | "fs_glob" | "fs_multi_read") {
@@ -538,6 +612,15 @@ fn run_tool_mode(
                     )
                 }
                 Err(error) => {
+                    if matches!(error.code.as_str(), "BAD_TOOL_ARGS" | "UNKNOWN_TOOL") {
+                        repair_attempts += 1;
+                        if repair_attempts > limits.max_repair_attempts {
+                            return Err(RuntimeError::new(
+                                "REPAIR_LIMIT",
+                                format!("工具参数连续失败，已达到修复上限（{} 次）", limits.max_repair_attempts),
+                            ));
+                        }
+                    }
                     let code = error.code.clone();
                     let message = error.message.clone();
                     (
