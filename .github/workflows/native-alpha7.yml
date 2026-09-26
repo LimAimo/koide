@@ -168,6 +168,8 @@ jobs:
       - name: Initialize Android project
         run: pnpm --filter @diffusion/native exec tauri android init
 
+      - name: Generate Koide app icons
+        run: pnpm --filter @diffusion/native exec tauri icon koide-icon.svg
 
       - name: Build Android ARM64 APK
         run: pnpm --filter @diffusion/native exec tauri android build --debug --apk --target aarch64
@@ -233,6 +235,10 @@ jobs:
       - name: Install JavaScript dependencies
         shell: pwsh
         run: pnpm install --no-frozen-lockfile
+
+      - name: Generate Koide app icons
+        shell: pwsh
+        run: pnpm --filter @diffusion/native exec tauri icon koide-icon.svg
 
       - name: Build Windows x64
         shell: pwsh
