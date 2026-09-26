@@ -3,7 +3,7 @@ use crate::core::conversation::ConversationStore;
 use crate::core::id::unique_id;
 use crate::core::policy::{check_read_path, check_write_path};
 use crate::core::provider::{agent_turn, chat_complete, ProfileStore, ToolCall};
-use crate::core::settings::{PermissionAction, SettingsStore};
+use crate::core::settings::{wildcard_match, PermissionAction, SettingsStore};
 use crate::core::workspace::Workspace;
 use crate::core::RuntimeError;
 use serde::Serialize;
@@ -455,7 +455,10 @@ fn run_tool_mode(
             );
 
             let result = if call.name == "ask_user" {
-                execute_ask_user(app, cancel, task_id, &call, questions.clone())
+                authorize_tool(
+                    app, cancel, task_id, &call, "interaction", "low", "",
+                    data_dir, profile, api_key, approvals.clone(), session_grants.clone()
+                ).and_then(|_| execute_ask_user(app, cancel, task_id, &call, questions.clone()))
             } else if matches!(call.name.as_str(), "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy") {
                 if !editable {
                     Err(RuntimeError::new("UNKNOWN_TOOL", "当前模式没有写入工具"))
@@ -476,7 +479,14 @@ fn run_tool_mode(
                     )
                 }
             } else {
-                execute_read_tool(workspace_root, &call)
+                let target = call.arguments.get("path").and_then(Value::as_str)
+                    .or_else(|| call.arguments.get("pattern").and_then(Value::as_str))
+                    .or_else(|| call.arguments.get("query").and_then(Value::as_str))
+                    .unwrap_or("");
+                authorize_tool(
+                    app, cancel, task_id, &call, "read", "low", target,
+                    data_dir, profile, api_key, approvals.clone(), session_grants.clone()
+                ).and_then(|_| execute_read_tool(workspace_root, &call))
             };
             let (payload, state, summary, detail) = match result {
                 Ok(value) => {
@@ -487,16 +497,27 @@ fn run_tool_mode(
                         ) {
                             read_revisions.insert(path.to_owned(), revision.to_owned());
                         }
+                    } else if call.name == "fs_multi_read" {
+                        for file in value.get("files").and_then(Value::as_array).into_iter().flatten() {
+                            if let (Some(path), Some(revision)) = (
+                                file.get("path").and_then(Value::as_str),
+                                file.get("revision").and_then(Value::as_str),
+                            ) {
+                                read_revisions.insert(path.to_owned(), revision.to_owned());
+                            }
+                        }
                     }
                     let summary = match call.name.as_str() {
                         "fs_read" => format!("{} 行", value.get("total_lines").and_then(Value::as_u64).unwrap_or(0)),
                         "fs_list" => format!("{} 条结果", value.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
                         "fs_search" => format!("{} 条结果", value.get("matches").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
+                        "fs_glob" => format!("{} 条结果", value.get("paths").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
+                        "fs_multi_read" => format!("{} 个文件", value.get("files").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
                         "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy" => "已修改".to_owned(),
                         "ask_user" => "已回答".to_owned(),
                         _ => "完成".to_owned(),
                     };
-                    if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search") {
+                    if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search" | "fs_glob" | "fs_multi_read") {
                         let _ = checkpoints.add_event(
                             task_id,
                             "read",
@@ -601,6 +622,37 @@ fn read_tool_specs() -> Vec<Value> {
         json!({
             "type":"function",
             "function":{
+                "name":"fs_glob",
+                "description":"Find files or folders by workspace-relative wildcard pattern such as **/*.rs or src/*.js, without reading file contents.",
+                "parameters":{
+                    "type":"object",
+                    "properties":{
+                        "pattern":{"type":"string","minLength":1},
+                        "max_results":{"type":"integer","minimum":1,"maximum":500}
+                    },
+                    "required":["pattern"],
+                    "additionalProperties":false
+                }
+            }
+        }),
+        json!({
+            "type":"function",
+            "function":{
+                "name":"fs_multi_read",
+                "description":"Read several known UTF-8 text files in one call. Up to 20 paths. Sensitive paths are blocked by HardPolicy.",
+                "parameters":{
+                    "type":"object",
+                    "properties":{
+                        "paths":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"string"}}
+                    },
+                    "required":["paths"],
+                    "additionalProperties":false
+                }
+            }
+        }),
+        json!({
+            "type":"function",
+            "function":{
                 "name":"fs_search",
                 "description":"Search literal text across readable text files in the workspace. Returns matching paths, line numbers, and short line previews.",
                 "parameters":{
@@ -641,6 +693,11 @@ fn tool_title(call: &ToolCall) -> String {
             "搜索“{}”",
             call.arguments.get("query").and_then(Value::as_str).unwrap_or("")
         ),
+        "fs_glob" => format!(
+            "查找“{}”",
+            call.arguments.get("pattern").and_then(Value::as_str).unwrap_or("")
+        ),
+        "fs_multi_read" => "批量读取文件".to_owned(),
         "ask_user" => "向你提问".to_owned(),
         _ => call.name.clone(),
     }
