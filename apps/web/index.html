@@ -3,26 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#101418">
+  <meta name="theme-color" content="#111318">
   <meta name="color-scheme" content="dark light">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Koide</title>
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/png" href="/public/icons/icon-192.png">
-  <link rel="apple-touch-icon" href="/public/icons/icon-192.png">
-  <link rel="stylesheet" href="/src/styles/tokens.css">
-  <link rel="stylesheet" href="/src/styles/base.css">
-  <link rel="stylesheet" href="/src/styles/layout.css">
-  <link rel="stylesheet" href="/src/styles/editor.css">
-  <link rel="stylesheet" href="/src/styles/chat.css">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="./public/icons/koide-icon.svg">
+  <link rel="apple-touch-icon" href="./public/icons/koide-icon.svg">
+  <link rel="stylesheet" href="./src/styles/tokens.css">
+  <link rel="stylesheet" href="./src/styles/base.css">
+  <link rel="stylesheet" href="./src/styles/layout.css">
+  <link rel="stylesheet" href="./src/styles/editor.css">
+  <link rel="stylesheet" href="./src/styles/chat.css">
   <style>
     html,body{margin:0;background:#f8f9ff}
     @media(prefers-color-scheme:dark){html,body{background:#111318}}
   </style>
 </head>
 <body>
-  <noscript>Diffusion IDE 需要开启 JavaScript 才能使用。</noscript>
-  <script type="module" src="/src/main.js"></script>
+  <noscript>Koide 需要开启 JavaScript 才能使用。</noscript>
+  <div id="boot-fallback" role="alert" hidden>
+    <strong>Koide 启动失败</strong>
+    <pre id="boot-error"></pre>
+  </div>
+  <script>
+    (() => {
+      const show = (value) => {
+        const box = document.getElementById("boot-fallback");
+        const out = document.getElementById("boot-error");
+        if (!box || !out) return;
+        out.textContent = String(value && (value.stack || value.message) || value || "未知启动错误");
+        box.hidden = false;
+      };
+      window.__KOIDE_BOOT_OK__ = false;
+      window.addEventListener("error", (event) => show(event.error || event.message));
+      window.addEventListener("unhandledrejection", (event) => show(event.reason));
+      setTimeout(() => { if (!window.__KOIDE_BOOT_OK__) show("主界面未在 8 秒内完成启动。请查看控制台中的首个错误。"); }, 8000);
+    })();
+  </script>
+  <script type="module" src="./src/main.js"></script>
 </body>
 </html>
