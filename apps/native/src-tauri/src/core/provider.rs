@@ -3,6 +3,8 @@ use crate::core::RuntimeError;
 use reqwest::blocking::{Client, RequestBuilder};
 use serde_json::{json, Map, Value};
 use std::fs;
+use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1073,4 +1075,116 @@ pub fn agent_turn(
             Ok(ProviderTurn { text, tool_calls: calls, assistant_message: message })
         }
     }
+}
+
+
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    Text(String),
+    Reasoning(String),
+}
+
+pub fn openai_stream_turn<F>(
+    profile: &Value,
+    api_key: Option<&str>,
+    messages: &[Value],
+    tools: &[Value],
+    reasoning: &str,
+    web_search: bool,
+    cancel: &AtomicBool,
+    mut on_event: F,
+) -> Result<ProviderTurn, RuntimeError>
+where
+    F: FnMut(StreamEvent),
+{
+    let endpoint = profile.get("endpoint").and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写接口地址"))?;
+    let model = profile.get("model").and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_PROFILE", "请先填写模型 ID"))?;
+    let kind = profile.get("kind").and_then(Value::as_str).unwrap_or("openai_compatible");
+    if matches!(kind, "anthropic" | "gemini_native") {
+        return agent_turn(profile, api_key, messages, tools, reasoning, web_search);
+    }
+
+    let mut body = json!({"model":model,"messages":messages,"stream":true,"tools":tools});
+    if let Some(sampling)=profile.get("sampling").and_then(Value::as_object) {
+        for (key,value) in sampling { if !value.is_null() { body[key]=value.clone(); } }
+    }
+    let lower_model=model.to_ascii_lowercase();
+    if matches!(reasoning,"on"|"off") {
+        let on=reasoning=="on";
+        match kind {
+            "deepseek"=>body["thinking"]=json!({"type":if on{"enabled"}else{"disabled"}}),
+            "openrouter"=>body["reasoning"]=json!({"enabled":on}),
+            "gemini"=>body["reasoning_effort"]=Value::String(if on{"high"}else if lower_model.contains("pro")||lower_model.starts_with("gemini-3"){"minimal"}else{"none"}.into()),
+            "openai" if lower_model.starts_with("o1")||lower_model.starts_with("o3")||lower_model.starts_with("o4")||lower_model.starts_with("gpt-5") =>
+                body["reasoning_effort"]=Value::String(if on{"medium"}else{"none"}.into()),
+            "minimax"|"minimax_cn"=>body["thinking"]=json!({"type":if on{"adaptive"}else{"disabled"}}),
+            _=>{}
+        }
+    }
+    if matches!(kind,"minimax"|"minimax_cn"){body["reasoning_split"]=Value::Bool(true);}
+    if kind=="deepseek"&&web_search {
+        if let Some(list)=body["tools"].as_array_mut(){list.push(json!({"type":"web_search"}));}
+    }
+    if let Some(extra)=profile.get("extra_body").and_then(Value::as_object){
+        for(key,value)in extra{body[key]=value.clone();}
+    }
+
+    let resp=add_headers(
+        client()?.post(format!("{}/chat/completions",endpoint.trim_end_matches('/'))),
+        profile,api_key,true
+    ).json(&body).send().map_err(|e|provider_error(format!("模型请求失败：{e}")))?;
+    if !resp.status().is_success(){return Err(response_error(resp));}
+
+    let mut reader=BufReader::new(resp);
+    let mut line=String::new();
+    let mut text=String::new();
+    let mut reasoning_text=String::new();
+    let mut call_ids: Vec<String>=Vec::new();
+    let mut call_names: Vec<String>=Vec::new();
+    let mut call_args: Vec<String>=Vec::new();
+
+    loop {
+        if cancel.load(Ordering::SeqCst){return Err(RuntimeError::new("STOPPED","已由你停止"));}
+        line.clear();
+        let n=reader.read_line(&mut line).map_err(|e|provider_error(format!("读取模型流失败：{e}")))?;
+        if n==0{break;}
+        let raw=line.trim();
+        if raw.is_empty()||raw.starts_with(':'){continue;}
+        let Some(data)=raw.strip_prefix("data:") else {continue;};
+        let data=data.trim();
+        if data=="[DONE]"{break;}
+        let Ok(payload)=serde_json::from_str::<Value>(data) else {continue;};
+        let Some(delta)=payload.pointer("/choices/0/delta") else {continue;};
+
+        if let Some(piece)=delta.get("content").and_then(Value::as_str){
+            if !piece.is_empty(){text.push_str(piece);on_event(StreamEvent::Text(piece.to_owned()));}
+        }
+        for key in ["reasoning_content","reasoning"] {
+            if let Some(piece)=delta.get(key).and_then(Value::as_str){
+                if !piece.is_empty(){reasoning_text.push_str(piece);on_event(StreamEvent::Reasoning(piece.to_owned()));}
+            }
+        }
+        for tc in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten(){
+            let index=tc.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            while call_ids.len()<=index{call_ids.push(String::new());call_names.push(String::new());call_args.push(String::new());}
+            if let Some(id)=tc.get("id").and_then(Value::as_str){call_ids[index].push_str(id);}
+            if let Some(name)=tc.pointer("/function/name").and_then(Value::as_str){call_names[index].push_str(name);}
+            if let Some(args)=tc.pointer("/function/arguments").and_then(Value::as_str){call_args[index].push_str(args);}
+        }
+    }
+    let calls=call_names.into_iter().enumerate().filter_map(|(i,name)|{
+        if name.is_empty(){return None;}
+        Some(ToolCall{
+            id:if call_ids[i].is_empty(){unique_id("call-")}else{call_ids[i].clone()},
+            name,
+            arguments:parse_json_object(&call_args[i])
+        })
+    }).collect::<Vec<_>>();
+    let assistant_message=json!({"role":"assistant","content":text,"tool_calls":canonical_tool_calls(&calls)});
+    let _=reasoning_text;
+    Ok(ProviderTurn{text,tool_calls:calls,assistant_message})
 }
