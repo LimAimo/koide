@@ -168,11 +168,6 @@ jobs:
       - name: Initialize Android project
         run: pnpm --filter @diffusion/native exec tauri android init
 
-      - name: Diagnose Android Compose dependencies
-        working-directory: apps/native/src-tauri/gen/android
-        shell: bash
-        run: |
-          ./gradlew :diffusion-native-ui:dependencies --configuration debugCompileClasspath | grep -E "androidx.compose|material3" || true
 
       - name: Build Android ARM64 APK
         run: pnpm --filter @diffusion/native exec tauri android build --debug --apk --target aarch64
