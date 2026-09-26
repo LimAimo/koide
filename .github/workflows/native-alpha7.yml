@@ -39,7 +39,7 @@ jobs:
 
       - name: Run Native Core tests without Python Bridge
         working-directory: apps/native/src-tauri
-        run: cargo test --lib --locked
+        run: cargo test --lib
 
   android:
     name: Android ARM64 APK
