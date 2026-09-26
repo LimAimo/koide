@@ -346,12 +346,48 @@ pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod permission_tests {
-    use super::wildcard_match;
+    use super::{wildcard_match, PermissionAction, SettingsStore};
+    use serde_json::json;
+    use std::fs;
 
     #[test]
     fn glob_rules_match_paths_and_commands() {
         assert!(wildcard_match("src/*", "src/main.rs"));
         assert!(wildcard_match("npm test*", "npm test -- --runInBand"));
         assert!(!wildcard_match("secrets/*", "src/main.rs"));
+    }
+
+    #[test]
+    fn settings_roundtrip_recent_and_permissions_without_bridge() {
+        let root = std::env::temp_dir().join(format!("diffusion-native-settings-{}", crate::core::id::unique_id("")));
+        fs::create_dir_all(&root).unwrap();
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let store = SettingsStore::new(&root);
+
+        let recent = store.touch_recent(&project).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert!(recent[0].contains("project"));
+
+        store.update_permissions(&json!({
+            "mode":"autonomous",
+            "tool_settings":{"fs_delete":"deny","fs_write":"always"},
+            "tool_rules":{"shell_run":{"deny":["rm *"],"allow":["cargo test*"]}}
+        })).unwrap();
+
+        assert_eq!(store.permissions()["mode"], "autonomous");
+        assert_eq!(
+            store.evaluate_tool("fs_delete","delete","medium","src/main.rs",false).action,
+            PermissionAction::Deny
+        );
+        assert_eq!(
+            store.evaluate_tool("fs_write","write","medium","src/main.rs",false).action,
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            store.evaluate_tool("shell_run","exec","medium","rm -rf target",false).action,
+            PermissionAction::Deny
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }
