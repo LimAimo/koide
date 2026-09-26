@@ -188,3 +188,170 @@ fn tool(id: &str, permission_class: &str, risk: &str) -> Value {
         "environment": "workspace"
     })
 }
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionAction {
+    Allow,
+    Ask,
+    Deny,
+    AiReview,
+}
+
+#[derive(Debug, Clone)]
+pub struct PermissionDecision {
+    pub action: PermissionAction,
+    pub reason: String,
+    pub source: &'static str,
+}
+
+impl SettingsStore {
+    pub fn evaluate_tool(
+        &self,
+        tool_id: &str,
+        permission_class: &str,
+        risk: &str,
+        target: &str,
+        session_granted: bool,
+    ) -> PermissionDecision {
+        let cfg = self.permissions();
+        let mode = cfg.get("mode").and_then(Value::as_str).unwrap_or("manual");
+        let setting = cfg
+            .get("tool_settings")
+            .and_then(Value::as_object)
+            .and_then(|m| m.get(tool_id))
+            .and_then(Value::as_str);
+
+        if setting == Some("deny") {
+            return PermissionDecision {
+                action: PermissionAction::Deny,
+                reason: format!("设置中已禁用 {tool_id}"),
+                source: "setting",
+            };
+        }
+        if let Some(pattern) = self.rule_hit(tool_id, target, "deny") {
+            return PermissionDecision {
+                action: PermissionAction::Deny,
+                reason: format!("命中了你设置的禁止规则：{pattern}"),
+                source: "rule",
+            };
+        }
+        if setting == Some("ask") {
+            return PermissionDecision {
+                action: PermissionAction::Ask,
+                reason: format!("设置中要求每次都询问 {tool_id}"),
+                source: "setting",
+            };
+        }
+        if let Some(pattern) = self.rule_hit(tool_id, target, "allow") {
+            return PermissionDecision {
+                action: PermissionAction::Allow,
+                reason: format!("命中了你设置的自动允许规则：{pattern}"),
+                source: "rule",
+            };
+        }
+        if matches!(permission_class, "read" | "interaction") {
+            return PermissionDecision {
+                action: PermissionAction::Allow,
+                reason: if permission_class == "read" {
+                    "读取工作区内的文件".into()
+                } else {
+                    "向用户提问".into()
+                },
+                source: "mode",
+            };
+        }
+        if setting == Some("always") || session_granted {
+            return PermissionDecision {
+                action: PermissionAction::Allow,
+                reason: "你的设置已允许".into(),
+                source: "setting",
+            };
+        }
+        if setting == Some("ai_review") || mode == "ai" {
+            return PermissionDecision {
+                action: PermissionAction::AiReview,
+                reason: "交给审批模型判断".into(),
+                source: "approval_agent",
+            };
+        }
+        if mode == "autonomous" {
+            if risk == "high" {
+                return PermissionDecision {
+                    action: PermissionAction::Ask,
+                    reason: "高风险操作".into(),
+                    source: "mode",
+                };
+            }
+            return PermissionDecision {
+                action: PermissionAction::Allow,
+                reason: "自主模式".into(),
+                source: "mode",
+            };
+        }
+        PermissionDecision {
+            action: PermissionAction::Ask,
+            reason: "需要你确认".into(),
+            source: "mode",
+        }
+    }
+
+    fn rule_hit(&self, tool_id: &str, target: &str, kind: &str) -> Option<String> {
+        if target.is_empty() {
+            return None;
+        }
+        let cfg = self.permissions();
+        let patterns = cfg
+            .get("tool_rules")
+            .and_then(Value::as_object)
+            .and_then(|m| m.get(tool_id))
+            .and_then(Value::as_object)
+            .and_then(|m| m.get(kind))
+            .and_then(Value::as_array)?;
+        for pattern in patterns.iter().filter_map(Value::as_str) {
+            if wildcard_match(pattern, target) || wildcard_match(pattern, target.trim_start_matches("./")) {
+                return Some(pattern.to_owned());
+            }
+        }
+        None
+    }
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let p = pattern.as_bytes();
+    let t = text.as_bytes();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star = Some(pi);
+            pi += 1;
+            mark = ti;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::wildcard_match;
+
+    #[test]
+    fn glob_rules_match_paths_and_commands() {
+        assert!(wildcard_match("src/*", "src/main.rs"));
+        assert!(wildcard_match("npm test*", "npm test -- --runInBand"));
+        assert!(!wildcard_match("secrets/*", "src/main.rs"));
+    }
+}
