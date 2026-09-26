@@ -1,9 +1,9 @@
 {
   "name": "@diffusion/editor-cm6",
-  "version": "0.5.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
-  "description": "Diffusion IDE 的正式 CodeMirror 6 编辑器适配器；构建输出到 apps/web/vendor/cm6.js。",
+  "description": "Koide 的正式 CodeMirror 6 编辑器适配器；构建输出到 apps/web/vendor/cm6.js。",
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch"
