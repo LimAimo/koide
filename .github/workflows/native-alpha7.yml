@@ -36,7 +36,7 @@ jobs:
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: diffusion-alpha7-source-${{ github.sha }}
+          name: diffusion-alpha7-handoff-${{ github.sha }}
           path: |
             .
             !.git
@@ -44,7 +44,7 @@ jobs:
             !**/target
           include-hidden-files: true
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
   native-core:
     name: Native-only Rust tests
