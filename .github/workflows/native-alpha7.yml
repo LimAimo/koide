@@ -20,6 +20,32 @@ env:
   CI: "true"
 
 jobs:
+  source-snapshot:
+    name: Source snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Record snapshot metadata
+        shell: bash
+        run: |
+          printf '%s\n' "branch=$GITHUB_REF_NAME" "commit=$GITHUB_SHA" > SOURCE_SNAPSHOT.txt
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: diffusion-alpha7-source-${{ github.sha }}
+          path: |
+            .
+            !.git
+            !**/node_modules
+            !**/target
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
   native-core:
     name: Native-only Rust tests
     runs-on: ubuntu-latest
