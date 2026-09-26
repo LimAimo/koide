@@ -1,4 +1,4 @@
-"""Diffusion 桥接服务入口。
+"""Koide 兼容桥接服务入口。
 
     python bridge/main.py                     # 仅本机访问，http://127.0.0.1:8765
     python bridge/main.py --workspace ~/proj  # 启动后直接打开某个项目
@@ -78,7 +78,7 @@ async def amain(args) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Diffusion IDE 桥接服务")
+    ap = argparse.ArgumentParser(description="Koide 兼容桥接服务")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--workspace", help="启动时直接打开这个文件夹")
