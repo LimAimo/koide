@@ -1,7 +1,7 @@
 {
   "name": "@diffusion/web",
-  "version": "0.8.0-alpha.2",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
-  "description": "Diffusion IDE UI：通过 Runtime API 运行于 Native Core 或迁移期 Bridge。"
+  "description": "Koide UI：通过 Runtime API 运行于 Native Core 或可选 Bridge。"
 }
