@@ -1,8 +1,8 @@
 [package]
 name = "diffusion-native"
 version = "0.8.0-alpha.7"
-description = "Diffusion IDE native shell and Rust core"
-authors = ["Diffusion IDE contributors"]
+description = "Koide native shell and Rust core"
+authors = ["Koide contributors"]
 edition = "2021"
 rust-version = "1.77.2"
 
