@@ -484,7 +484,8 @@ test("时光机：一个没有改过任何文件的任务也能正常显示（�
   await bridge.rpc("agent.start", { goal: "只看不改", profile: "mock", mode: "read" });
   await done;
   const tasks = (await bridge.rpc("checkpoint.tasks")).tasks;
-  const readOnly = tasks[0];
+  const readOnly = tasks.find((t) => t.goal === "只看不改");
+  assert.ok(readOnly, "能按任务目标找到刚完成的只读任务");
   assert.equal(readOnly.files.length, 0, "只读任务没有改过文件");
   const { openTimeMachine } = await import("../../apps/web/src/components/timeline.js");
   openTimeMachine(readOnly.id);
