@@ -213,3 +213,12 @@
 3. 迁移/删除 `tests/bridge`
 4. 用 Rust Remote Runtime adapter 替代旧 BridgeRuntimeAdapter
 5. 再跑一次 Android + Windows + UI + Native-only 全套门禁
+
+
+## 当前剩余硬缺口（更新）
+
+1. **Android SAF 原地 WorkspaceBackend**：尚未完成。当前 Android 私有 workspace 不能冒充 SAF。
+2. **Android interactive PTY**：一次性 `/system/bin/sh` 命令可运行，但 `terminal.open/input/resize/history` 在 Android 明确返回 `NO_PTY`。
+3. **Remote Runtime LAN server**：DeviceStore 已迁 Rust；LAN server 尚未接，因此 3 个 devices RPC 暂不伪实现。
+4. **最新 Provider streaming 提交的全平台 CI**：等待 Native Alpha7 workflow 验证。
+5. **Native-only Rust smoke gate**：已加入 CI，等待首次结果。
