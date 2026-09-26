@@ -6,189 +6,210 @@
 >
 > 目标不是“Rust 有同名函数”，而是前端可见行为、安全语义、事件、返回结构和错误行为与现有产品需求等价。
 
-## 当前结论
+## 当前结论（alpha.7）
 
 - Runtime API：72 个业务方法。
 - Python Bridge：72 / 72 均有 RPC 实现。
-- Rust NativeCore：42 / 72 有 dispatch 分支。
-- 仍缺 30 个 Native RPC。
-- 另外存在若干“有分支但仍是占位 / 语义缩水”的功能。
-- 因此当前 **禁止删除 Python Bridge**。
+- Rust NativeCore：**69 / 72** 已有真实 dispatch。
+- 仅剩 3 个 Runtime RPC 未迁：`devices.pair_code / devices.list / devices.revoke`。
+- 本地 IDE 主链已经包含 Workspace、Files、Trash、Checkpoint、Profiles、Conversations、4 种 Agent 模式、Permissions、Instructions、Git、Terminal、Ports、Export、External Watcher。
+- 仍有三个会阻止“彻底删除 Python”的硬缺口：
+  1. Provider 全协议流式 / reasoning / 即时取消尚未全部完成；
+  2. Android SAF 原地工作区尚未完成；
+  3. 旧 Bridge 的 LAN / Devices / Remote Runtime 尚无 Rust 替代。
+- 因此当前 **仍禁止删除 Python Bridge**。
 
-## A. Native RPC 缺口（30）
+## A. Runtime RPC 覆盖
 
-### 文件 / 导出
-- [ ] `fs.export`
+### 已迁（69 / 72）
+- [x] Workspace：open / close / browse / remove_recent
+- [x] Files：read / tree / search / hash / write / patch / create / delete / rename / copy
+- [x] Large write：begin / chunk / commit / abort
+- [x] Export：`fs.export`
+- [x] Trash：list / restore / delete / empty
+- [x] Checkpoint：tasks / task / diff / revert_event / revert_file / revert_task
+- [x] Profiles：list / save / delete / test / models
+- [x] Conversations：list / get / delete / compact
+- [x] Permissions：set
+- [x] Approval：respond
+- [x] Agent：start / stop / answer
+- [x] Instructions：constitution / get / set
+- [x] Git：status / diff / stage / unstage / discard / reset / commit / branches / checkout / log / blame / pull / push / init
+- [x] Terminal：run / kill / open / input / resize / close / list / history
+- [x] Ports：list
 
-### Git
-> `core/git.rs` 已有多数实现，但尚未接入 NativeCore dispatch；当前 `git.status` 仍是固定 `is_repo:false` 占位。
-- [ ] `git.status` 改为真实实现
-- [ ] `git.diff`
-- [ ] `git.stage`
-- [ ] `git.unstage`
-- [ ] `git.discard`
-- [ ] `git.reset`
-- [ ] `git.commit`
-- [ ] `git.branches`
-- [ ] `git.checkout`
-- [ ] `git.log`
-- [ ] `git.blame`
-- [ ] `git.pull`
-- [ ] `git.push`
-- [ ] `git.init`
-
-### Instructions
-- [ ] `instructions.constitution`
-- [ ] `instructions.get`
-- [ ] `instructions.set`
-- [ ] 全局指令上限与 Bridge 一致（20,000 字）
-- [ ] 项目 `AGENTS.md` 读取行为与 Bridge 一致（最多 8,000 字）
-
-### Permissions
-- [ ] `permissions.set`
-- [ ] mode：`restricted / manual / ai / autonomous`
-- [ ] per-tool：`deny / ask / session / always / ai_review`
-- [ ] tool_rules：allow / deny glob
-- [ ] `approval_profile` 持久化
-- [ ] `permissions.changed` 事件
-- [ ] AI 审批模型
-- [ ] HardPolicy 永远优先于用户规则 / Autonomous / AI reviewer
-
-### Process / Terminal / Ports
-- [ ] `terminal.run`
-- [ ] `terminal.kill`
-- [ ] `terminal.open`
-- [ ] `terminal.input`
-- [ ] `terminal.resize`
-- [ ] `terminal.close`
-- [ ] `terminal.list`
-- [ ] `terminal.history`
-- [ ] `ports.list`
-- [ ] Windows PTY
-- [ ] Android Terminal backend / 明确降级策略
-- [ ] 命令进程树可取消
-- [ ] `terminal.start/output/exit` 与 `terminal.data/closed` 事件兼容
-
-### Devices / Remote
+### 未迁（3 / 72）
 - [ ] `devices.pair_code`
 - [ ] `devices.list`
 - [ ] `devices.revoke`
-- [ ] Native Remote Runtime 方案确定：实现或从本机模式 UI 明确隔离
-- [ ] LAN/token/撤销/过期语义不能因删除 Bridge 丢失
 
-## B. 已有 dispatch 但仍不等价
+> Native 设置页已经把 Remote 明确隔离为可选模块，因此这 3 项不是本机 IDE 的使用阻塞项；但如果最终删除 Python Bridge，就必须先提供 Rust Remote Runtime / 配对替代，或正式从产品中移除远程能力并迁移 API/UI。
 
-### Workspace / 最近项目
-- [ ] `workspace.remove_recent` 目前是 no-op
-- [ ] Native `hello.recent` 目前固定 `[]`
-- [ ] 打开项目后写入 recent
-- [ ] 移除 recent 后发 `workspace.recent_changed`
-- [ ] recent 持久化
+## B. Workspace / IDE 基础能力
 
-### hello / 能力描述
-- [ ] Native permissions mode 名称修正：当前误写 `strict`，Bridge/UI 使用 `restricted`
-- [ ] `tool_settings_options` 不能是空数组
-- [ ] `tools` 不能是空数组
-- [ ] `approval_profile`
-- [ ] permissions 当前真实配置
-- [ ] recent 当前真实配置
-- [ ] agent_modes 与实际能力一致
+- [x] 最近项目持久化
+- [x] 打开项目后更新 recent
+- [x] remove_recent
+- [x] `workspace.recent_changed`
+- [x] ZIP 导出，Native 侧通过系统保存对话框落盘
+- [x] 外部文件 watcher
+- [x] `fs.external` 由真实磁盘变化触发
+- [x] Git 真实 backend 接入，不再是固定 `is_repo:false`
+- [x] Windows PTY
+- [x] Terminal 命令运行 / 取消 / history
+- [x] Ports 列表
+- [ ] Android SAF：持久 URI 授权 + 原地 WorkspaceBackend
+- [ ] SAF 下 read/write/patch/tree/search/checkpoint/trash 与普通路径后端行为一致
 
-### Git
-- [ ] 当前 `git.status` 固定返回 `is_repo:false`，必须移除占位
-
-## C. Agent 能力差异
+## C. Agent / Permissions
 
 ### 模式
 - [x] chat
 - [x] read
 - [x] edit
-- [ ] agent（完整：read + write + delete + exec + network + interaction）
+- [x] agent
 
-### Bridge 有、Native 尚缺的工具
-- [ ] `fs_glob`
-- [ ] `fs_multi_read`
-- [ ] `shell_run`
-- [ ] `terminal_read`
-- [ ] `web_fetch`
+### 工具
+- [x] `fs_read`
+- [x] `fs_list`
+- [x] `fs_search`
+- [x] `fs_glob`
+- [x] `fs_multi_read`
+- [x] `fs_patch`
+- [x] `fs_write`
+- [x] `fs_create`
+- [x] `fs_delete`
+- [x] `fs_rename`
+- [x] `fs_copy`
 - [x] `ask_user`
-- [x] guarded write tools
+- [x] `shell_run`
+- [x] `terminal_read`
+- [x] `web_fetch`
+
+### Permission Engine
+- [x] mode：`restricted / manual / ai / autonomous`
+- [x] per-tool：`deny / ask / session / always / ai_review`
+- [x] tool_rules：allow / deny wildcard
+- [x] approval_profile 持久化
+- [x] `permissions.changed`
+- [x] AI reviewer
+- [x] AI reviewer 失败安全回退到 ASK_USER
+- [x] HardPolicy 优先于用户规则 / Autonomous / AI reviewer
+- [x] 写文件前审批 + Checkpoint
+- [x] ask_user
 
 ### Agent 运行语义
-- [ ] `limits.max_tool_calls`
-- [ ] `limits.max_seconds`
-- [ ] `limits.max_repair_attempts`
-- [ ] malformed tool-arguments repair
-- [ ] `web_search` 参数
-- [ ] 非 chat 模式“零工具调用即疑似未完成”的保护
-- [ ] tool result 截断 / 上限与 Bridge 行为对齐
+- [x] `limits.max_tool_calls`
+- [x] `limits.max_seconds`
+- [x] `limits.max_repair_attempts`
+- [x] malformed tool-arguments repair 上限
+- [x] `web_search` 参数进入 Agent
+- [x] shell / network HardPolicy
+- [ ] Provider 请求全部可即时取消（OpenAI-compatible 正在 `dev/native-provider-stream-alpha7` 验证）
+- [ ] 全协议流式文本
+- [ ] 全协议 reasoning 流式
+- [ ] 全协议 tool-call 流式聚合
 
-### 停止 / 流式
-- [ ] Provider 请求改为可取消
-- [ ] Stop 可中断正在进行的网络请求，而不是只在工具轮之间检查
-- [ ] 文本流式增量
-- [ ] reasoning 流式增量（`agent.reasoning`）
-- [ ] tool-call 增量 / 完成语义
-- [ ] SSE / chunked provider 解析
+## D. Instructions / 行为上下文
 
-## D. Provider 行为差异
+- [x] Aimo Constitution 原生迁移
+- [x] `instructions.constitution`
+- [x] `instructions.get`
+- [x] `instructions.set`
+- [x] Global instructions 20,000 字写入上限
+- [x] Agent 注入 Global instructions（最多 6,000 字）
+- [x] Agent 注入项目 `AGENTS.md`（最多 8,000 字）
+- [x] Native hello 返回真实 permissions / tools / recent / approval_profile
 
-### OpenAI-compatible
-- [ ] 流式 SSE
-- [ ] reasoning_content / reasoning 分流
-- [ ] MiniMax inline `<think>` 分离兼容
-- [ ] DeepSeek built-in `web_search`
-- [ ] timeout 不应固定为 30 秒
+## E. Provider
 
-### Anthropic
-- [ ] 流式 SSE
-- [ ] thinking delta
-- [ ] 旧模型 manual extended thinking / budget 兼容
-- [ ] sampling：temperature / top_p
+### 通用
+- [x] Profiles CRUD
+- [x] Models 列表
+- [x] Connection test
+- [x] OpenAI-compatible tool calls
+- [x] Anthropic tool calls
+- [x] Gemini Native function calls
+- [x] reasoning 开关基础映射
+- [x] DeepSeek web_search 请求参数
+- [x] API Key 不回传前端
+- [x] Unix / Android `secrets.json` 写入时保护为 0600
+- [ ] Windows 系统凭据库（可选加强项；当前使用应用私有数据目录）
 
-### Gemini Native
-- [ ] `streamGenerateContent?alt=sse`
-- [ ] generationConfig sampling 映射
-- [ ] thinkingConfig 按模型代际处理
-- [ ] thought 与普通文本分流
+### Streaming / Cancel
+- [~] OpenAI-compatible SSE：已在 `dev/native-provider-stream-alpha7` 实现，等待 Android/Windows CI
+- [~] OpenAI-compatible Stop：可在 send / chunk 等待阶段取消，等待 CI
+- [~] OpenAI-compatible reasoning delta：已实现，等待 CI
+- [~] MiniMax inline `<think>` stream 分离：已实现，等待 CI
+- [~] OpenAI-compatible streamed tool-call 聚合：已实现，等待 CI
+- [ ] Anthropic SSE + thinking delta + cancellable request
+- [ ] Gemini Native `streamGenerateContent?alt=sse` + thought delta + cancellable request
+- [ ] Provider 非流式 fallback / compatibility smoke tests
 
-### Secrets
-- [ ] Native `secrets.json` 权限保护达到 Bridge 的 0600 等价目标（POSIX）
-- [ ] Windows 应使用应用私有目录并补安全说明 / 可行时使用平台凭据存储
+## F. Git / Terminal / Watcher / Export
 
-## E. 文件系统 / IDE 体验
+- [x] Git 14 个 Runtime 动作真实接线
+- [x] Git restore/reset 的受保护二进制写入
+- [x] Windows PTY
+- [x] Android Terminal 明确 backend / 降级路径
+- [x] terminal.start / output / exit 兼容事件
+- [x] terminal.data / closed 交互终端事件
+- [x] Process cancel
+- [x] Ports
+- [x] ZIP Export
+- [x] 外部文件 watcher + workspace 生命周期
+- [~] 当前大整合分支 Android 已成功构建和验签；Windows 正在修最后的 PTY exit-code 类型问题并重新验证
 
-- [ ] `fs.export`：zip，跳过可再生成目录，300 MB 上限
-- [ ] 外部文件 watcher
-- [ ] `fs.external` 真正由磁盘变化触发，而不只是内部 copy 触发
-- [ ] watcher 上限 / 排除目录与 Bridge 等价
-- [ ] Android SAF：持久目录授权 + 原地 WorkspaceBackend
-- [ ] Android 不再只能“导入私有工作区后编辑”
-- [ ] SAF 下 read/write/patch/tree/search/checkpoint/trash 行为一致
+## G. Remote Runtime / Devices
 
-## F. 测试 / 删除门禁
+- [ ] Rust 本地 HTTP/WebSocket/IPC Remote Runtime server
+- [ ] 6 位一次性配对码
+- [ ] token hash 持久化
+- [ ] token 过期 / revoke
+- [ ] `devices.pair_code / list / revoke`
+- [ ] RemoteRuntime adapter 不依赖 Python
+- [ ] LAN 模式安全边界与旧 Bridge 等价
+- [ ] 决定 BridgeRuntimeAdapter 的最终命运：由 Rust Remote adapter 替代后删除，或保留纯协议兼容层但不依赖 Python
 
-删除 Python Bridge 前必须同时满足：
+## H. Android SAF
 
-- [ ] Runtime 72 / 72 Native dispatch 全覆盖，或明确从产品 API 中正式移除并迁移 UI
-- [ ] 不存在占位实现（固定空值 / no-op）
-- [ ] 4 种 Agent 模式都可用
-- [ ] Permission UI 完整可用
-- [ ] Git UI 完整可用
-- [ ] Terminal UI 在 Windows 可用，Android 有正式 backend 或产品定义的明确能力
-- [ ] Export / watcher / recent / instructions 可用
+- [ ] 系统目录选择器返回 SAF tree URI
+- [ ] `takePersistableUriPermission`
+- [ ] 持久化已授权项目
+- [ ] DocumentFile / DocumentsContract backend
+- [ ] 原地 tree/list/read/write/create/delete/rename/copy
+- [ ] 原地 hash / revision / conflict detection
+- [ ] search / glob
+- [ ] Checkpoint blob 与 SAF 文件联动
+- [ ] Trash 语义定义（SAF 无原生 trash 时使用 Diffusion-managed recovery）
+- [ ] Git 能力检测与明确降级（普通 content URI 不保证系统 Git 可直接访问）
+- [ ] Terminal cwd 能力检测与明确降级
+- [ ] UI 不再把“导入私有工作区”作为唯一 Android 打开项目方式
+
+## I. 删除 Python 前的最终硬门禁
+
+- [ ] Runtime 72 / 72 Native 覆盖，或剩余能力正式从产品 API/UI 移除
+- [ ] 不存在固定空值 / no-op / 假实现
+- [x] 4 种 Agent 模式都有 Native 实现
+- [x] Permission UI 与 Native engine 接通
+- [x] Git UI 与 Native backend 接通
+- [x] Terminal Runtime 接通
+- [x] Export / watcher / recent / instructions 已迁
 - [ ] Android SAF 原地项目可用
-- [ ] Provider streaming / cancel 可用
-- [ ] Bridge 现有行为测试已迁到 Rust / Native integration tests
+- [ ] Provider 全协议 streaming / cancel 可用
+- [ ] Rust Remote Runtime 替代 Python LAN/Devices
+- [ ] Bridge 行为测试迁为 Rust / Native integration tests
 - [ ] Web/UI regression 全绿
 - [ ] Android ARM64 CI 全绿 + APK 签名通过
 - [ ] Windows x64 CI 全绿
-- [ ] 至少一次 Native-only smoke test：运行时完全不启动 Python 仍能覆盖核心产品流程
-- [ ] 最后一次代码搜索：产品路径无 `Bridge.pair` / Python 必需文案 / localhost bridge 假设
+- [ ] Native-only smoke：完全不启动 Python，覆盖打开项目 → 编辑 → Agent → Checkpoint → Git → Terminal → Export
+- [ ] Android Native-only smoke：SAF 打开项目 → 编辑 → Agent → Checkpoint
+- [ ] 最后代码搜索：产品 Native 路径无 Python / localhost Bridge 必需假设
+- [ ] README / MIGRATION_STATUS / 架构图更新完成
 
 只有以上全部完成后：
 1. 删除 `bridge/`
 2. 删除 `pyproject.toml`
-3. 删除/迁移 `tests/bridge`
-4. 删除 BridgeRuntimeAdapter（若 Remote Runtime 已有独立实现）
-5. 更新 README / MIGRATION_STATUS / 架构图
+3. 迁移/删除 `tests/bridge`
+4. 用 Rust Remote Runtime adapter 替代旧 BridgeRuntimeAdapter
+5. 再跑一次 Android + Windows + UI + Native-only 全套门禁
