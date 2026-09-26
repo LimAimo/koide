@@ -4,8 +4,10 @@ mod conversation;
 mod crypto;
 mod git;
 mod id;
+mod instructions;
 mod policy;
 mod provider;
+mod settings;
 mod trash;
 mod workspace;
 
@@ -16,6 +18,7 @@ use tauri::{AppHandle, Emitter};
 use agent::AgentState;
 use conversation::ConversationStore;
 use git as gitops;
+use settings::{tool_descriptions, SettingsStore};
 use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
@@ -53,6 +56,7 @@ pub struct NativeCore {
     workspace: Option<Workspace>,
     conversations: Option<ConversationStore>,
     profiles: ProfileStore,
+    settings: SettingsStore,
     agent: AgentState,
 }
 
@@ -60,6 +64,7 @@ impl NativeCore {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             profiles: ProfileStore::new(data_dir.clone()),
+            settings: SettingsStore::new(&data_dir),
             agent: AgentState::new(),
             data_dir,
             workspace: None,
@@ -175,6 +180,7 @@ impl NativeCore {
                 let store = self.conversations()?.clone();
                 let workspace_root = self.ws()?.root_path();
                 let checkpoints = self.ws()?.checkpoint_handle();
+                let system_context = instructions::agent_context(&self.data_dir, &workspace_root);
                 let checkpoint_task = checkpoints.start_task(&goal, mode)?;
                 let task_id = checkpoint_task
                     .get("id")
@@ -190,6 +196,7 @@ impl NativeCore {
                     conversation_id,
                     reasoning,
                     mode.to_owned(),
+                    system_context,
                     workspace_root,
                     self.data_dir.clone(),
                     task_id,
@@ -206,6 +213,23 @@ impl NativeCore {
                 Self::emit(app, "agent.question_resolved", result.clone());
                 Ok(result)
             },
+            "permissions.set" => {
+                let updated = self.settings.update_permissions(&params)?;
+                Self::emit(app, "permissions.changed", updated.clone());
+                Ok(updated)
+            }
+            "instructions.constitution" => Ok(json!({"text": instructions::AIMO_CONSTITUTION})),
+            "instructions.get" => Ok(instructions::get(
+                &self.data_dir,
+                self.workspace.as_ref().map(|ws| ws.root_path()).as_deref(),
+            )),
+            "instructions.set" => {
+                instructions::set_global(
+                    &self.data_dir,
+                    params.get("global").and_then(Value::as_str).unwrap_or(""),
+                )?;
+                Ok(json!({}))
+            }
             "approval.respond" => {
                 let result = self.agent.respond_approval(
                     req_str(&params, "approval_id")?,
@@ -219,12 +243,15 @@ impl NativeCore {
                 let path = req_str(&params, "path")?;
                 let ws = Workspace::open(path, &self.data_dir)?;
                 let info = ws.info();
+                let root_path = ws.root_path();
                 let conversations = ConversationStore::new(
                     self.data_dir.join("conversations").join(ws.storage_key())
                 )?;
+                let recent = self.settings.touch_recent(&root_path)?;
                 self.workspace = Some(ws);
                 self.conversations = Some(conversations);
                 Self::emit(app, "workspace.opened", info.clone());
+                Self::emit(app, "workspace.recent_changed", json!({"recent": recent}));
                 Ok(info)
             }
             "workspace.close" => {
@@ -235,7 +262,11 @@ impl NativeCore {
                 Ok(json!({}))
             }
             "workspace.browse" => browse_location(params.get("path").and_then(Value::as_str), Some(&self.data_dir)),
-            "workspace.remove_recent" => Ok(json!({})),
+            "workspace.remove_recent" => {
+                let recent = self.settings.remove_recent(req_str(&params, "path")?)?;
+                Self::emit(app, "workspace.recent_changed", json!({"recent": recent}));
+                Ok(json!({"recent": recent}))
+            },
             "fs.read" => self.ws()?.read(req_str(&params, "path")?),
             "fs.hash" => self.ws()?.hash(req_str(&params, "path")?),
             "fs.tree" => self.ws()?.tree(
@@ -485,28 +516,30 @@ impl NativeCore {
     }
 
     fn hello(&self) -> Value {
+        let mut permissions = self.settings.permissions();
+        if let Some(obj) = permissions.as_object_mut() {
+            obj.insert("modes".into(), json!(["restricted", "manual", "ai", "autonomous"]));
+            obj.insert("tool_settings_options".into(), json!(["deny", "ask", "session", "always", "ai_review"]));
+        }
         json!({
             "version": VERSION,
             "platform": std::env::consts::OS,
             "native": true,
             "lan": false,
             "workspace": self.workspace.as_ref().map(Workspace::info),
-            "permissions": {
-                "mode": "manual",
-                "modes": ["strict", "manual", "ai", "autonomous"],
-                "tool_settings_options": []
-            },
+            "permissions": permissions,
             "profiles": self.profiles.list_public(),
             "presets": presets(),
             "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
             "agent_modes": ["chat", "read", "edit"],
             "approvals": self.agent.pending_approvals(),
             "questions": self.agent.pending_questions(),
-            "tools": [],
-            "recent": [],
+            "tools": tool_descriptions(),
+            "recent": self.settings.recent(),
+            "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
             },
             "data_dir": self.data_dir
         })
