@@ -21,9 +21,8 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
   const closeBtn = iconButton("close", "关闭 AI 面板", () => saveSettings({ aiVisible: false }), "ai-close");
   const head = h("div", { class: "ai-head" }, h("div", { class: "seg-wrap" }, modeSeg), historyBtn, closeBtn);
   const composerCard = h("div", { class: "composer-card" },
-    h("div", { class: "composer-toolbar" }, profileChip),
     input,
-    h("div", { class: "composer-actions" }, send));
+    h("div", { class: "composer-actions" }, profileChip, h("span", { class: "composer-spacer" }), send));
   const composer = h("div", { class: "composer" }, composerCard);
   const el = h("section", { class: "ai", "aria-label": "AI 助手" }, head, scroll, composer);
 
@@ -68,8 +67,9 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
       b.title = supported.includes(id) ? "" : "Native Core 仍在迁移这个模式";
     });
     const prof = st.profiles.find((p) => p.id === s.agent.profile) || st.profiles[0];
+    profileChip.hidden = !prof;
     clear(profileChip);
-    profileChip.append(icon("spark", 15), h("span", null, prof ? providerName(prof) : "添加服务商"));
+    if (prof) profileChip.append(icon("spark", 15), h("span", null, providerName(prof)));
     renderModelPopover();
   }
 
@@ -148,6 +148,7 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
       stick = true;
       add(h("div", { class: "msg user" }, text));
       input.value = "";
+      composer.classList.add("compact");
       grow();
     } catch (e) { toast(e.message); }
   }
