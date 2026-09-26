@@ -139,7 +139,7 @@ impl TerminalManager {
 
     #[cfg(not(target_os = "android"))]
     pub fn open(&self, app: &AppHandle, cwd: &Path, cols: u16, rows: u16) -> Result<Value, RuntimeError> {
-        use portable_pty::{native_pty_system, CommandBuilder, PtySize, PtySystem};
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
         let alive = self.sessions
             .lock()
@@ -223,7 +223,7 @@ impl TerminalManager {
                 "terminal.closed",
                 json!({
                     "id":wait_session.id,
-                    "exit_code":status.map(|s| s.exit_code()).unwrap_or(-1)
+                    "exit_code":status.map(|s| i64::from(s.exit_code())).unwrap_or(-1)
                 }),
             );
         });
@@ -402,7 +402,7 @@ fn stream_pipe<R: Read + Send + 'static>(app: AppHandle, id: String, stream: &'s
 fn shell_command(command: &str) -> Command {
     #[cfg(windows)]
     {
-        let mut cmd = if find_on_path("pwsh.exe").is_some() {
+        let cmd = if find_on_path("pwsh.exe").is_some() {
             let mut c = Command::new("pwsh.exe");
             c.args(["-NoProfile", "-Command", command]);
             c
