@@ -147,6 +147,13 @@ impl Workspace {
             ));
         }
         let canonical_root = fs::canonicalize(&root).map_err(io_err("OPEN_FAILED", path))?;
+        let canonical_data = fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+        if canonical_root == canonical_data || canonical_root.starts_with(&canonical_data) {
+            return Err(RuntimeError::new(
+                "SENSITIVE_PATH",
+                "不能把 Diffusion 自己的私有数据目录作为项目打开",
+            ));
+        }
         let workspace_key = sha256_hex(canonical_root.to_string_lossy().as_bytes());
         let workspace_key = &workspace_key[..16];
         let trash = Trash::new(data_dir.join("trash").join(workspace_key))?;
