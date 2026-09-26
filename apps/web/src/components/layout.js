@@ -162,7 +162,9 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
     const current = ai.offsetHeight || sheetH || halfSheetH();
     const projected = current + s.v * 180;
     if (projected < minOpenH() || s.v < -0.75) { closeSheet(); return; }
-    if (projected >= max * 0.96 || current >= max - 24) { setFull(true); return; }
+    // M3E 式“意图优先”释放：明显向上的 fling 不要求手指先拖到屏幕顶端。
+    // 用户给把手一个向上的力，就把剩余行程交给 spring/height transition 完成。
+    if (s.v > 0.52 || projected >= max * 0.86 || current >= max - 24) { setFull(true); return; }
     setFull(false);
     setH(clamp(current, minOpenH(), max - 1));
   };
