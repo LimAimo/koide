@@ -1,9 +1,9 @@
 # Diffusion IDE
 
-> **0.8.0-alpha.4 · Native Provider 接通检查点**  
-> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。产品 UI 已经通过 Runtime API 与 Bridge 解耦，Rust Workspace 已接管本地文件读写、Patch、Trash、Checkpoint 与事务式大文件写入的主体；Native Provider Profiles、模型列表与连接测试也已开始由 Rust Core 直接处理。Android / Windows 构建已经迁移到 GitHub Actions，并会在双平台成功后自动发布 prerelease。完整计划见 `docs/NATIVE_CORE_SPEC.md`，当前迁移进度见 `docs/MIGRATION_STATUS.md`。
+> **0.8.0-alpha.7 · Native 功能等价收口（开发中）**  
+> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit Agent 基础、ask_user、Git 主体、recent / permissions / instructions 持久化已经进入 Rust；Android ARM64 APK 与 Windows x64 portable/NSIS 的 GitHub Actions 构建及自动 prerelease 已真实跑通。当前继续收口完整 PermissionEngine、Agent exec/network、Provider streaming/cancel、Terminal、Export/Watcher、Android SAF 与 Native-only 回归。完整计划见 `docs/NATIVE_CORE_SPEC.md`，当前迁移进度见 `docs/MIGRATION_STATUS.md`。
 >
-> **这个 alpha 还没有完成 Python 删除线。** 旧 Bridge 仍作为迁移期兼容实现和回归测试基准存在；不要把它理解为最终架构。原生构建说明见 `docs/NATIVE_BUILD.md`。
+> **这个 alpha 仍然没有完成 Python 删除线。** 旧 Bridge 继续作为迁移期兼容实现和行为基准；在 `docs/NATIVE_PARITY_AUDIT.md` 的硬门禁全部通过前不会删除。原生构建说明见 `docs/NATIVE_BUILD.md`。
 
 
 一个本地优先、手机和电脑都能用的 AI IDE。AI 改代码时，代码不是"啪"地闪一下：留下来的部分会**移动**到新位置，
@@ -97,8 +97,8 @@ Git 面板（改动、差异、暂存、提交、分支、拉取推送、追溯�
 `bash tests/run-all.sh` 或 `pnpm test`（只有测试需要 Node 20+）。
 
 ## 已知限制
-- **没有在真实的安卓设备或浏览器上试过**（只在自动化的模拟 DOM 环境里验证过），首次启动可能有粗糙的地方。
+- Android / Windows 原生安装包已经由 CI 真实构建并验证产物结构；真实设备上的交互、SAF、终端与大项目体验仍需要持续实机回归。
 - CodeMirror 6 适配器需要联网构建，编写时没有条件在真实浏览器里运行，属于「未经验证」。
 - 内置编辑器没有代码折叠（CodeMirror 版有，但未经验证）；「块」识别是按缩进和括号推断的，不是真正的语法树。
-- 终端不支持 vim、htop 这类全屏程序；Windows 上没有 PTY，会退回一次性命令模式。
+- Native Terminal / PTY 仍在迁移；迁移完成前，旧 Bridge 的终端能力仍是行为基线。
 - 字体使用系统字体，不会下载任何东西。
