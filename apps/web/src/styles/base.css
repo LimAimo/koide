@@ -228,3 +228,7 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   margin: 26px 16px 8px; color: var(--primary); font-size: 12px; font-weight: 700;
   letter-spacing: .08em;
 }
+
+.workspace-source-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 0 0 14px; }
+.workspace-source-actions > .btn { min-width: 0; white-space: normal; line-height: 1.25; padding: 8px 12px; }
+@media (max-width: 560px) { .workspace-source-actions { grid-template-columns: 1fr; } }
