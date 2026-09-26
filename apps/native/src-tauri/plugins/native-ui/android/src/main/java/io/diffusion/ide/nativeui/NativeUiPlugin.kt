@@ -43,8 +43,26 @@ class NativeUiPlugin(private val activity: Activity) : Plugin(activity) {
   private var state by mutableStateOf(ShellState())
 
   override fun load(webView: WebView) {
+    // Keep Tauri's WebView startup path untouched. The web app explicitly asks
+    // for the native shell only after its first UI tree has been mounted.
     this.webView = webView
-    activity.runOnUiThread { install(webView) }
+  }
+
+  @Command
+  fun ready(invoke: Invoke) {
+    val web = webView
+    if (web == null) {
+      invoke.reject("WebView 尚未就绪")
+      return
+    }
+    activity.runOnUiThread {
+      try {
+        install(web)
+        invoke.resolve(JSObject().apply { put("ok", true) })
+      } catch (ex: Exception) {
+        invoke.reject(ex.message ?: "无法启动 Koide 原生界面")
+      }
+    }
   }
 
   @Command
@@ -55,7 +73,7 @@ class NativeUiPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   private fun install(web: WebView) {
-    val root = web.parent as? FrameLayout ?: return
+    val root = web.parent as? FrameLayout ?: throw IllegalStateException("Tauri WebView 根容器不支持原生 Shell")
     WindowCompat.setDecorFitsSystemWindows(activity.window, false)
     activity.window.statusBarColor = Color.TRANSPARENT
     activity.window.navigationBarColor = Color.TRANSPARENT
