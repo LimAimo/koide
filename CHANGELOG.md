@@ -1,16 +1,19 @@
 # 更新日志
 
 ## 0.8.0-alpha.7（开发中）
-- **Native 功能等价审计成为 Python 删除硬门禁**：新增 `docs/NATIVE_PARITY_AUDIT.md`，逐项对照 Runtime API、Python Bridge、Rust NativeCore 与 UI 调用；在 RPC、行为语义、测试与双平台 Native-only smoke test 全部等价前，明确禁止删除 `bridge/` / `pyproject.toml`。
-- **Native Agent 扩展到 Edit 基础链**：chat / read / edit 三种模式已进入 Rust；写操作经过 HardPolicy、审批与 Checkpoint，first-touch 保存 before，修改后记录 after，支持任务/文件/事件级撤销基础。
-- **Native ask_user 与对话压缩**：任务中提问与 Conversation compact 已迁入 Rust。
-- **Native Git 主体迁移并接线**：Rust 已实现并接入 status、diff、stage、unstage、discard、reset、commit、branches、checkout、log、blame、pull、push、init；破坏性恢复继续经过 Workspace/Trash 安全层。
-- **Recent / Permissions / Instructions 开始真正持久化**：Native settings.json 接管最近项目、权限配置与审批模型选择；hello 返回真实 recent / permissions / tools；打开/移除项目会更新 recent 并发出事件。
-- **Aimo 宪法与指令进入 Native Agent 上下文**：内置宪法、全局 instructions 与项目 `AGENTS.md` 不再只属于 Python Bridge。
-- **Native PermissionEngine 迁移中**：Rust 已加入 restricted/manual/ai/autonomous、逐工具 deny/ask/session/always/ai_review、allow/deny glob 规则与 AI reviewer 决策骨架；HardPolicy 仍保持最高优先级。
-- **构建链已稳定**：此前 alpha.6 Build #33 已真实完成 Android ARM64 APK、Windows x64 portable/NSIS 与自动 prerelease，Android APK 经过签名验证。
-- **仍未完成**：完整 agent（exec/network）、Provider 流式/可取消请求、Terminal/Process/Ports、`fs.export`、外部 watcher、Android SAF 原地工作区、Remote Runtime，以及 Native-only 全面回归。因此 Python Bridge 仍保留。
-- **版本策略不变**：上述迁移和已知 bug 清理完成前继续保持 alpha。
+
+- **Native 功能等价门禁正式建立**：新增 `docs/NATIVE_PARITY_AUDIT.md` 与 Runtime dispatch parity CI。Runtime API 共 72 个业务方法，当前 Rust NativeCore 已真实覆盖 69 / 72；只要 Native dispatch 再漏掉 Runtime 方法，CI 会直接失败。Python Bridge 在最终门禁全部通过前明确禁止删除。
+- **四种 Native Agent 模式已齐**：chat / read / edit / agent 均进入 Rust。Edit 写入链为 HardPolicy → PermissionEngine → 审批 → Checkpoint → mutation；支持 ask_user、fs_glob、fs_multi_read、shell_run、terminal_read、web_fetch，以及工具次数/运行时间/修复次数限制。
+- **PermissionEngine 已迁入 Rust**：restricted / manual / ai / autonomous、逐工具 deny / ask / session / always / ai_review、allow/deny wildcard、approval_profile、AI reviewer 与失败回退 ASK_USER 均已接入；HardPolicy 始终优先。
+- **Aimo 宪法与 Instructions 原生化**：内置宪法、全局 instructions、项目 `AGENTS.md` 真正进入 Native Agent 上下文；recent / permissions / approval_profile 均由 Native settings 持久化。
+- **Git 全量接线**：status、diff、stage、unstage、discard、reset、commit、branches、checkout、log、blame、pull、push、init 已接入 NativeCore；破坏性恢复继续经过 Workspace / Trash 安全层。
+- **Terminal / Process / Ports 已迁入本地 Native 主链**：Windows PTY、命令运行/取消、交互终端事件、history 与 ports 已接入；Android 支持一次性 shell 命令，交互 PTY 当前明确返回 NO_PTY，不伪装支持。
+- **Export 与外部 Watcher 已迁入 Rust**：ZIP Export、真实磁盘变化监听与 `fs.external` 生命周期已经接通。
+- **Provider Streaming 大幅推进**：OpenAI-compatible SSE、reasoning delta、MiniMax `<think>` 分离、streamed tool-call 聚合已经通过 Windows / Android CI；服务端长时间沉默时的 blocking read 仍缺真正 hard-cancel。Anthropic / Gemini 的完整流式等价仍需最终核验。
+- **Native-only 测试门禁已经跑通**：Alpha7 Run #61 已通过 Native-only Rust tests、Windows x64 EXE、Android ARM64 APK 与 APK 签名验证；Run #66 又通过 Runtime dispatch parity gate。
+- **Remote Devices 只迁了存储层，不伪造 LAN server**：device token hashing / revoke 等 Rust 基础已存在，但 Rust Remote Runtime server 与一次性配对码尚未完成，因此远程连接仍不能作为“已迁完”。
+- **当前真正硬缺口**：Android SAF 原地 WorkspaceBackend；Android interactive PTY；Rust Remote Runtime / pairing；Provider 沉默连接 hard-cancel 与全协议最终等价；最终 Native-only/UI/实机回归。
+- **版本策略不变**：以上硬缺口和已知 bug 全部收口前继续保持 alpha，且不删除 Python Bridge。
 
 ## 0.8.0-alpha.4
 - **Native 服务商配置开始真正接通**：Rust Native Core 新增 profiles.list / save / delete / models / test；Native hello 不再返回空的 profiles / presets，设置页可显示 OpenAI、DeepSeek、Kimi、OpenRouter、Gemini、Anthropic、Ollama、MiniMax 与自定义 OpenAI 兼容接口。
