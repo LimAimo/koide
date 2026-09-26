@@ -29,6 +29,9 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Verify Runtime API / Native dispatch parity
+        run: node scripts/check-native-parity.mjs
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
