@@ -383,7 +383,7 @@ export function openSettings(jumpTo = null) {
   const body = h("div", { class: "page-body" });
   const q = h("input", { class: "text-field", type: "search", placeholder: "搜索设置", "aria-label": "搜索设置" });
   const page = h("div", { class: "page", role: "dialog", "aria-label": "设置" },
-    h("div", { class: "page-head settings-head" }, iconButton("back", "返回", () => request()), h("div", null, h("h1", null, "设置"), h("small", { class: "muted" }, "Koide · 本机与工作区偏好")),
+    h("div", { class: "page-head settings-head" }, iconButton("back", "返回", () => request()), h("div", null, h("h1", null, "设置"), h("small", { class: "muted" }, "Koide · 本机与工作区偏好"))),
     h("div", { class: "search-box" }, icon("search", 20), q), body);
   document.body.appendChild(page);
   requestAnimationFrame(() => page.classList.add("in"));
