@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
-use agent::AgentState;
+use agent::{AgentLimits, AgentState};
 use conversation::ConversationStore;
 use git as gitops;
 use settings::{tool_descriptions, SettingsStore};
@@ -162,12 +162,12 @@ impl NativeCore {
                     return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
                 }
                 let mode = params.get("mode").and_then(Value::as_str).unwrap_or("chat");
-                if !matches!(mode, "chat" | "read" | "edit") {
+                if !matches!(mode, "chat" | "read" | "edit" | "agent") {
                     return Err(RuntimeError::new(
                         "MIGRATION_PENDING",
-                        format!("Native Core 的「{mode}」模式仍在迁移；当前开放聊天、只读和编辑模式"),
+                        format!("Native Core 不支持未知模式「{mode}」"),
                     )
-                    .with_data(json!({"mode": mode, "available_modes": ["chat", "read", "edit"]})));
+                    .with_data(json!({"mode": mode, "available_modes": ["chat", "read", "edit", "agent"]})));
                 }
                 let goal = req_str(&params, "goal")?.to_owned();
                 let profile_id = req_str(&params, "profile")?.to_owned();
@@ -185,6 +185,10 @@ impl NativeCore {
                 let workspace_root = self.ws()?.root_path();
                 let checkpoints = self.ws()?.checkpoint_handle();
                 let system_context = instructions::agent_context(&self.data_dir, &workspace_root);
+                let limits = AgentLimits::from_params(
+                    params.get("limits"),
+                    params.get("web_search").and_then(Value::as_bool).unwrap_or(false),
+                );
                 let checkpoint_task = checkpoints.start_task(&goal, mode)?;
                 let task_id = checkpoint_task
                     .get("id")
@@ -205,6 +209,8 @@ impl NativeCore {
                     self.data_dir.clone(),
                     task_id,
                     checkpoints,
+                    self.terminal.clone(),
+                    limits,
                 )
             }
             "agent.stop" => Ok(json!({"stopped": self.agent.stop()})),
@@ -562,7 +568,7 @@ impl NativeCore {
             "profiles": self.profiles.list_public(),
             "presets": presets(),
             "agent": {"running": self.agent.is_running(), "task_id": self.agent.task_id()},
-            "agent_modes": ["chat", "read", "edit"],
+            "agent_modes": ["chat", "read", "edit", "agent"],
             "approvals": self.agent.pending_approvals(),
             "questions": self.agent.pending_questions(),
             "tools": tool_descriptions(),
@@ -570,7 +576,7 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit/agent)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
             },
             "data_dir": self.data_dir
         })
