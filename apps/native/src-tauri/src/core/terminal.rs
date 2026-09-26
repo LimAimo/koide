@@ -285,6 +285,25 @@ impl TerminalManager {
         }
     }
 
+    pub fn close_all(&self) {
+        if let Ok(commands) = self.commands.lock() {
+            for child in commands.values() {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                }
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        if let Ok(sessions) = self.sessions.lock() {
+            for session in sessions.values() {
+                if let Ok(mut killer) = session.killer.lock() {
+                    let _ = killer.kill();
+                }
+                session.alive.store(false, Ordering::SeqCst);
+            }
+        }
+    }
+
     pub fn list(&self) -> Value {
         #[cfg(target_os = "android")]
         {
