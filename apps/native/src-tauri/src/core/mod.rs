@@ -8,6 +8,7 @@ mod instructions;
 mod policy;
 mod provider;
 mod settings;
+mod terminal;
 mod trash;
 mod workspace;
 
@@ -19,6 +20,7 @@ use agent::AgentState;
 use conversation::ConversationStore;
 use git as gitops;
 use settings::{tool_descriptions, SettingsStore};
+use terminal::{listening_ports, TerminalManager};
 use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
@@ -57,6 +59,7 @@ pub struct NativeCore {
     conversations: Option<ConversationStore>,
     profiles: ProfileStore,
     settings: SettingsStore,
+    terminal: TerminalManager,
     agent: AgentState,
 }
 
@@ -65,6 +68,7 @@ impl NativeCore {
         Self {
             profiles: ProfileStore::new(data_dir.clone()),
             settings: SettingsStore::new(&data_dir),
+            terminal: TerminalManager::new(),
             agent: AgentState::new(),
             data_dir,
             workspace: None,
@@ -256,6 +260,7 @@ impl NativeCore {
             }
             "workspace.close" => {
                 let _ = self.agent.stop();
+                self.terminal.close_all();
                 self.workspace = None;
                 self.conversations = None;
                 Self::emit(app, "workspace.closed", json!({}));
@@ -430,6 +435,32 @@ impl NativeCore {
                 }
                 Ok(batch.result)
             }
+            "terminal.run" => self.terminal.run(
+                app,
+                &self.ws()?.root_path(),
+                req_str(&params, "command")?,
+                params.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(600.0),
+            ),
+            "terminal.kill" => self.terminal.kill(req_str(&params, "id")?),
+            "terminal.open" => self.terminal.open(
+                app,
+                &self.ws()?.root_path(),
+                params.get("cols").and_then(Value::as_u64).unwrap_or(80).clamp(20, 500) as u16,
+                params.get("rows").and_then(Value::as_u64).unwrap_or(24).clamp(8, 300) as u16,
+            ),
+            "terminal.input" => self.terminal.input(
+                req_str(&params, "id")?,
+                params.get("data").and_then(Value::as_str).unwrap_or(""),
+            ),
+            "terminal.resize" => self.terminal.resize(
+                req_str(&params, "id")?,
+                params.get("cols").and_then(Value::as_u64).unwrap_or(80).clamp(20, 500) as u16,
+                params.get("rows").and_then(Value::as_u64).unwrap_or(24).clamp(8, 300) as u16,
+            ),
+            "terminal.close" => self.terminal.close(req_str(&params, "id")?),
+            "terminal.list" => Ok(self.terminal.list()),
+            "terminal.history" => self.terminal.history(req_str(&params, "id")?),
+            "ports.list" => Ok(json!({"ports": listening_ports()})),
             "git.status" => gitops::status(&self.ws()?.root_path()),
             "git.diff" => gitops::diff(
                 &self.ws()?.root_path(),
@@ -539,7 +570,7 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
             },
             "data_dir": self.data_dir
         })
