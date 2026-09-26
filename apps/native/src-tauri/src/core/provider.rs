@@ -591,10 +591,6 @@ pub fn chat_complete(
             if matches!(kind, "minimax" | "minimax_cn") {
                 body["reasoning_split"] = Value::Bool(true);
             }
-            if kind == "deepseek" && web_search {
-                let list = body["tools"].as_array_mut().ok_or_else(|| provider_error("tools 结构无效"))?;
-                list.push(json!({"type":"web_search"}));
-            }
             if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
                 for (key, value) in extra {
                     body[key] = value.clone();
@@ -1020,6 +1016,12 @@ pub fn agent_turn(
             }
             if matches!(kind, "minimax" | "minimax_cn") {
                 body["reasoning_split"] = Value::Bool(true);
+            }
+            if kind == "deepseek" && web_search {
+                let list = body["tools"]
+                    .as_array_mut()
+                    .ok_or_else(|| provider_error("tools 结构无效"))?;
+                list.push(json!({"type":"web_search"}));
             }
             if let Some(extra) = profile.get("extra_body").and_then(Value::as_object) {
                 for (key, value) in extra {
