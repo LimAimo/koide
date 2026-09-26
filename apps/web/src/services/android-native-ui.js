@@ -29,6 +29,13 @@ export function installAndroidNativeShell({ onFiles, onAI, onSettings } = {}) {
   };
   const offState = state.subscribe(sync);
   const offSettings = settingsStore.subscribe(sync);
-  sync();
+
+  // Handshake after the web UI exists. Native shell is enhancement-only:
+  // a failed handshake must leave the complete Web UI usable.
+  requestAnimationFrame(() => {
+    invoke("native_ui_ready")
+      .then(() => sync())
+      .catch(() => document.documentElement.classList.remove("koide-native-shell"));
+  });
   return () => { window.removeEventListener("koide:native-ui", handler); offState?.(); offSettings?.(); };
 }
