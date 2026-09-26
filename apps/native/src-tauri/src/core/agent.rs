@@ -782,6 +782,15 @@ fn tool_title(call: &ToolCall) -> String {
         ),
         "fs_multi_read" => "批量读取文件".to_owned(),
         "ask_user" => "向你提问".to_owned(),
+        "shell_run" => format!(
+            "运行“{}”",
+            call.arguments.get("command").and_then(Value::as_str).unwrap_or("").chars().take(80).collect::<String>()
+        ),
+        "terminal_read" => "读取终端输出".to_owned(),
+        "web_fetch" => format!(
+            "访问“{}”",
+            call.arguments.get("url").and_then(Value::as_str).unwrap_or("").chars().take(90).collect::<String>()
+        ),
         _ => call.name.clone(),
     }
 }
@@ -1174,6 +1183,225 @@ fn edit_tool_specs() -> Vec<Value> {
         }})
     ]);
     tools
+}
+
+fn agent_tool_specs() -> Vec<Value> {
+    let mut tools = edit_tool_specs();
+    tools.extend([
+        json!({"type":"function","function":{
+            "name":"shell_run",
+            "description":"Run a shell command in the workspace root to build, test or inspect the project. Dangerous commands may be denied or require explicit user approval.",
+            "parameters":{"type":"object","properties":{
+                "command":{"type":"string","minLength":1},
+                "timeout_seconds":{"type":"number","minimum":1,"maximum":1800}
+            },"required":["command"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"terminal_read",
+            "description":"Read recent output from the user's interactive terminal without recording keystrokes.",
+            "parameters":{"type":"object","properties":{
+                "id":{"type":"string"},
+                "max_chars":{"type":"integer","minimum":100,"maximum":20000}
+            },"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"web_fetch",
+            "description":"Fetch readable content from a public http/https URL. Localhost and private-network targets are blocked by HardPolicy.",
+            "parameters":{"type":"object","properties":{
+                "url":{"type":"string","minLength":1}
+            },"required":["url"],"additionalProperties":false}
+        }})
+    ]);
+    tools
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_shell_tool(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    call: &ToolCall,
+    workspace_root: &Path,
+    data_dir: &Path,
+    profile: &Value,
+    api_key: Option<&str>,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
+) -> Result<Value, RuntimeError> {
+    let command = required_arg(&call.arguments, "command")?;
+    if let Some(verdict) = check_command(command) {
+        match verdict.action {
+            CommandPolicyAction::Deny => {
+                return Err(RuntimeError::new("POLICY_DENIED", verdict.reason));
+            }
+            CommandPolicyAction::Ask => {
+                request_user_approval(
+                    app, cancel, task_id, call, "exec", "high", verdict.reason,
+                    "hard_policy", approvals.clone(), session_grants.clone()
+                )?;
+            }
+        }
+    } else {
+        authorize_tool(
+            app, cancel, task_id, call, "exec", "medium", command,
+            data_dir, profile, api_key, approvals.clone(), session_grants.clone()
+        )?;
+    }
+    ensure_not_cancelled(cancel)?;
+    let timeout = call.arguments.get("timeout_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(120.0)
+        .clamp(1.0, 1800.0);
+    emit(app, "terminal.start", json!({
+        "source":"agent","call_id":call.id,"command":command
+    }));
+    let result = run_capture(
+        workspace_root,
+        command,
+        Duration::from_secs_f64(timeout),
+        cancel,
+    )?;
+    let output = result.get("output").and_then(Value::as_str).unwrap_or("");
+    if !output.is_empty() {
+        emit(app, "terminal.output", json!({
+            "source":"agent","call_id":call.id,"stream":"stdout","data":output
+        }));
+    }
+    emit(app, "terminal.exit", json!({
+        "source":"agent",
+        "call_id":call.id,
+        "exit_code":result.get("exit_code").and_then(Value::as_i64).unwrap_or(-1)
+    }));
+    if result.get("cancelled").and_then(Value::as_bool) == Some(true) {
+        return Err(RuntimeError::new("STOPPED", "已由你停止"));
+    }
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_terminal_read(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    call: &ToolCall,
+    terminal: &TerminalManager,
+    data_dir: &Path,
+    profile: &Value,
+    api_key: Option<&str>,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
+) -> Result<Value, RuntimeError> {
+    authorize_tool(
+        app, cancel, task_id, call, "exec", "low", "",
+        data_dir, profile, api_key, approvals, session_grants
+    )?;
+    ensure_not_cancelled(cancel)?;
+    let max_chars = call.arguments.get("max_chars")
+        .and_then(Value::as_u64)
+        .unwrap_or(4000)
+        .clamp(100, 20000) as usize;
+    let value = if let Some(id) = call.arguments.get("id").and_then(Value::as_str) {
+        let hist = terminal.history(id)?;
+        let data = hist.get("data").and_then(Value::as_str).unwrap_or("");
+        json!({
+            "id":id,
+            "alive":hist.get("alive").and_then(Value::as_bool).unwrap_or(false),
+            "output":tail_chars(data,max_chars)
+        })
+    } else if let Some((id,data)) = terminal.last_history() {
+        json!({"id":id,"alive":true,"output":tail_chars(&data,max_chars)})
+    } else {
+        json!({"output":"","note":"没有打开的终端会话"})
+    };
+    Ok(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_web_fetch(
+    app: &AppHandle,
+    cancel: &AtomicBool,
+    task_id: &str,
+    call: &ToolCall,
+    data_dir: &Path,
+    profile: &Value,
+    api_key: Option<&str>,
+    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    session_grants: Arc<Mutex<HashSet<String>>>,
+) -> Result<Value, RuntimeError> {
+    let url = required_arg(&call.arguments, "url")?.trim();
+    ensure_public_http_url(url)?;
+    authorize_tool(
+        app, cancel, task_id, call, "network", "medium", url,
+        data_dir, profile, api_key, approvals, session_grants
+    )?;
+    ensure_not_cancelled(cancel)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+    let mut response = client.get(url)
+        .header("User-Agent","Diffusion-IDE-Agent/1.0")
+        .header("Accept","text/html,text/plain,application/json;q=0.9,*/*;q=0.5")
+        .send()
+        .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+    ensure_not_cancelled(cancel)?;
+    let final_url = response.url().as_str().to_owned();
+    ensure_public_http_url(&final_url)?;
+    let status = response.status().as_u16();
+    let ctype = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v|v.to_str().ok()).unwrap_or("").to_owned();
+    let mut data = Vec::new();
+    response.by_ref().take((WEB_FETCH_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut data)
+        .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+    let truncated_bytes = data.len() > WEB_FETCH_MAX_BYTES;
+    if truncated_bytes { data.truncate(WEB_FETCH_MAX_BYTES); }
+    let raw = String::from_utf8_lossy(&data).into_owned();
+    let readable = if ctype.to_ascii_lowercase().contains("html") {
+        strip_html(&raw)
+    } else {
+        raw
+    };
+    let truncated_chars = readable.chars().count() > WEB_FETCH_MAX_CHARS;
+    let content = readable.chars().take(WEB_FETCH_MAX_CHARS).collect::<String>();
+    Ok(json!({
+        "url":final_url,
+        "status":status,
+        "content_type":ctype,
+        "content":content,
+        "truncated":truncated_bytes || truncated_chars
+    }))
+}
+
+fn tail_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    text.chars().skip(count.saturating_sub(max_chars)).collect()
+}
+
+fn strip_html(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(WEB_FETCH_MAX_CHARS * 2));
+    let mut in_tag = false;
+    let mut last_space = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            _ if in_tag => {}
+            '&' => {
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            c if c.is_whitespace() => {
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            c => { out.push(c); last_space = false; }
+        }
+        if out.len() > WEB_FETCH_MAX_CHARS * 4 { break; }
+    }
+    out.trim().to_owned()
 }
 
 #[allow(clippy::too_many_arguments)]
