@@ -2,6 +2,7 @@ mod agent;
 mod checkpoint;
 mod conversation;
 mod crypto;
+mod git;
 mod id;
 mod policy;
 mod provider;
@@ -14,6 +15,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use agent::AgentState;
 use conversation::ConversationStore;
+use git as gitops;
 use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use workspace::{browse_location, Workspace};
 
@@ -397,7 +399,83 @@ impl NativeCore {
                 }
                 Ok(batch.result)
             }
-            "git.status" => Ok(json!({"is_repo": false, "files": [], "branch": null})),
+            "git.status" => gitops::status(&self.ws()?.root_path()),
+            "git.diff" => gitops::diff(
+                &self.ws()?.root_path(),
+                req_str(&params, "path")?,
+                params.get("staged").and_then(Value::as_bool).unwrap_or(false),
+            ),
+            "git.stage" => {
+                let paths = params.get("paths").and_then(Value::as_array)
+                    .ok_or_else(|| RuntimeError::new("BAD_REQUEST", "paths 必须是数组"))?
+                    .iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+                let result = gitops::stage(&self.ws()?.root_path(), &paths)?;
+                Self::emit(app, "git.changed", json!({}));
+                Ok(result)
+            }
+            "git.unstage" => {
+                let paths = params.get("paths").and_then(Value::as_array)
+                    .ok_or_else(|| RuntimeError::new("BAD_REQUEST", "paths 必须是数组"))?
+                    .iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+                let result = gitops::unstage(&self.ws()?.root_path(), &paths)?;
+                Self::emit(app, "git.changed", json!({}));
+                Ok(result)
+            }
+            "git.discard" => {
+                let (result, events) = gitops::discard(
+                    self.ws()?,
+                    req_str(&params, "path")?,
+                    params.get("confirm").and_then(Value::as_bool).unwrap_or(false),
+                )?;
+                for event in events { Self::emit(app, "fs.changed", event); }
+                Self::emit(app, "git.changed", json!({}));
+                Ok(result)
+            }
+            "git.reset" => {
+                let (result, events) = gitops::reset(
+                    self.ws()?,
+                    req_str(&params, "hash")?,
+                    params.get("mode").and_then(Value::as_str).unwrap_or("soft"),
+                    params.get("confirm").and_then(Value::as_bool).unwrap_or(false),
+                )?;
+                for event in events { Self::emit(app, "fs.changed", event); }
+                Self::emit(app, "git.changed", json!({}));
+                Ok(result)
+            }
+            "git.commit" => {
+                let result = gitops::commit(&self.ws()?.root_path(), req_str(&params, "message")?)?;
+                Self::emit(app, "git.changed", json!({}));
+                Ok(result)
+            }
+            "git.branches" => gitops::branches(&self.ws()?.root_path()),
+            "git.checkout" => {
+                let result = gitops::checkout(
+                    &self.ws()?.root_path(),
+                    req_str(&params, "name")?,
+                    params.get("create").and_then(Value::as_bool).unwrap_or(false),
+                )?;
+                Self::emit(app, "git.changed", json!({}));
+                Self::emit(app, "fs.external", json!({"changes":[{"path":".","kind":"modify"}]}));
+                Ok(result)
+            }
+            "git.log" => gitops::log(
+                &self.ws()?.root_path(),
+                params.get("limit").and_then(Value::as_u64).unwrap_or(50),
+                params.get("path").and_then(Value::as_str),
+            ),
+            "git.blame" => gitops::blame(&self.ws()?.root_path(), req_str(&params, "path")?),
+            "git.pull" => {
+                let result = gitops::pull(&self.ws()?.root_path())?;
+                Self::emit(app, "git.changed", json!({}));
+                Self::emit(app, "fs.external", json!({"changes":[{"path":".","kind":"modify"}]}));
+                Ok(result)
+            }
+            "git.push" => gitops::push(&self.ws()?.root_path()),
+            "git.init" => {
+                let result = gitops::init(&self.ws()?.root_path())?;
+                Self::emit(app, "git.changed", json!({}));
+                Ok(result)
+            },
             _ => Err(RuntimeError::new(
                 "METHOD_NOT_IMPLEMENTED",
                 format!("Native Core 尚未迁移方法：{method}"),
@@ -428,7 +506,7 @@ impl NativeCore {
             "recent": [],
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
             },
             "data_dir": self.data_dir
         })
