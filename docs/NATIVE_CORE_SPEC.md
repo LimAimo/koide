@@ -1,34 +1,8 @@
-# Diffusion Native Core 重构 SPEC
+# Koide Native Core 架构
 
-> 目标版本：v0.8.x（迁移期） → v0.9.0（Python Bridge 完全移除）  
-> 本文是本次原生化重构的约束文档。实现若与本文冲突，以“核心安全语义不退化、桌面/Android 都是一等公民”为最高原则。
+本文描述 0.9.0 起的当前架构，不再是迁移计划。
 
-## 1. 目标
-
-Diffusion 从“网页 UI + Python Bridge + WebSocket”重构为“跨平台 UI + Rust Native Core”。
-
-最终正常本地使用路径必须满足：
-
-- 不安装 Python；
-- 不启动 Python 进程；
-- 不依赖 localhost / 8765；
-- 不依赖 WebSocket 才能打开本地项目；
-- Windows 桌面端安装后可直接打开项目；
-- Android APK 安装后可直接管理本地项目；
-- 文件写入、Revision、Checkpoint、回收站、权限硬规则不能因为迁移而弱化；
-- 远程连接保留，但降级为可选能力，不能再是 Diffusion 工作的前提。
-
-## 2. 非目标
-
-本次原生化第一阶段不承诺：
-
-- Android 能直接运行所有桌面开发工具链（Docker、MSVC、完整 Node/Cargo 等）；
-- 一次迁移就完成所有 73 个旧 RPC 的 Rust 实现；
-- 继续维护 Python Bridge 作为长期核心实现。
-
-迁移期允许旧 Bridge 作为兼容适配器存在，但 UI 不得继续直接依赖它。
-
-## 3. 最终架构
+## 1. 运行时边界
 
 ```text
 apps/web UI
@@ -36,7 +10,7 @@ apps/web UI
     ▼
 Runtime API（平台无关）
     │
-    ├── NativeRuntimeAdapter ── Tauri IPC ── Rust Core
+    ├── NativeRuntimeAdapter ── Tauri IPC ── Rust Native Core
     │                                      ├─ workspace/files
     │                                      ├─ checkpoint/trash
     │                                      ├─ permissions/policy
@@ -45,219 +19,85 @@ Runtime API（平台无关）
     │                                      ├─ terminal/process
     │                                      └─ settings/conversations
     │
-    └── RemoteRuntimeAdapter（可选）── WebSocket ── Remote Host
+    └── BridgeRuntimeAdapter ── WebSocket ── Python Bridge（可选兼容模式）
 ```
 
-迁移期额外存在：
+Windows / Android 本地使用选择 NativeRuntimeAdapter，不启动 Python、localhost 或 WebSocket。BridgeRuntimeAdapter 只服务浏览器 / LAN 兼容场景。
 
-```text
-BridgeRuntimeAdapter ── 旧 Python Bridge
-```
+## 2. 前端约束
 
-它只用于过渡和回归验证，不能成为新 UI 的直接依赖。
-
-## 4. 前端边界
-
-`apps/web/src/components/**`、`apps/web/src/main.js` 不允许：
-
-- import `services/bridge.js`；
-- 直接调用 `bridge.rpc(...)`；
-- 直接调用 `Bridge.pair(...)`；
-- 假定存在 `127.0.0.1:8765`。
-
-组件只能使用 `services/runtime/**` 暴露的领域 API，例如：
+`apps/web/src/components/**` 与 `apps/web/src/main.js` 不允许直接 import `services/bridge.js` 或调用底层传输协议。组件只能使用 `services/runtime/**` 的领域 API，例如：
 
 ```js
 runtime.files.read({ path })
 runtime.files.write({ path, content, base_revision })
-runtime.workspace.open({ path }) // 兼容 LocalFS
-runtime.workspace.open({ location: { kind: "saf", uri, name } }) // Android SAF
+runtime.workspace.open({ location })
 runtime.git.status()
 runtime.terminal.open({ cols, rows })
 runtime.agent.start({...})
 runtime.on("fs.changed", handler)
 ```
 
-## 5. Rust Core 模块
+## 3. Workspace / Files
 
-### 5.1 Workspace / Files
-必须保留旧实现的关键语义：
+必须长期保持：
 
-- 工作区沙箱，禁止 `..` / symlink 越界；
-- SHA-256 Revision；
+- 工作区沙箱与路径越界防护；
+- SHA-256 revision；
 - `base_revision` 冲突检测；
-- 原子写入；
-- 创建 / 删除 / 重命名 / 复制；
-- 事务式分块写入；
-- 文件树 / 搜索；
-- 用户和 Agent 修改都产出统一 Change Event；
-- 被覆盖 / 删除内容可恢复。
+- 原子写入与事务式大文件写入；
+- tree / search / glob；
+- create / delete / rename / copy；
+- 用户和 Agent 修改统一产生领域事件；
+- 被覆盖与删除内容可恢复。
 
-### 5.2 Checkpoint / Trash
+Workspace backend 当前包含 LocalFS 与 Android SAF。SAF URI 从不伪装成 `PathBuf`。
 
-- 每个 Agent 任务有独立 checkpoint；
-- 单步、单文件、整个任务可撤销；
-- 删除和破坏性恢复优先进入 Diffusion Trash；
-- Git 强制回退同样必须走安全恢复路径，而不是裸 `git reset --hard` 覆盖磁盘。
+## 4. Checkpoint / Trash
 
-### 5.3 Security
+- 每个 Agent 任务建立 checkpoint；
+- 支持单事件、单文件、整任务恢复；
+- 删除与破坏性恢复优先经过 Koide 回收站；
+- Git 强制恢复也不能绕过 Workspace 安全语义。
 
-- HardPolicy 是 Rust Core 内部不可绕过的底层规则；
-- permission mode、tool rules、单次批准保留；
-- UI 不能通过调用低级 IPC 绕过 Workspace / Policy。
+## 5. Security
 
-### 5.4 Providers / Agent
+- HardPolicy 是 Core 内部不可绕过的底层规则；
+- PermissionEngine 支持 restricted / manual / ai / autonomous；
+- 支持逐工具 deny / ask / session / always / ai_review 与 allow/deny 规则；
+- UI 不能通过更低级 IPC 绕过 Workspace、HardPolicy 或 Checkpoint。
 
-- HTTP/SSE 由 Rust 直接发起；
-- API Key 存储在 Native Core 数据目录，不回传明文；
-- OpenAI-compatible / Anthropic / Gemini 至少保持旧版能力；
-- Tool Call、Reasoning、ask_user、审批、停止、上下文历史继续通过 Runtime Event 暴露。
+## 6. Providers / Agent
 
-### 5.5 Git
+- HTTP/SSE 由 Rust Core 发起；
+- API Key 保存在 Native Core 数据目录，不回传明文；
+- OpenAI-compatible、Anthropic、Gemini Native 都有原生调用路径；
+- Tool Call、Reasoning、ask_user、审批、停止和会话历史通过 Runtime Event 暴露；
+- Provider 停止为协作式检查；同步网络读取被服务端阻塞时可能延迟。
 
-领域 API 不假定系统一定存在 `git` 命令。
+## 7. Git / Terminal
 
-- 桌面第一阶段允许调用系统 Git；
-- Android 必须可替换为嵌入式 Git backend；
-- UI 不得知道使用的是哪种 backend。
+Git 与 Terminal 是 workspace capability：
 
-### 5.6 Terminal
+- Windows LocalFS：Git + PTY；
+- Android LocalFS：一次性 shell；当前无交互式 PTY；
+- Android SAF：Git=false、terminal_cwd=false，因为 content URI 不是普通 cwd。
 
-终端是平台能力，不是 Core 的绝对前提：
+UI 必须根据 capability 显示真实能力，不得伪装支持。
 
-```text
-TerminalBackend
-├─ Desktop PTY backend
-└─ Android backend
-```
+## 8. Android SAF
 
-Android 第一阶段允许能力少于桌面，但“没有桌面 PTY”不能导致整个 App 无法运行。
+- 通过系统目录选择器获取 tree URI；
+- 使用持久化 URI 权限；
+- Kotlin plugin 只负责 `ContentResolver` / `DocumentsContract` I/O 原语；
+- revision、Checkpoint、Trash、Agent 等业务语义仍由 Rust Core 负责。
 
-## 6. Android
+详见 `ANDROID_SAF_BACKEND.md`。
 
-Android 必须是独立可用的本地 App，不是电脑遥控器。
+## 9. 数据与兼容
 
-- Rust Core 直接打入 APK；
-- 项目目录通过 Android SAF / 持久 URI 权限访问；
-- Workspace 使用抽象文件后端，不把 `PathBuf` 当作所有平台唯一真相；
-- AI、会话、Checkpoint、代码修改均可在手机本机完成；
-- “连接电脑/SSH”只作为可选运行环境。
+平台级设置、profiles、secrets、device data 和 global instructions 使用平台应用数据目录。项目内部仍保留既有 `.diffusion` / `diffusion-*` 命名时，以兼容历史数据为优先，不因产品改名破坏已有项目。
 
-## 7. 桌面
+## 10. 测试门槛
 
-第一目标 Windows：
-
-- Tauri 壳 + Rust Core；
-- 无 Python sidecar；
-- 无本地 HTTP/WebSocket 服务器；
-- 打开 App 时 Core 已存在；
-- 文件选择使用系统原生对话框；
-- 正常退出时不留下额外 Bridge 进程。
-
-## 8. 迁移阶段
-
-### Phase A：断开 UI 与 Bridge 的直接耦合
-- [x] 新建 `services/runtime/`；
-- [x] 旧 Bridge 封装为 `BridgeRuntimeAdapter`；
-- [x] UI 全部改用 Runtime API；
-- [x] Web 回归测试继续通过。
-
-### Phase B：建立 Rust/Tauri 骨架
-- [x] 新建 `apps/native/src-tauri/`；
-- [x] 建立 IPC command / event 边界；
-- [x] Native Adapter 自动选择；
-- [x] Native hello / app info 源码已实现；
-
-### Phase C：Workspace 迁移
-- [x] open/close；
-- [x] read/tree/hash/search；
-- [x] write/patch/create/delete/rename/copy；
-- [x] revision conflict；
-- [x] trash；
-- [x] chunked write；
-- [x] Diffusion 内部 mutation 文件事件；
-- [ ] 外部磁盘 watcher 事件。
-
-### Phase D：设置、权限、会话、Checkpoint
-
-### Phase E：Providers + Agent
-
-### Phase F：Git + Process + Terminal
-
-### Phase G：删除 Python
-完成条件：
-
-- `bridge/` 删除；
-- `pyproject.toml` 删除；
-- README 不再要求 Python；
-- Python 测试被 Rust 测试覆盖；
-- Windows 原生构建通过；
-- Android 原生构建通过。
-
-## 9. IPC 规则
-
-Native IPC 不复制旧 WebSocket 协议的连接语义，但可以保留稳定的领域方法名以降低迁移成本。
-
-IPC 返回统一错误：
-
-```json
-{"code":"CONFLICT","message":"文件已被修改","data":{}}
-```
-
-事件继续使用稳定领域名称：
-
-- `fs.changed`
-- `fs.external`
-- `workspace.opened`
-- `workspace.closed`
-- `agent.*`
-- `approval.*`
-- `terminal.*`
-- `git.changed`
-
-事件名属于 Diffusion Domain Contract，不属于 WebSocket Contract。
-
-## 10. 数据目录
-
-所有平台统一通过 PlatformDataDir 获取：
-
-- settings
-- provider profiles / secrets
-- device data（仅启用远程访问时）
-- global instructions
-
-项目内数据继续放在 `.diffusion/`（若旧实现已有对应位置，迁移时保持兼容）。
-
-## 11. 测试门槛
-
-每个迁移模块必须同时有：
-
-1. 旧行为回归测试；
-2. Rust 单元测试；
-3. UI Runtime mock 测试；
-4. 涉及文件破坏性的操作必须额外覆盖越界、symlink、revision conflict、恢复路径。
-
-不得为了“Rust 版能跑”删除安全测试。
-
-## 12. 构建产物
-
-完成到可构建阶段后应提供：
-
-- Windows `.exe` / installer；
-- Android `.apk`；
-- 完整源代码 `.zip`；
-- 构建说明；
-- 迁移状态文档。
-
-若执行环境缺少 Rust、Android SDK/NDK 或 Windows toolchain，不得伪造二进制；必须保留可继续构建的源码和明确列出阻塞项。
-
-## 13. 本轮实现原则
-
-本轮优先顺序：
-
-1. 固化 SPEC；
-2. 断开前端直接 Bridge 耦合；
-3. 建立 Rust/Tauri Native Core 工程骨架；
-4. 优先迁移 Workspace / Filesystem，因为它是 Diffusion 安全和 Agent 修改代码的地基；
-5. 再迁移其他模块；
-6. 只有 Rust 替代能力达到旧版语义后才删除对应 Python 实现。
+行为变化至少覆盖对应的 Web/Rust/Bridge 单测或集成测试；文件破坏性操作必须额外覆盖越界、revision conflict 和恢复路径。主 CI 同时构建 Windows 与 Android。
