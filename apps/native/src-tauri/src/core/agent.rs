@@ -5,7 +5,7 @@ use crate::core::policy::{
     check_command, check_read_path, check_write_path, ensure_public_http_url,
     CommandPolicyAction,
 };
-use crate::core::provider::{agent_turn, chat_complete, openai_stream_turn, ProfileStore, StreamEvent, ToolCall};
+use crate::core::provider::{anthropic_stream_turn, chat_complete, gemini_stream_turn, openai_stream_turn, ProfileStore, StreamEvent, ToolCall};
 use crate::core::settings::{wildcard_match, PermissionAction, SettingsStore};
 use crate::core::terminal::{run_capture, TerminalManager};
 use crate::core::workspace::Workspace;
@@ -458,42 +458,32 @@ fn run_tool_mode(
             json!({"task_id":task_id,"state":"thinking","detail":""}),
         );
         let kind = profile.get("kind").and_then(Value::as_str).unwrap_or("openai_compatible");
-        let streamed = !matches!(kind, "anthropic" | "gemini_native");
-        let turn = if streamed {
-            openai_stream_turn(
-                profile,
-                api_key,
-                &messages,
-                &tools,
-                reasoning,
-                limits.web_search,
-                cancel,
-                |event| match event {
-                    StreamEvent::Text(delta) => emit(
-                        app,
-                        "agent.message",
-                        json!({"task_id":task_id,"delta":delta}),
-                    ),
-                    StreamEvent::Reasoning(delta) => emit(
-                        app,
-                        "agent.reasoning",
-                        json!({"task_id":task_id,"delta":delta}),
-                    ),
-                },
-            )?
-        } else {
-            agent_turn(profile, api_key, &messages, &tools, reasoning, limits.web_search)?
+        let mut emit_stream = |event| match event {
+            StreamEvent::Text(delta) => emit(
+                app,
+                "agent.message",
+                json!({"task_id":task_id,"delta":delta}),
+            ),
+            StreamEvent::Reasoning(delta) => emit(
+                app,
+                "agent.reasoning",
+                json!({"task_id":task_id,"delta":delta}),
+            ),
+        };
+        let turn = match kind {
+            "anthropic" => anthropic_stream_turn(
+                profile, api_key, &messages, &tools, reasoning, cancel, &mut emit_stream
+            )?,
+            "gemini_native" => gemini_stream_turn(
+                profile, api_key, &messages, &tools, reasoning, cancel, &mut emit_stream
+            )?,
+            _ => openai_stream_turn(
+                profile, api_key, &messages, &tools, reasoning, limits.web_search, cancel, &mut emit_stream
+            )?,
         };
         ensure_not_cancelled(cancel)?;
 
         if !turn.text.is_empty() {
-            if !streamed {
-                emit(
-                    app,
-                    "agent.message",
-                    json!({"task_id":task_id,"delta":turn.text.clone()}),
-                );
-            }
             visible.push_str(&turn.text);
         }
 
