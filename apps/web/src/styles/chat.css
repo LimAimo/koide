@@ -367,3 +367,21 @@ pre.diff { margin: 0; font-family: var(--font-code); font-size: 12.5px; line-hei
 .crow .meta { grid-column: 2; }
 .crow .reset-commit { grid-column: 3; grid-row: 1 / span 2; white-space: nowrap; }
 .constitution-text { margin: 0; padding: 8px 10px 28px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-ui); font-size: 14px; line-height: 1.75; color: var(--on-surface); }
+
+/* Koide AI composer：半透明浮层；首条消息后由 hero composer 收束为常态胶囊。 */
+.composer { padding: 10px 12px max(12px, env(safe-area-inset-bottom)); }
+.composer-card {
+  background: color-mix(in srgb, var(--surface-container, var(--surface-2)) 74%, transparent) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.18);
+  backdrop-filter: blur(22px) saturate(1.18);
+  border: 1px solid color-mix(in srgb, var(--outline-variant) 64%, transparent);
+  border-radius: 28px !important;
+  transition: border-radius 360ms var(--ease-emph), padding 360ms var(--ease-emph), min-height 360ms var(--ease-emph), background 240ms;
+}
+.composer:not(.compact) .composer-card { min-height: 132px; padding: 14px; }
+.composer.compact .composer-card { min-height: 52px; padding: 7px 8px 7px 14px; border-radius: 26px !important; }
+.composer-card textarea { transition: height 220ms var(--ease-emph); }
+.composer.compact .composer-card textarea { min-height: 28px; }
+.composer-actions { display: flex; align-items: center; width: 100%; }
+.composer-spacer { flex: 1; }
+.composer-model-pill { max-width: 58%; }
