@@ -220,5 +220,9 @@
 1. **Android SAF 原地 WorkspaceBackend**：尚未完成。当前 Android 私有 workspace 不能冒充 SAF。
 2. **Android interactive PTY**：一次性 `/system/bin/sh` 命令可运行，但 `terminal.open/input/resize/history` 在 Android 明确返回 `NO_PTY`。
 3. **Remote Runtime LAN server**：DeviceStore 已迁 Rust；LAN server 尚未接，因此 3 个 devices RPC 暂不伪实现。
-4. **最新 Provider streaming 提交的全平台 CI**：等待 Native Alpha7 workflow 验证。
-5. **Native-only Rust smoke gate**：已加入 CI，等待首次结果。
+4. **Provider hard-cancel**：SSE streaming 已通过 Windows/Android CI；服务端沉默时 blocking read 仍需 async hard-cancel。
+5. **Native-only Rust smoke gate**：已通过，运行时完全不启动 Python Bridge。
+
+
+### 已验证构建基线
+- Native Alpha7 workflow run #61：Native-only Rust tests = success；Windows x64 EXE = success；Android ARM64 APK = success；APK signature verify = success。
