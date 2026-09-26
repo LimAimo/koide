@@ -160,6 +160,7 @@ impl AgentState {
         conversation_id: Option<String>,
         reasoning: String,
         mode: String,
+        system_context: String,
         workspace_root: PathBuf,
         data_dir: PathBuf,
         task_id: String,
@@ -197,15 +198,19 @@ impl AgentState {
 
             let mut messages = store.messages(&conversation)?;
             messages.push(json!({"role":"user","content":goal.clone()}));
-            if matches!(mode.as_str(), "read" | "edit") {
-                messages.insert(
-                    0,
-                    json!({
-                        "role":"system",
-                        "content": if mode == "edit" { "You are Diffusion IDE in EDIT mode. Inspect files before modifying them. You may list, read and search files, then request guarded file edits using the provided tools. Every write is subject to HardPolicy, user approval and Checkpoint. Never bypass a denied action and never edit Git/Diffusion internal metadata directly." } else { "You are Diffusion IDE in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list directories, read text files, and search text. You cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy. If a tool is denied, do not try to bypass the policy. Give a concise final answer grounded in what you actually inspected." }
-                    }),
-                );
-            }
+            let scope = match mode.as_str() {
+                "chat" => "You are Diffusion IDE in CHAT mode. Converse naturally and ask the user when needed. You cannot inspect or modify project files and cannot execute commands.",
+                "read" => "You are Diffusion IDE in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list, read and search files, but cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy.",
+                "edit" => "You are Diffusion IDE in EDIT mode. Inspect files before modifying them. You may list, read and search files, then request guarded file edits using the provided tools. Every write is subject to HardPolicy, permission policy and Checkpoint. Never bypass a denied action and never edit Git/Diffusion internal metadata directly.",
+                _ => "You are Diffusion IDE.",
+            };
+            messages.insert(
+                0,
+                json!({
+                    "role":"system",
+                    "content": format!("{scope}\n{system_context}")
+                }),
+            );
 
             Ok((conversation, messages))
         })();
