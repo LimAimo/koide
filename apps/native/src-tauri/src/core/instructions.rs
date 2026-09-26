@@ -211,3 +211,27 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<(), RuntimeError> {
     fs::rename(&tmp, path)
         .map_err(|e| RuntimeError::new("INSTRUCTIONS_WRITE_FAILED", format!("{}: {e}", path.display())))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::{agent_context, get, set_global, AIMO_CONSTITUTION};
+    use std::fs;
+
+    #[test]
+    fn instructions_roundtrip_without_bridge() {
+        let root=std::env::temp_dir().join(format!("diffusion-native-instructions-{}",crate::core::id::unique_id("")));
+        let project=root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("AGENTS.md"),"PROJECT RULE").unwrap();
+        set_global(&root,"GLOBAL RULE").unwrap();
+        let value=get(&root,Some(&project));
+        assert_eq!(value["global"],"GLOBAL RULE");
+        assert_eq!(value["project"],"PROJECT RULE");
+        let context=agent_context(&root,&project);
+        assert!(context.contains(AIMO_CONSTITUTION));
+        assert!(context.contains("GLOBAL RULE"));
+        assert!(context.contains("PROJECT RULE"));
+        let _=fs::remove_dir_all(root);
+    }
+}
