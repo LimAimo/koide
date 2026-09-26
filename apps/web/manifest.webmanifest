@@ -3,14 +3,14 @@
   "short_name": "Koide",
   "description": "本地优先的 AI IDE：AI 改代码时，你能亲眼看见代码重新组织的过程。",
   "lang": "zh-CN",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "any",
   "background_color": "#111318",
   "theme_color": "#111318",
   "icons": [
-    { "src": "/public/icons/koide-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "./public/icons/koide-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
 }
