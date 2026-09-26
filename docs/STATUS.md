@@ -1,44 +1,41 @@
-# Native Core 迁移提示
+# Koide 0.9.0 当前状态
 
-本文件下面记录的是 **v0.7.0 Python Bridge 版本**的功能完成度，作为迁移行为基准保留。当前 0.8 原生化进度请看 `MIGRATION_STATUS.md`；架构约束请看 `NATIVE_CORE_SPEC.md`。
+Koide 0.9.0 已从预发布阶段转为正式版本。**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
 
-# 项目进度（v0.7.0）
+## Native 主链
 
-百分比是对照 V1 需求文档（67 个章节）估算的。
+| 能力 | Windows | Android | 说明 |
+|---|---|---|---|
+| Workspace / Files | ✅ | ✅ | Android 同时支持应用私有目录与 SAF |
+| Revision / 冲突检测 | ✅ | ✅ | 写入需要匹配基础 revision |
+| Trash / Checkpoint / Time Machine | ✅ | ✅ | SAF 也走同一业务语义 |
+| Profiles / Providers | ✅ | ✅ | API Key 由 Native Core 保存 |
+| chat / read / edit / agent | ✅ | ✅ | 四种模式均接入 Rust Agent |
+| PermissionEngine / HardPolicy | ✅ | ✅ | 含逐工具规则与 AI 审批 |
+| Git | ✅ | 视工作区而定 | SAF workspace 明确禁用 Git |
+| Terminal | ✅ PTY | ⚠️ | Android 只有一次性 shell，暂无交互 PTY |
+| Export | ✅ | ✅ | SAF 会经 backend 遍历生成归档 |
+| 外部文件变化 | ✅ | ✅/受 DocumentsProvider 能力影响 | LocalFS 与 SAF 采用不同后端策略 |
+| Native LAN Remote Runtime | ❌ | ❌ | 跨设备访问继续使用可选 Python Bridge |
 
-## 总体：约 86%
-核心闭环（智能体修改真实文件 → 代码动画重组 → 全程可撤销）约 93%。
+## Runtime API
 
-| 模块 | 完成度 | 说明 |
-|---|---|---|
-| 桥接服务、安全校验、局域网配对 | 88% | 已支持扫码配对（二维码用 OpenCV 的真实解码器验证过）；令牌有效期固定 30 天 |
-| 工作区 / 文件系统 / 导入导出 | 90% | 多根目录在界面里只部分体现；大文件没有增量存储 |
-| 权限、硬性规则、审批模型 | 90% | 已支持逐工具设置、路径与命令的允许 / 禁止规则 |
-| 模型接口 | 90% | OpenAI 兼容系列 + Anthropic 原生 + Gemini 原生；不支持图片输入 |
-| 智能体、工具调用、会话 | 89% | 会话历史与上下文延续、完整 Aimo 宪法、流式工具准备状态、`ask_user` 交互式提问已做；没有会话分支、图片、@文件 / @文件夹 |
-| 检查点 / 时光机 | 85% | 按文件保存快照；超大文件没有增量策略 |
-| Diffusion 引擎 | 65% | 「块」识别是启发式的（缩进 / 括号），**不是**真正的 AST；没有字符级变形；没有 AI 推荐效果 |
-| Diffusion 渲染器与动画包 | 75% | 6 个经过校验的动画包；观感和节奏从未在真实屏幕上看过 |
-| 内置编辑器 | 78% | 查找替换、括号 / 引号自动补全、括号匹配、词语补全、缩进、分屏、缩略图。没有代码折叠 |
-| CodeMirror 6 适配器 | 60% | 代码已写好（折叠、语言补全、多语言高亮），但**从未构建或运行过** |
-| 界面、自适应布局、MD3 风格、触摸 | 84% | 桌面三栏可独立隐藏；深色 / OLED、Markdown 预览、跨位置目录选择与输入控件统一已做。手势仍需真机调校；文件树拖放仅桌面端，触屏用「移动到…」 |
-| 终端 | 80% | 真 PTY、多标签、ANSI 颜色、快捷键行、端口列表；不支持全屏程序；Windows 无 PTY |
-| Git | 88% | 改动、差异、暂存、提交、分支、拉取推送、日志、追溯、软 / 强制回退；没有冲突解决界面和 stash |
-| PWA | 70% | 清单、Service Worker、图标；是否能被安装未验证 |
-| 设置页 | 85% | 含全局指令、规则、导入导出 / 重置、搜索 |
-| 文档 | 85% | 全部为中文 |
+UI 只通过 `apps/web/src/services/runtime/` 调用领域能力。当前 Native dispatch 覆盖全部 72 个业务方法；其中 `devices.pair_code` 在 Native 模式明确返回 `LAN_OFF`，因为 Native LAN server 尚未提供。这是有意的 capability，而不是静默假实现。
 
-## 验证情况（截至打包时，全部自动化测试通过，共 110 项）
-- **Python 47 项**：工作区、Patch、冲突、事务写入、检查点、权限与规则、完整 Aimo 宪法注入、`ask_user`、跨位置目录浏览、真实 WebSocket、三种模型接口（含被截断的流）、Git（含软 / 受保护强制回退）、真实 PTY、导出、会话上下文、局域网配对。
-- **Node 40 项**：Diffusion 引擎（含 400 组随机编辑）、编辑器功能、Markdown 渲染、手势缩放、SHA-256、ANSI 终端、二维码（Reed-Solomon 已知值、格式信息已知值、独立解码器；另用 OpenCV 真实解码器验证 6/6）。
-- **界面集成 23 项**：真实界面代码 + 真实桥接服务，覆盖连接、AI 修改并播放动画、`ask_user` 暂停 / 回答、Markdown 编辑 / 预览、审批、时光机、设置、
-  AI 面板开关与自动弹出、桌面三栏显隐、Git 面板、真实 PTY 终端、对话历史、分块导入与覆盖确认、分屏同步、缩略图、扫码配对、返回首页；并包含输入框单描边 / 无泛光、OLED 不读取主题色、工具参数不暴露原始 JSON 等样式与安全回归检查。
-- **从未验证**：真实浏览器、安卓 / Termux、触摸手势、动画流畅度、PWA 安装、CodeMirror 6 构建。界面测试用的是模拟 DOM，
-  它不做真实排版，所以「布局看起来对不对」最终仍需要在手机与桌面真实浏览器上看一遍。
+## Android SAF
 
-## 建议的下一步
-1. 在手机上跑一遍，记下觉得不对劲的地方。
-2. 在电脑上执行 `pnpm install && pnpm build:cm6`，验证 CodeMirror 适配器，并把构建结果拷到手机。
-3. 等 CodeMirror 6 构建成功后，用它自带的语法树来划分代码块，替换 `segmentBlocks` 的启发式实现。
-4. 会话分支、图片输入、@文件上下文、Git 冲突解决。
-5. xterm.js 可选构建（终端跑全屏程序）。
+SAF 后端已进入 0.9.0 主线并通过 Android CI 编译与 APK 签名验证。它支持原地 tree/read/write/patch/create/delete/rename/copy、search/glob、large write、Checkpoint、Trash、Export 和项目 `AGENTS.md`。不同厂商 DocumentsProvider 仍建议持续做真机回归。
+
+## Provider
+
+OpenAI-compatible、Anthropic 与 Gemini Native 均有 Agent 调用路径；交互式 Agent 使用流式文本/思考事件。停止请求在读循环之间会检查，但同步 HTTP 读取被服务端长时间阻塞时，停止可能延迟到本次读取返回。
+
+## 兼容模式
+
+`bridge/`、`pyproject.toml` 与 Bridge tests 继续保留，因为：
+
+1. 浏览器运行需要一个受控执行端；
+2. LAN 配对 / 远程项目目前由 Python Bridge 提供；
+3. Bridge 仍是协议与回归兼容层。
+
+如果以后加入 Rust Remote Runtime，可以再决定是否删除 Bridge；0.9.0 不把这件事作为正式发布的前提。
