@@ -1,7 +1,7 @@
 # Diffusion IDE
 
 > **0.8.0-alpha.7 · Native 功能等价收口（开发中）**  
-> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit Agent 基础、ask_user、Git 主体、recent / permissions / instructions 持久化已经进入 Rust；Android ARM64 APK 与 Windows x64 portable/NSIS 的 GitHub Actions 构建及自动 prerelease 已真实跑通。当前继续收口完整 PermissionEngine、Agent exec/network、Provider streaming/cancel、Terminal、Export/Watcher、Android SAF 与 Native-only 回归。完整计划见 `docs/NATIVE_CORE_SPEC.md`，当前迁移进度见 `docs/MIGRATION_STATUS.md`。
+> Diffusion 正在从 Python Bridge 重构为 Tauri + Rust Native Core。当前 Runtime API 72 个业务方法中已有 69 个接入 NativeCore；Workspace / Files / Trash / Checkpoint、Provider Profiles、Conversations、chat/read/edit/agent 四种模式、PermissionEngine、Instructions、Git、Terminal/Process/Ports、Export 与 External Watcher 已进入本地 Native 主链。Alpha7 已通过 Native-only Rust tests、Windows x64 构建、Android ARM64 APK 构建与签名验证，并新增 Runtime dispatch parity CI。当前真正的硬缺口集中在 Android SAF 原地工作区、Android interactive PTY、Rust Remote Runtime / pairing、Provider hard-cancel / 全协议流式最终等价和最终实机回归。完整门禁见 `docs/NATIVE_PARITY_AUDIT.md`。
 >
 > **这个 alpha 仍然没有完成 Python 删除线。** 旧 Bridge 继续作为迁移期兼容实现和行为基准；在 `docs/NATIVE_PARITY_AUDIT.md` 的硬门禁全部通过前不会删除。原生构建说明见 `docs/NATIVE_BUILD.md`。
 
