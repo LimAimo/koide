@@ -9,7 +9,17 @@ export class BridgeRuntimeAdapter {
   get status() { return this.bridge.status; }
   onStatus(fn) { return this.bridge.onStatus(fn); }
   on(event, fn) { return this.bridge.on(event, fn); }
-  call(method, params = {}, timeoutMs) { return this.bridge.rpc(method, params, timeoutMs); }
+  async call(method, params = {}, timeoutMs) {
+    const result = await this.bridge.rpc(method, params, timeoutMs);
+    if (method === "fs.export" && result?.url && !/^https?:\/\//i.test(result.url)) {
+      const t = this.bridge.target;
+      if (t) {
+        const host = t.host.includes(":") ? `[${t.host}]` : t.host;
+        return { ...result, url: `${t.tls ? "https" : "http"}://${host}:${t.port}${result.url}` };
+      }
+    }
+    return result;
+  }
   discover(remembered = []) { return this.bridge.discover(remembered); }
   connect(target, options) { return this.bridge.connect(target, options); }
   close(silent = false) { return this.bridge.close(silent); }
