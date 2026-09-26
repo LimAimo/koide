@@ -1,4 +1,5 @@
 use crate::core::RuntimeError;
+use std::net::IpAddr;
 use std::path::{Component, Path};
 
 const SENSITIVE_DIRS: &[&str] = &[
@@ -216,7 +217,7 @@ fn contains_tokenish(haystack: &str, needle: &str) -> bool {
 }
 
 pub fn ensure_public_http_url(raw: &str) -> Result<(), RuntimeError> {
-    use std::net::{IpAddr, ToSocketAddrs};
+    use std::net::ToSocketAddrs;
 
     let url = reqwest::Url::parse(raw)
         .map_err(|_| RuntimeError::new("BAD_URL", "网址格式无效"))?;
