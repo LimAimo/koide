@@ -79,10 +79,14 @@ class NativeUiPlugin(private val activity: Activity) : Plugin(activity) {
     activity.window.navigationBarColor = Color.TRANSPARENT
     toolbar?.let(root::removeView)
     toolbar = ComposeView(activity).apply {
+      setBackgroundColor(Color.TRANSPARENT)
+      isClickable = false
       setContent { KoideTheme { BottomDock(state, ::dispatch) } }
     }
     root.addView(toolbar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(88)).apply {
       gravity = android.view.Gravity.BOTTOM
+      leftMargin = dp(8)
+      rightMargin = dp(8)
     })
     dispatch("ready", mapOf("bottom" to 88))
   }
