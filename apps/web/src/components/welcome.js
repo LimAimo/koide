@@ -3,7 +3,7 @@
 
 import { h, icon, iconButton, clear, toast } from "./dom.js";
 import { openSheet, openMenu } from "./overlays.js";
-import { runtime, state, openWorkspace, initConnection, openScratch, demoKoide } from "../services/app.js";
+import { runtime, state, openWorkspace, initConnection, openScratch, demoDiffusion } from "../services/app.js";
 import { importDirectoryAsWorkspace } from "./transfer.js";
 
 export function openFolderPicker() {
@@ -100,7 +100,7 @@ export function createWelcome({ onOpenSettings }) {
     inner.append(card("只想先看看？",
       h("p", { class: "muted" }, "不需要 AI，也不需要项目，就能看到 Koide 的动画效果。"),
       h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
-        h("button", { class: "btn tonal", type: "button", onclick: () => demoKoide() }, icon("play", 18), "播放演示"),
+        h("button", { class: "btn tonal", type: "button", onclick: () => demoDiffusion() }, icon("play", 18), "播放演示"),
         h("button", { class: "btn outlined", type: "button", onclick: () => openScratch("") }, "打开草稿本"))));
   }
 
