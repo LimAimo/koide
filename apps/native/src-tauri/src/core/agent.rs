@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -1337,14 +1338,34 @@ fn execute_web_fetch(
     ensure_not_cancelled(cancel)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
-    let mut response = client.get(url)
-        .header("User-Agent","Diffusion-IDE-Agent/1.0")
-        .header("Accept","text/html,text/plain,application/json;q=0.9,*/*;q=0.5")
-        .send()
-        .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+    let mut current = reqwest::Url::parse(url)
+        .map_err(|_| RuntimeError::new("BAD_URL", "网址格式无效"))?;
+    let mut response = None;
+    for _ in 0..=5 {
+        ensure_not_cancelled(cancel)?;
+        ensure_public_http_url(current.as_str())?;
+        let resp = client.get(current.clone())
+            .header("User-Agent","Diffusion-IDE-Agent/1.0")
+            .header("Accept","text/html,text/plain,application/json;q=0.9,*/*;q=0.5")
+            .send()
+            .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+        if resp.status().is_redirection() {
+            let location = resp.headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| RuntimeError::new("WEB_FETCH_FAILED", "重定向响应缺少 Location"))?;
+            current = current.join(location)
+                .map_err(|_| RuntimeError::new("BAD_URL", "重定向地址无效"))?;
+            continue;
+        }
+        response = Some(resp);
+        break;
+    }
+    let mut response = response
+        .ok_or_else(|| RuntimeError::new("WEB_FETCH_FAILED", "重定向次数过多"))?;
     ensure_not_cancelled(cancel)?;
     let final_url = response.url().as_str().to_owned();
     ensure_public_http_url(&final_url)?;
