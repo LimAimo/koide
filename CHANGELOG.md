@@ -2,6 +2,9 @@
 
 ## 0.8.0-alpha.7（开发中）
 
+- **修复欢迎页残留导出导致的整页启动失败**：欢迎页仍引用已更名的 `demoKoide`，ES Module 在实例化阶段因此直接中止；现已改为实际存在的 `demoDiffusion`，主界面 UI 启动链恢复。
+- **退役会返回旧启动代码的 Service Worker 缓存**：旧版固定使用 `dfx-shell-v0.1.0` 并采用 stale-while-revalidate，可能在新部署或更新后继续先返回旧 HTML/JS。Koide 现在停止注册该 Worker，并在启动前主动注销旧 Worker、清理旧缓存；保留的 `sw.js` 仅用于让已经安装旧 Worker 的浏览器完成一次自清理与刷新。
+
 - **修复 Koide Web 冷启动灰屏**：修正设置页模块中缺失的右括号；该语法错误会在 ES Module 解析阶段阻断整个主界面，即使从未打开设置页也会导致 Web、静态部署与 Android WebView 无法启动。
 - **启动失败诊断可直接使用**：启动故障页现在直接显示错误位置、错误信息、堆栈、当前 URL 与 User-Agent，并提供「复制诊断信息」按钮，不再要求用户自行寻找浏览器控制台。
 
