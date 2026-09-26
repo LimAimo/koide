@@ -240,11 +240,11 @@ impl AgentState {
             let mut messages = store.messages(&conversation)?;
             messages.push(json!({"role":"user","content":goal.clone()}));
             let scope = match mode.as_str() {
-                "chat" => "You are Diffusion IDE in CHAT mode. Converse naturally and ask the user when needed. You cannot inspect or modify project files and cannot execute commands.",
-                "read" => "You are Diffusion IDE in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list, read and search files, but cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy.",
-                "edit" => "You are Diffusion IDE in EDIT mode. Inspect files before modifying them. You may list, read and search files, then request guarded file edits using the provided tools. Every write is subject to HardPolicy, permission policy and Checkpoint. Never bypass a denied action and never edit Git/Diffusion internal metadata directly.",
-                "agent" => "You are Diffusion IDE in full AGENT mode. Explore first, then perform the task using tools. You may read and edit workspace files, run shell commands, inspect terminal output, fetch public web pages and ask the user. Verify concrete work with tools before claiming completion. HardPolicy, permission rules and Checkpoint always outrank you.",
-                _ => "You are Diffusion IDE.",
+                "chat" => "You are Koide in CHAT mode. Converse naturally and ask the user when needed. You cannot inspect or modify project files and cannot execute commands.",
+                "read" => "You are Koide in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list, read and search files, but cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy.",
+                "edit" => "You are Koide in EDIT mode. Inspect files before modifying them. You may list, read and search files, then request guarded file edits using the provided tools. Every write is subject to HardPolicy, permission policy and Checkpoint. Never bypass a denied action and never edit Git/Diffusion internal metadata directly.",
+                "agent" => "You are Koide in full AGENT mode. Explore first, then perform the task using tools. You may read and edit workspace files, run shell commands, inspect terminal output, fetch public web pages and ask the user. Verify concrete work with tools before claiming completion. HardPolicy, permission rules and Checkpoint always outrank you.",
+                _ => "You are Koide.",
             };
             messages.insert(
                 0,
@@ -1193,7 +1193,7 @@ fn edit_tool_specs() -> Vec<Value> {
             "parameters":{"type":"object","properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["file","dir"]},"content":{"type":"string"}},"required":["path"],"additionalProperties":false}
         }}),
         json!({"type":"function","function":{
-            "name":"fs_delete","description":"Delete a FILE by moving it to Diffusion Trash. Directory deletion is intentionally not exposed to the agent. Requires user approval.",
+            "name":"fs_delete","description":"Delete a FILE by moving it to Koide 回收站. Directory deletion is intentionally not exposed to the agent. Requires user approval.",
             "parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}
         }}),
         json!({"type":"function","function":{
