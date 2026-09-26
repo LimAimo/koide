@@ -1,6 +1,20 @@
 # 更新日志
 
-## 0.8.0-alpha.7（开发中）
+## 0.9.0（2026-09-26）
+
+- **Koide 正式转正**：应用从 `0.8.0-alpha.7` 升级到 `0.9.0`，移除当前版本的 alpha 标记；Native、Web、Bridge、Cargo、Tauri 与 CodeMirror workspace 包版本统一为 0.9.0。
+- **Native Core 成为正式主路径**：Windows / Android 本地应用直接使用 Tauri + Rust Native Core；Python Bridge 调整为浏览器 / LAN 兼容模式，不再作为本地启动前置条件。
+- **发布流程转正**：删除 Alpha5/Alpha7 专用工作流与 handoff snapshot；Windows / Android / Web / Rust / Bridge 兼容门禁统一到正式构建工作流，`main` 全绿后创建 `v<version>` 正式 Release，不再追加 `build.N` 或 `--prerelease`。
+- **Koide 品牌收口**：设置页、包描述、Agent 身份、Android SAF 插件、权限描述与发行文件名统一使用 Koide；内部 `diffusion-*` 标识仅在兼容历史数据或内部包名处保留。
+- **启动链稳定化**：修复设置模块括号错误和欢迎页错误导出引用；Web 资源改为可移植相对路径，CodeMirror 使用模块相对 URL；退役会返回旧启动代码的 Service Worker 缓存。
+- **启动诊断可自包含**：启动失败页直接显示错误位置、错误内容、stack、URL 与 User-Agent，并可复制诊断信息。
+- **移动端交互完成一轮收口**：AI 抽屉支持半屏、自由高度与向上 fling 全屏；输入栏改为半透明可收束形态，模型入口移入左下角；设置顶栏和移动布局继续使用 Web/CSS 实现。
+- **Android SAF 纳入正式能力**：系统目录选择、持久授权、原地文件 I/O、revision/conflict、search/glob、Checkpoint/Trash、recent 与 Export 均进入 Native 主链；SAF workspace 会明确禁用依赖普通 cwd 的 Git / Terminal。
+- **已知平台限制继续显式保留**：Android 暂无交互式 PTY；Native LAN Remote Runtime 尚未实现，跨设备访问继续使用可选 Python Bridge；Provider 在同步网络读取被服务端长时间阻塞时，停止可能存在延迟。
+- **文档重构**：删除 alpha 交接文档、阶段构建报告与迁移状态清单；README、Native 架构、构建、Runtime API、SAF 与能力审计改为描述 0.9.0 当前事实。
+- **回归验证**：本轮本地 Web/UI 回归 71/71、Bridge 兼容回归 47/47 通过；正式发布工作流继续负责 Rust、Windows 与 Android 门禁。
+
+## 0.8.0-alpha.7（预发布历史）
 
 - **修复欢迎页残留导出导致的整页启动失败**：欢迎页仍引用已更名的 `demoKoide`，ES Module 在实例化阶段因此直接中止；现已改为实际存在的 `demoDiffusion`，主界面 UI 启动链恢复。
 - **退役会返回旧启动代码的 Service Worker 缓存**：旧版固定使用 `dfx-shell-v0.1.0` 并采用 stale-while-revalidate，可能在新部署或更新后继续先返回旧 HTML/JS。Koide 现在停止注册该 Worker，并在启动前主动注销旧 Worker、清理旧缓存；保留的 `sw.js` 仅用于让已经安装旧 Worker 的浏览器完成一次自清理与刷新。
