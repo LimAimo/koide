@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Component, Path, PathBuf},
 };
@@ -13,6 +13,10 @@ use std::{
 const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT: usize = 512 * 1024;
 const TMP_PREFIX: &str = ".diffusion-tmp-";
+const EXPORT_MAX_TOTAL: u64 = 300 * 1024 * 1024;
+const EXPORT_SKIP_DIRS: &[&str] = &[
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".gradle", ".idea",
+];
 
 pub fn browse_location(path: Option<&str>, _app_data_dir: Option<&Path>) -> Result<Value, RuntimeError> {
     if path.is_none() || path == Some("__locations__") {
@@ -812,11 +816,6 @@ impl Workspace {
     }
 
     pub fn export_zip(&self, raw: &str, data_dir: &Path) -> Result<Value, RuntimeError> {
-        const MAX_TOTAL: u64 = 300 * 1024 * 1024;
-        const SKIP_DIRS: &[&str] = &[
-            ".git", "node_modules", "__pycache__", ".venv", "venv", ".gradle", ".idea",
-        ];
-
         let target = self.resolve_existing(raw)?;
         let exports = data_dir.join("exports");
         fs::create_dir_all(&exports).map_err(io_err("EXPORT_FAILED", &exports.to_string_lossy()))?;
@@ -857,7 +856,7 @@ impl Workspace {
             }
             if meta.is_file() {
                 *total = total.saturating_add(meta.len());
-                if *total > MAX_TOTAL {
+                if *total > EXPORT_MAX_TOTAL {
                     return Err(RuntimeError::new(
                         "EXPORT_TOO_LARGE",
                         "内容超过 300 MB，无法一次性导出，请分批导出子文件夹",
@@ -881,7 +880,7 @@ impl Workspace {
                     let child = entry.path();
                     let child_name = entry.file_name().to_string_lossy().into_owned();
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                        && SKIP_DIRS.contains(&child_name.as_str())
+                        && EXPORT_SKIP_DIRS.contains(&child_name.as_str())
                     {
                         continue;
                     }
