@@ -125,8 +125,3 @@
 .terminal-dock .term-screen { min-height: 72px; }
 .terminal-dock .term-keys { display: none; }
 #app:not(.mode-wide) .terminal-dock { display: none !important; }
-
-/* Android Hybrid Shell 就绪后，只隐藏已经由 Compose 接管的底部操作；WebView 仍是唯一编辑器。 */
-.koide-native-shell #app { padding-bottom: var(--native-shell-bottom, 88px); }
-.koide-native-shell #app.mode-port .files,
-.koide-native-shell #app.mode-land .files { bottom: var(--native-shell-bottom, 88px); }
