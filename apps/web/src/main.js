@@ -103,6 +103,8 @@ function boot() {
     filesBtn, aiBtn, gitBtn, tmBtn, termBtn, iconButton("tune", "设置", () => openSettings()));
   app.append(bar, work, scrim);
   document.body.appendChild(app);
+  window.__KOIDE_BOOT_OK__ = true;
+  document.getElementById("boot-fallback")?.remove();
 
   layout = setupLayout({
     app, files, ai: chat.el, grip, scrim, resizers: { r1, r2 },
