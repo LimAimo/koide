@@ -11,6 +11,11 @@ use koide_native_ui::NativeUiExt;
 struct AppState(Mutex<NativeCore>);
 
 #[tauri::command]
+fn native_ui_ready(app: AppHandle) -> Result<Value, RuntimeError> {
+    app.native_ui().ready().map_err(|e| RuntimeError::new("NATIVE_UI", e))
+}
+
+#[tauri::command]
 fn native_ui_state(app: AppHandle, payload: Value) -> Result<Value, RuntimeError> {
     app.native_ui().set_state(payload).map_err(|e| RuntimeError::new("NATIVE_UI", e))
 }
@@ -42,7 +47,7 @@ pub fn run() {
             app.manage(AppState(Mutex::new(NativeCore::new(data_dir))));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![runtime_call, native_ui_state])
+        .invoke_handler(tauri::generate_handler![runtime_call, native_ui_ready, native_ui_state])
         .run(tauri::generate_context!())
         .expect("Diffusion Native failed to start");
 }
