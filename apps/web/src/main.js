@@ -17,7 +17,6 @@ import { runtime, state, events, openFile, initConnection, connectManual, goHome
 import { pairFromLocation } from "./services/pairing.js";
 import { settingsStore, saveSettings, applyTheme } from "./services/store.js";
 import { loadServedPacks } from "./animations/diffusion/packs.js";
-import { installAndroidNativeShell } from "./services/android-native-ui.js";
 
 // Native shells should behave like apps, not zoomable web pages.
 if (runtime.kind === "native") {
@@ -110,16 +109,6 @@ function boot() {
     onCloseAI: () => { if (settingsStore.get().aiVisible) saveSettings({ aiVisible: false }); },
   });
 
-  installAndroidNativeShell({
-    onFiles: () => layout.openDrawer(),
-    onAI: () => {
-      const show = !settingsStore.get().aiVisible;
-      saveSettings({ aiVisible: show });
-      if (show) requestAnimationFrame(() => layout.openSheetHalf());
-      else layout.closeSheet();
-    },
-    onSettings: () => openSettings(),
-  });
 
   state.subscribe((s) => {
     const ws = s.workspace;
