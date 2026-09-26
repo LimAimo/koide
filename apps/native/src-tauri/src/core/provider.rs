@@ -66,13 +66,13 @@ fn write_secret_json(path: &Path, value: &Value) -> Result<(), RuntimeError> {
     write_json_with_mode(path, value, true)
 }
 
-fn write_json_with_mode(path: &Path, value: &Value, secret: bool) -> Result<(), RuntimeError> {
+fn write_json_with_mode(path: &Path, value: &Value, _secret: bool) -> Result<(), RuntimeError> {
     let tmp = path.with_extension("tmp");
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|e| io_error("无法序列化服务商配置", e))?;
     fs::write(&tmp, bytes).map_err(|e| io_error("无法写入服务商配置", e))?;
     #[cfg(unix)]
-    if secret {
+    if _secret {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
             .map_err(|e| io_error("无法保护服务商密钥文件权限", e))?;
