@@ -165,3 +165,13 @@ test("手机 AI 全屏保留状态栏安全区且使用自由高度 bottom sheet
   assert.doesNotMatch(layout, /SNAPS|snapTo\(/);
   assert.match(layout, /setH\(clamp\(current, minOpenH\(\), max - 1\)\)/);
 });
+
+
+test("文件树兼容 Native 数组返回，应用 UI 默认禁止长按选择文字", () => {
+  const tree = fs.readFileSync(new URL("../../apps/web/src/components/file-tree.js", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../../apps/web/src/styles/base.css", import.meta.url), "utf8");
+  assert.match(tree, /Array\.isArray\(res\)\s*\?\s*res/);
+  assert.match(tree, /Array\.isArray\(res\?\.nodes\)/);
+  assert.match(css, /body[^{}]*\{[^}]*user-select:\s*none/s);
+  assert.match(css, /input, textarea[^{}]*\{[^}]*user-select:\s*text/s);
+});

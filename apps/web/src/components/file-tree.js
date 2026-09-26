@@ -27,8 +27,11 @@ export function createFileTree({ onOpen, onNavigate }) {
 
   async function load(dir) {
     const res = await runtime.files.tree({ path: dir, depth: 1, show_hidden: !!settingsStore.get().showHiddenFiles });
-    cache.set(dir, res.nodes);
-    return res.nodes;
+    // Native Core 的 fs.tree 直接返回节点数组；旧 Bridge 返回 { nodes: [...] }。
+    // 在 Native 模式误读 res.nodes 会让所有已有工作区看起来都是空目录。
+    const nodes = Array.isArray(res) ? res : (Array.isArray(res?.nodes) ? res.nodes : []);
+    cache.set(dir, nodes);
+    return nodes;
   }
 
   function makeNode(n, depth) {

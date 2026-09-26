@@ -178,3 +178,15 @@ textarea.text-field::-webkit-resizer {
 }
 input[type="range"]::-webkit-slider-thumb { box-shadow: none !important; }
 input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.22); box-shadow: none !important; }
+
+/* 应用界面默认像原生 App 一样不可长按选中文字；编辑、输入和终端输出保留复制/选择能力。 */
+body, button, label, .tree, .topbar, .files, .ai, .settings, .welcome, .menu, .dialog, .sheet {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-input, .term-out, .term-screen, pre, code {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
