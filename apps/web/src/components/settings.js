@@ -374,7 +374,7 @@ function advancedSection(rerender) {
       openDialog({ title: "导入设置", body: ta, actions: [{ label: "取消" }, { label: "导入", primary: true, onClick: () => { try { importSettings(ta.value); applyTheme(); rerender(); toast("设置已导入"); } catch (e) { toast("设置无效：" + e.message); } } }] });
     }, "恢复 restore"),
     btnRow("重置所有设置", "undo", async () => { if (await confirmDialog({ title: "重置设置？", message: "界面偏好会恢复默认值；桥接服务里的服务商配置会保留。", confirmLabel: "重置", danger: true })) { resetSettings(); applyTheme(); rerender(); } }, "默认 default"),
-    row({ label: runtime.kind === "native" ? "Koide 0.8.0-alpha.7 Native" : "Diffusion IDE 0.7.0", desc: runtime.kind === "native" ? "Native Core 迁移预览：前端已与 Bridge 解耦，Rust Workspace 正在逐模块接管。" : "本版本重做了输入框与模型选择、四段式模式开关加了滑动动画、支持对话压缩与任务中断后继续，并修复了 Gemini 工具调用报错等一批问题。" }),
+    row({ label: runtime.kind === "native" ? "Koide 0.9.0 Native" : "Koide 0.9.0 Web", desc: runtime.kind === "native" ? "本地模式由 Tauri + Rust Native Core 直接提供工作区、Agent、Git 与平台能力，不依赖 Python Bridge。" : "Web 兼容模式通过 Python Bridge 提供本地或 LAN 执行能力。" }),
   ]);
 }
 
