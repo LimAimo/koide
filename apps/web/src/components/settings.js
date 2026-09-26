@@ -342,7 +342,7 @@ function workspaceSection(rerender) {
     try {
       const r = await runtime.trash.list();
       clear(trash);
-      trash.appendChild(h("div", { class: "srow" }, h("div", { class: "lbl" }, "Diffusion 回收站", h("small", null, `共 ${r.items.length} 项。无论是你还是 AI 删除的文件，都会先放到这里。`)),
+      trash.appendChild(h("div", { class: "srow" }, h("div", { class: "lbl" }, "Koide 回收站", h("small", null, `共 ${r.items.length} 项。无论是你还是 AI 删除的文件，都会先放到这里。`)),
         r.items.length ? h("button", { class: "btn text small danger", type: "button", onclick: async () => { if (await confirmDialog({ title: "清空回收站？", message: "此操作无法撤销。", confirmLabel: "清空", danger: true })) { await runtime.trash.empty(); loadTrash(); } } }, "清空") : null));
       for (const it of r.items.slice(0, 30)) trash.appendChild(h("div", { class: "srow" }, h("div", { class: "lbl", style: { overflow: "hidden" } }, it.original.split("/").pop(), h("small", null, it.original)),
         h("button", { class: "btn text small", type: "button", onclick: async () => { try { await runtime.trash.restore({ id: it.id }); toast("已恢复"); loadTrash(); } catch (e) { toast(e.message); } } }, "恢复"),
@@ -366,7 +366,7 @@ function privacySection() {
 function advancedSection(rerender) {
   return section("advanced", "高级", [
     btnRow("导出设置（JSON）", "file", () => {
-      const a = h("a", { href: URL.createObjectURL(new Blob([exportSettings()], { type: "application/json" })), download: "diffusion-settings.json" });
+      const a = h("a", { href: URL.createObjectURL(new Blob([exportSettings()], { type: "application/json" })), download: "koide-settings.json" });
       document.body.appendChild(a); a.click(); a.remove();
     }, "备份 backup"),
     btnRow("导入设置（JSON）…", "add", () => {
@@ -374,7 +374,7 @@ function advancedSection(rerender) {
       openDialog({ title: "导入设置", body: ta, actions: [{ label: "取消" }, { label: "导入", primary: true, onClick: () => { try { importSettings(ta.value); applyTheme(); rerender(); toast("设置已导入"); } catch (e) { toast("设置无效：" + e.message); } } }] });
     }, "恢复 restore"),
     btnRow("重置所有设置", "undo", async () => { if (await confirmDialog({ title: "重置设置？", message: "界面偏好会恢复默认值；桥接服务里的服务商配置会保留。", confirmLabel: "重置", danger: true })) { resetSettings(); applyTheme(); rerender(); } }, "默认 default"),
-    row({ label: runtime.kind === "native" ? "Diffusion IDE 0.8.0-alpha.2 Native" : "Diffusion IDE 0.7.0", desc: runtime.kind === "native" ? "Native Core 迁移预览：前端已与 Bridge 解耦，Rust Workspace 正在逐模块接管。" : "本版本重做了输入框与模型选择、四段式模式开关加了滑动动画、支持对话压缩与任务中断后继续，并修复了 Gemini 工具调用报错等一批问题。" }),
+    row({ label: runtime.kind === "native" ? "Koide 0.8.0-alpha.7 Native" : "Diffusion IDE 0.7.0", desc: runtime.kind === "native" ? "Native Core 迁移预览：前端已与 Bridge 解耦，Rust Workspace 正在逐模块接管。" : "本版本重做了输入框与模型选择、四段式模式开关加了滑动动画、支持对话压缩与任务中断后继续，并修复了 Gemini 工具调用报错等一批问题。" }),
   ]);
 }
 
@@ -383,7 +383,7 @@ export function openSettings(jumpTo = null) {
   const body = h("div", { class: "page-body" });
   const q = h("input", { class: "text-field", type: "search", placeholder: "搜索设置", "aria-label": "搜索设置" });
   const page = h("div", { class: "page", role: "dialog", "aria-label": "设置" },
-    h("div", { class: "page-head" }, iconButton("back", "返回", () => request()), h("h1", null, "设置")),
+    h("div", { class: "page-head settings-head" }, iconButton("back", "返回", () => request()), h("div", null, h("h1", null, "设置"), h("small", { class: "muted" }, "Koide · 本机与工作区偏好")),
     h("div", { class: "search-box" }, icon("search", 20), q), body);
   document.body.appendChild(page);
   requestAnimationFrame(() => page.classList.add("in"));
@@ -393,7 +393,7 @@ export function openSettings(jumpTo = null) {
   function render() {
     const y = body.scrollTop;
     clear(body);
-    body.append(appearance(render), editorSection(), providers(render), agentSection(), permissionsSection(), animationSection(render), bridgeSection(render), workspaceSection(render), gitSection(), privacySection(), advancedSection(render));
+    body.append(h("div", { class: "settings-group-title" }, "界面与编辑"), appearance(render), editorSection(), animationSection(render), h("div", { class: "settings-group-title" }, "AI"), providers(render), agentSection(), permissionsSection(), h("div", { class: "settings-group-title" }, "项目与系统"), workspaceSection(render), gitSection(), bridgeSection(render), privacySection(), advancedSection(render));
     body.scrollTop = y;
     filter();
   }
