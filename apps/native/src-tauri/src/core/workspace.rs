@@ -811,6 +811,118 @@ impl Workspace {
         })
     }
 
+    pub fn export_zip(&self, raw: &str, data_dir: &Path) -> Result<Value, RuntimeError> {
+        const MAX_TOTAL: u64 = 300 * 1024 * 1024;
+        const SKIP_DIRS: &[&str] = &[
+            ".git", "node_modules", "__pycache__", ".venv", "venv", ".gradle", ".idea",
+        ];
+
+        let target = self.resolve_existing(raw)?;
+        let exports = data_dir.join("exports");
+        fs::create_dir_all(&exports).map_err(io_err("EXPORT_FAILED", &exports.to_string_lossy()))?;
+
+        if let Ok(items) = fs::read_dir(&exports) {
+            for entry in items.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|x| x.to_str()) == Some("zip") {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+
+        let base = target
+            .file_name()
+            .and_then(|x| x.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("project");
+        let name = format!("{base}.zip");
+        let output = exports.join(format!("{}-{}", unique_id("export-"), name));
+        let file = File::create(&output).map_err(io_err("EXPORT_FAILED", &output.to_string_lossy()))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let mut total = 0u64;
+
+        fn add_path(
+            zip: &mut zip::ZipWriter<File>,
+            source: &Path,
+            archive_name: &str,
+            options: zip::write::SimpleFileOptions,
+            total: &mut u64,
+        ) -> Result<(), RuntimeError> {
+            let meta = fs::symlink_metadata(source)
+                .map_err(io_err("EXPORT_FAILED", &source.to_string_lossy()))?;
+            if meta.file_type().is_symlink() {
+                return Ok(());
+            }
+            if meta.is_file() {
+                *total = total.saturating_add(meta.len());
+                if *total > MAX_TOTAL {
+                    return Err(RuntimeError::new(
+                        "EXPORT_TOO_LARGE",
+                        "内容超过 300 MB，无法一次性导出，请分批导出子文件夹",
+                    ));
+                }
+                zip.start_file(archive_name.replace('\\', "/"), options)
+                    .map_err(|e| RuntimeError::new("EXPORT_FAILED", e.to_string()))?;
+                let mut input = File::open(source)
+                    .map_err(io_err("EXPORT_FAILED", &source.to_string_lossy()))?;
+                std::io::copy(&mut input, zip)
+                    .map_err(io_err("EXPORT_FAILED", &source.to_string_lossy()))?;
+                return Ok(());
+            }
+            if meta.is_dir() {
+                let mut entries = fs::read_dir(source)
+                    .map_err(io_err("EXPORT_FAILED", &source.to_string_lossy()))?
+                    .filter_map(Result::ok)
+                    .collect::<Vec<_>>();
+                entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+                for entry in entries {
+                    let child = entry.path();
+                    let child_name = entry.file_name().to_string_lossy().into_owned();
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                        && SKIP_DIRS.contains(&child_name.as_str())
+                    {
+                        continue;
+                    }
+                    if child_name.starts_with(".diffusion-tmp-") {
+                        continue;
+                    }
+                    let dest = if archive_name.is_empty() {
+                        child_name
+                    } else {
+                        format!("{archive_name}/{child_name}")
+                    };
+                    add_path(zip, &child, &dest, options, total)?;
+                }
+            }
+            Ok(())
+        }
+
+        let archive_root = if target.is_file() {
+            base.to_owned()
+        } else {
+            base.to_owned()
+        };
+        let result = add_path(&mut zip, &target, &archive_root, options, &mut total);
+        if let Err(error) = result {
+            drop(zip);
+            let _ = fs::remove_file(&output);
+            return Err(error);
+        }
+        zip.finish()
+            .map_err(|e| RuntimeError::new("EXPORT_FAILED", e.to_string()))?;
+        let size = fs::metadata(&output)
+            .map_err(io_err("EXPORT_FAILED", &output.to_string_lossy()))?
+            .len();
+        Ok(json!({
+            "native_path": output.to_string_lossy(),
+            "name": name,
+            "size": size,
+            "source_bytes": total
+        }))
+    }
+
     pub fn checkpoint_tasks(&self, limit: usize) -> Result<Vec<Value>, RuntimeError> {
         self.checkpoints.list_tasks(limit)
     }
