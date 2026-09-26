@@ -10,6 +10,7 @@ mod provider;
 mod settings;
 mod terminal;
 mod trash;
+mod watcher;
 mod workspace;
 
 use serde::Serialize;
@@ -22,6 +23,7 @@ use git as gitops;
 use settings::{tool_descriptions, SettingsStore};
 use terminal::{listening_ports, TerminalManager};
 use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
+use watcher::WorkspaceWatcher;
 use workspace::{browse_location, Workspace};
 
 pub const VERSION: &str = "0.8.0-alpha.7";
@@ -61,6 +63,7 @@ pub struct NativeCore {
     settings: SettingsStore,
     terminal: TerminalManager,
     agent: AgentState,
+    watcher: Option<WorkspaceWatcher>,
 }
 
 impl NativeCore {
@@ -70,6 +73,7 @@ impl NativeCore {
             settings: SettingsStore::new(&data_dir),
             terminal: TerminalManager::new(),
             agent: AgentState::new(),
+            watcher: None,
             data_dir,
             workspace: None,
             conversations: None,
@@ -251,6 +255,7 @@ impl NativeCore {
             },
             "workspace.open" => {
                 let path = req_str(&params, "path")?;
+                if let Some(watcher) = self.watcher.take() { watcher.stop(); }
                 let ws = Workspace::open(path, &self.data_dir)?;
                 let info = ws.info();
                 let root_path = ws.root_path();
@@ -260,6 +265,7 @@ impl NativeCore {
                 let recent = self.settings.touch_recent(&root_path)?;
                 self.workspace = Some(ws);
                 self.conversations = Some(conversations);
+                self.watcher = Some(WorkspaceWatcher::start(app.clone(), root_path)?);
                 Self::emit(app, "workspace.opened", info.clone());
                 Self::emit(app, "workspace.recent_changed", json!({"recent": recent}));
                 Ok(info)
@@ -267,6 +273,7 @@ impl NativeCore {
             "workspace.close" => {
                 let _ = self.agent.stop();
                 self.terminal.close_all();
+                if let Some(watcher) = self.watcher.take() { watcher.stop(); }
                 self.workspace = None;
                 self.conversations = None;
                 Self::emit(app, "workspace.closed", json!({}));
@@ -580,7 +587,7 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "E-edit",
-                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.export", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit/agent)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
+                "implemented": ["hello", "workspace.open", "workspace.close", "workspace.browse", "fs.read", "fs.hash", "fs.tree", "fs.search", "fs.export", "fs.write", "fs.patch", "fs.create", "fs.delete", "fs.rename", "fs.copy", "fs.begin_write", "fs.write_chunk", "fs.commit_write", "fs.abort_write", "trash.list", "trash.restore", "trash.delete", "trash.empty", "checkpoint.tasks", "checkpoint.task", "checkpoint.diff", "checkpoint.revert_file", "checkpoint.revert_task", "checkpoint.revert_event", "profiles.list", "profiles.save", "profiles.delete", "profiles.models", "profiles.test", "conv.list", "conv.get", "conv.delete", "agent.start(chat/read/edit/agent)", "agent.stop", "agent.fs_list", "agent.fs_read", "agent.fs_search", "agent.fs_write", "agent.fs_patch", "agent.fs_create", "agent.fs_delete", "agent.fs_rename", "agent.fs_copy", "hard_policy.read", "hard_policy.write", "approval.respond", "checkpoint.agent_lifecycle", "checkpoint.agent_edits", "agent.answer", "agent.ask_user", "conversation.compact", "permissions.set", "instructions.constitution", "instructions.get", "instructions.set", "workspace.recent", "fs.external_watcher", "terminal.run", "terminal.kill", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.list", "terminal.history", "ports.list", "git.status", "git.diff", "git.stage", "git.unstage", "git.discard", "git.reset", "git.commit", "git.branches", "git.checkout", "git.log", "git.blame", "git.pull", "git.push", "git.init"]
             },
             "data_dir": self.data_dir
         })
