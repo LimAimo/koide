@@ -32,7 +32,7 @@ export function openFolderPicker() {
       try { await importDirectoryAsWorkspace(); }
       catch (e) { toast(`导入文件夹失败：${e?.message || String(e)}`); }
     },
-  }, icon("upload", 18), "复制到 Koide 私有工作区") : null;
+  }, icon("upload", 18), "导入到 Koide 私有工作区") : null;
   const hint = isAndroidNative
     ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "推荐直接选择原项目文件夹：Koide 会通过 Android 系统目录授权原地读写，并记住授权。SAF 项目不提供 Git 和以项目目录为 cwd 的终端；需要这些能力时可复制到私有工作区。")
     : null;
@@ -70,7 +70,7 @@ export function createWelcome({ onOpenSettings }) {
       inner.append(card("连接本地环境",
         h("p", { class: "muted" }, s.conn === "connecting" ? "正在查找桥接服务…" : "当前是网页模式：可以使用草稿本，但打开项目、终端和智能体需要 Python 桥接服务。"),
         h("div", { class: "code" }, "安卓（Termux）：bash start.sh\nWindows：       start.bat\n任意系统：      python bridge/main.py"),
-        h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+        h("div", { class: "welcome-actions" },
           h("button", { class: "btn tonal", type: "button", onclick: () => initConnection().then((t) => toast(t ? "已连接" : "没有找到桥接服务")) }, "重试"),
           h("button", { class: "btn outlined", type: "button", onclick: () => onOpenSettings("bridge") }, "手动连接…"))));
     } else {
