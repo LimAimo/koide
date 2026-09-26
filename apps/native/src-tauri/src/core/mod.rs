@@ -2,6 +2,7 @@ mod agent;
 mod checkpoint;
 mod conversation;
 mod crypto;
+mod devices;
 mod git;
 mod id;
 mod instructions;
@@ -19,6 +20,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use agent::{AgentLimits, AgentState};
 use conversation::ConversationStore;
+use devices::DeviceStore;
 use git as gitops;
 use settings::{tool_descriptions, SettingsStore};
 use terminal::{listening_ports, TerminalManager};
@@ -59,6 +61,7 @@ pub struct NativeCore {
     data_dir: PathBuf,
     workspace: Option<Workspace>,
     conversations: Option<ConversationStore>,
+    devices: DeviceStore,
     profiles: ProfileStore,
     settings: SettingsStore,
     terminal: TerminalManager,
@@ -70,6 +73,7 @@ impl NativeCore {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             profiles: ProfileStore::new(data_dir.clone()),
+            devices: DeviceStore::new(&data_dir),
             settings: SettingsStore::new(&data_dir),
             terminal: TerminalManager::new(),
             agent: AgentState::new(),
@@ -478,6 +482,12 @@ impl NativeCore {
             "terminal.list" => Ok(self.terminal.list()),
             "terminal.history" => self.terminal.history(req_str(&params, "id")?),
             "ports.list" => Ok(json!({"ports": listening_ports()})),
+            "devices.pair_code" => Err(RuntimeError::new(
+                "LAN_OFF",
+                "Native Remote Runtime 尚未启用；本机 Native 模式不需要配对。"
+            )),
+            "devices.list" => Ok(json!({"devices": self.devices.list()})),
+            "devices.revoke" => Ok(json!({"revoked": self.devices.revoke(req_str(&params, "id")?)?})),
             "git.status" => gitops::status(&self.ws()?.root_path()),
             "git.diff" => gitops::diff(
                 &self.ws()?.root_path(),
