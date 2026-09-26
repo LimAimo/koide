@@ -36,7 +36,8 @@ export function openFolderPicker() {
   const hint = isAndroidNative
     ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "推荐直接选择原项目文件夹：Koide 会通过 Android 系统目录授权原地读写，并记住授权。SAF 项目不提供 Git 和以项目目录为 cwd 的终端；需要这些能力时可复制到私有工作区。")
     : null;
-  const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, hint, safBtn, importBtn, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
+  const mobileActions = isAndroidNative ? h("div", { class: "workspace-source-actions" }, safBtn, importBtn) : null;
+  const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, hint, mobileActions, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
 
   async function go(path) {
     try {
