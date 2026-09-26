@@ -20,6 +20,27 @@ env:
   CI: "true"
 
 jobs:
+  native-core:
+    name: Native-only Rust tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/native/src-tauri -> target"
+
+      - name: Run Native Core tests without Python Bridge
+        working-directory: apps/native/src-tauri
+        run: cargo test --lib --locked
+
   android:
     name: Android ARM64 APK
     runs-on: ubuntu-latest
