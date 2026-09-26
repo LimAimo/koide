@@ -3,7 +3,7 @@
 
 import { h, icon, iconButton, clear, toast } from "./dom.js";
 import { openSheet, openMenu } from "./overlays.js";
-import { runtime, state, openWorkspace, initConnection, openScratch, demoDiffusion } from "../services/app.js";
+import { runtime, state, openWorkspace, initConnection, openScratch, demoKoide } from "../services/app.js";
 import { importDirectoryAsWorkspace } from "./transfer.js";
 
 export function openFolderPicker() {
@@ -32,9 +32,9 @@ export function openFolderPicker() {
       try { await importDirectoryAsWorkspace(); }
       catch (e) { toast(`导入文件夹失败：${e?.message || String(e)}`); }
     },
-  }, icon("upload", 18), "复制到 Diffusion 私有工作区") : null;
+  }, icon("upload", 18), "复制到 Koide 私有工作区") : null;
   const hint = isAndroidNative
-    ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "推荐直接选择原项目文件夹：Diffusion 会通过 Android 系统目录授权原地读写，并记住授权。SAF 项目不提供 Git 和以项目目录为 cwd 的终端；需要这些能力时可复制到私有工作区。")
+    ? h("p", { class: "muted", style: { margin: "0 0 10px" } }, "推荐直接选择原项目文件夹：Koide 会通过 Android 系统目录授权原地读写，并记住授权。SAF 项目不提供 Git 和以项目目录为 cwd 的终端；需要这些能力时可复制到私有工作区。")
     : null;
   const sheet = openSheet({ title: "打开文件夹", tall: true, body: h("div", null, hint, safBtn, importBtn, crumbs, list), footer: [h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "取消"), openBtn] });
 
@@ -64,7 +64,7 @@ export function createWelcome({ onOpenSettings }) {
   function render() {
     const s = state.get();
     clear(inner);
-    inner.append(h("div", null, h("h1", null, "Diffusion ", h("b", null, "IDE")), h("p", { class: "lead" }, "AI 工作时，看着你的代码自己重新组织。所有数据都留在你的设备上。")));
+    inner.append(h("div", null, h("h1", null, "Koide ", h("b", null, "IDE")), h("p", { class: "lead" }, "AI 工作时，看着你的代码自己重新组织。所有数据都留在你的设备上。")));
 
     if (s.conn !== "online") {
       inner.append(card("连接本地环境",
@@ -97,9 +97,9 @@ export function createWelcome({ onOpenSettings }) {
       h("button", { class: "btn tonal", type: "button", disabled: s.conn !== "online", onclick: () => onOpenSettings("providers") }, s.profiles.length ? "管理服务商" : "设置服务商")));
 
     inner.append(card("只想先看看？",
-      h("p", { class: "muted" }, "不需要 AI，也不需要项目，就能看到 Diffusion 的动画效果。"),
+      h("p", { class: "muted" }, "不需要 AI，也不需要项目，就能看到 Koide 的动画效果。"),
       h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
-        h("button", { class: "btn tonal", type: "button", onclick: () => demoDiffusion() }, icon("play", 18), "播放演示"),
+        h("button", { class: "btn tonal", type: "button", onclick: () => demoKoide() }, icon("play", 18), "播放演示"),
         h("button", { class: "btn outlined", type: "button", onclick: () => openScratch("") }, "打开草稿本"))));
   }
 
@@ -135,7 +135,7 @@ export function openLegacyTerminal() {
   btn.addEventListener("click", run);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
   const sheet = openSheet({ title: "终端", tall: true, onClose: () => offs.forEach((f) => f()), body: h("div", null, out, h("div", { class: "term-in" }, input, btn)) });
-  print(runtime.kind === "native" ? "命令由 Diffusion 本地运行环境执行。\n" : "命令通过桥接服务在你的项目文件夹里运行。\n不支持交互式程序，也不支持需要输入密码的命令。\n");
+  print(runtime.kind === "native" ? "命令由 Koide 本地运行环境执行。\n" : "命令通过桥接服务在你的项目文件夹里运行。\n不支持交互式程序，也不支持需要输入密码的命令。\n");
   setTimeout(() => input.focus(), 400);
   return sheet;
 }
