@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<defs>
+ <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#171A21"/><stop offset="1" stop-color="#0F1117"/></linearGradient>
+ <linearGradient id="a" x1=".12" y1=".1" x2=".9" y2=".9"><stop stop-color="#3157FF"/><stop offset="1" stop-color="#4C6FFF"/></linearGradient>
+ <linearGradient id="b" x1=".1" y1=".1" x2=".9" y2=".9"><stop stop-color="#69C8FF"/><stop offset="1" stop-color="#54A6F4"/></linearGradient>
+ <linearGradient id="c" x1=".1" y1=".1" x2=".9" y2=".9"><stop stop-color="#5472FF"/><stop offset=".5" stop-color="#7958F6"/><stop offset="1" stop-color="#9257F4"/></linearGradient>
+</defs>
+<rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+<path d="M250 365Q250 320 290 294L480 176Q535 142 535 207V438Q535 477 501 498L326 606Q250 653 250 565Z" fill="url(#a)"/>
+<path d="M555 382Q555 342 591 320L744 226Q808 187 808 258V438Q808 488 765 514L642 589Q555 642 555 548Z" fill="url(#b)"/>
+<path d="M296 598Q334 545 397 575L741 737Q797 764 744 799L604 891Q567 916 523 897L316 807Q229 769 296 598Z" fill="url(#c)"/>
+</svg>
