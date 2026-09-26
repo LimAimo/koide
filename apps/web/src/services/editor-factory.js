@@ -8,7 +8,7 @@ export function loadCM6() {
     cached = Promise.resolve().then(async () => {
       // 测试环境可以注入同一适配器接口；产品运行时不会设置这个值。
       if (typeof globalThis.__DIFFUSION_CM6_FACTORY__ === "function") return globalThis.__DIFFUSION_CM6_FACTORY__;
-      const mod = await import("/vendor/cm6.js");
+      const mod = await import(new URL("../../vendor/cm6.js", import.meta.url).href);
       if (typeof mod.createCM6Editor !== "function") throw new Error("CodeMirror 6 构建产物缺少 createCM6Editor 导出");
       return mod.createCM6Editor;
     });
