@@ -3,7 +3,9 @@ use crate::core::RuntimeError;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(not(target_os = "android"))]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
