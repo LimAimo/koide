@@ -1,9 +1,9 @@
-use crate::core::workspace::{Mutation, Workspace};
+use crate::core::workspace::Workspace;
 use crate::core::RuntimeError;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 fn git_error(text: impl Into<String>) -> RuntimeError {
@@ -28,7 +28,7 @@ fn git_error(text: impl Into<String>) -> RuntimeError {
     }
     RuntimeError::new(
         "GIT_ERROR",
-        if text.trim().is_empty() { "Git 操作失败".into() } else { text.chars().take(600).collect() },
+        if text.trim().is_empty() { "Git 操作失败".to_owned() } else { text.chars().take(600).collect::<String>() },
     )
 }
 
