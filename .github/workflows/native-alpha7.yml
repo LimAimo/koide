@@ -37,6 +37,11 @@ jobs:
         with:
           workspaces: "apps/native/src-tauri -> target"
 
+      - name: Install Linux Tauri test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
       - name: Run Native Core tests without Python Bridge
         working-directory: apps/native/src-tauri
         run: cargo test --lib
