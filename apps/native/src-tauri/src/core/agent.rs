@@ -757,6 +757,33 @@ fn execute_read_tool(root: &Path, call: &ToolCall) -> Result<Value, RuntimeError
                 "content":content
             }))
         }
+        "fs_glob" => {
+            let pattern = required_arg(&call.arguments, "pattern")?;
+            let max_results = call.arguments.get("max_results").and_then(Value::as_u64).unwrap_or(200).clamp(1, 500) as usize;
+            let mut paths = Vec::new();
+            glob_dir(root, root, pattern, max_results, &mut paths)?;
+            Ok(json!({"paths":paths,"truncated":paths.len() >= max_results}))
+        }
+        "fs_multi_read" => {
+            let paths = call.arguments.get("paths").and_then(Value::as_array)
+                .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "fs_multi_read 缺少 paths"))?;
+            let mut files = Vec::new();
+            for raw in paths.iter().take(20).filter_map(Value::as_str) {
+                let nested = ToolCall {
+                    id: String::new(),
+                    name: "fs_read".into(),
+                    arguments: json!({"path":raw})
+                };
+                match execute_read_tool(root, &nested) {
+                    Ok(value) => files.push(value),
+                    Err(error) => files.push(json!({
+                        "path":raw,
+                        "error":format!("{}: {}", error.code, error.message)
+                    })),
+                }
+            }
+            Ok(json!({"files":files}))
+        }
         "fs_search" => {
             let query = required_arg(&call.arguments, "query")?;
             if query.is_empty() {
@@ -841,6 +868,50 @@ fn list_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Value>) -> Resu
         }));
         if ty.is_dir() && depth > 1 {
             list_dir(root, &path, depth - 1, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn glob_dir(
+    root: &Path,
+    dir: &Path,
+    pattern: &str,
+    max_results: usize,
+    out: &mut Vec<String>,
+) -> Result<(), RuntimeError> {
+    if out.len() >= max_results {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if out.len() >= max_results {
+            break;
+        }
+        let Ok(ty) = entry.file_type() else { continue };
+        if ty.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        let rel = display_rel(root, &path);
+        if check_read_path(&rel).is_err() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ty.is_dir() && matches!(
+            name.as_str(),
+            "node_modules" | "target" | ".git" | ".gradle" | ".idea" | "__pycache__" | ".venv" | "venv"
+        ) {
+            continue;
+        }
+        if wildcard_match(pattern, &rel) {
+            out.push(rel.clone());
+        }
+        if ty.is_dir() {
+            glob_dir(root, &path, pattern, max_results, out)?;
         }
     }
     Ok(())
