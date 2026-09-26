@@ -169,9 +169,6 @@ function boot() {
     await initConnection();                                           // 失败时静默留在网页模式，状态胶囊会显示结果
   })();
 
-  if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
-    navigator.serviceWorker.register("/sw.js").catch(() => { /* offline shell is a bonus */ });
-  }
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
