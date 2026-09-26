@@ -94,3 +94,26 @@ fn constant_eq(a:&[u8],b:&[u8])->bool{
     if a.len()!=b.len(){return false;}
     let mut diff=0u8;for(i,j)in a.iter().zip(b){diff|=*i^*j;}diff==0
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceStore;
+    use std::fs;
+
+    #[test]
+    fn device_tokens_are_hashed_and_revocable() {
+        let root=std::env::temp_dir().join(format!("diffusion-native-devices-{}",crate::core::id::unique_id("")));
+        fs::create_dir_all(&root).unwrap();
+        let store=DeviceStore::new(&root);
+        let code=store.new_code().unwrap();
+        let token=store.pair(&code,"phone").unwrap().unwrap();
+        let raw=fs::read_to_string(root.join("devices.json")).unwrap();
+        assert!(!raw.contains(&token));
+        assert!(store.verify(&token).is_some());
+        let id=store.list()[0]["id"].as_str().unwrap().to_owned();
+        assert!(store.revoke(&id).unwrap());
+        assert!(store.verify(&token).is_none());
+        let _=fs::remove_dir_all(root);
+    }
+}
