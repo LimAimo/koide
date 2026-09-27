@@ -21,7 +21,7 @@ h1, h2, h3, p { margin: 0; }
   position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 40px; padding: 0 20px; border-radius: var(--r-full);
   font-weight: 500; letter-spacing: .1px; overflow: hidden;
-  transition: background .2s var(--ease-emph), box-shadow .2s, transform .12s var(--ease-emph);
+  transition: background var(--motion-fast) var(--ease-emph), box-shadow .2s, transform var(--motion-instant) var(--ease-emph);
 }
 .btn:active { transform: scale(.97); }
 .btn.filled { background: var(--primary); color: var(--on-primary); }
@@ -33,7 +33,7 @@ h1, h2, h3, p { margin: 0; }
 .btn.small { min-height: 32px; padding: 0 14px; font-size: 13px; }
 .btn[disabled] { opacity: .38; pointer-events: none; }
 .btn::after, .icon-btn::after, .menu-item::after, .row-btn::after {      /* MD3 state layer */
-  content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity .15s; pointer-events: none;
+  content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity var(--motion-fast); pointer-events: none;
 }
 @media (hover: hover) { .btn:hover::after, .icon-btn:hover::after, .menu-item:hover::after, .row-btn:hover::after { opacity: .08; } }
 .btn:active::after, .icon-btn:active::after, .menu-item:active::after, .row-btn:active::after { opacity: .14; }
@@ -48,7 +48,7 @@ h1, h2, h3, p { margin: 0; }
 .text-field, select.text-field, textarea.text-field {
   width: 100%; min-height: 44px; padding: 10px 14px; border-radius: var(--r-sm);
   background: var(--surface-2); border: 1px solid var(--outline-variant); color: var(--on-surface);
-  transition: border-color .15s, box-shadow .15s, height .2s var(--ease-emph);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), height var(--motion-fast) var(--ease-emph);
   -webkit-appearance: none; appearance: none;
 }
 .text-field:focus { border-color: var(--primary); box-shadow: none; }
@@ -66,7 +66,7 @@ select.text-field {
 .switch .track { position: absolute; inset: 0; border-radius: 16px; background: var(--surface-3); border: 2px solid var(--outline); transition: background .2s, border-color .2s; }
 .switch .thumb {
   position: absolute; top: 50%; left: 8px; width: 16px; height: 16px; border-radius: 50%; background: var(--outline);
-  transform: translateY(-50%); transition: left .28s var(--ease-emph), width .18s, height .18s, background .2s;
+  transform: translateY(-50%); transition: left var(--motion-medium) var(--ease-emph), width var(--motion-fast), height var(--motion-fast), background .2s;
 }
 .switch input:checked ~ .track { background: var(--primary); border-color: var(--primary); }
 .switch input:checked ~ .thumb { left: 24px; width: 24px; height: 24px; background: var(--on-primary); }
@@ -79,7 +79,7 @@ input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; h
 input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--primary) var(--pct, 50%), var(--surface-3) var(--pct, 50%)); }
 input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--surface-3); }
 input[type="range"]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--primary); }
-input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -7px; border-radius: 50%; background: var(--primary); border: 0; transition: transform .15s var(--ease-emph); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -7px; border-radius: 50%; background: var(--primary); border: 0; transition: transform var(--motion-fast) var(--ease-emph); }
 input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--primary); border: 0; }
 input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.22); box-shadow: none; }
 input[type="range"]:focus-visible { outline-offset: 0; }
@@ -93,13 +93,13 @@ input[type="range"]:focus-visible { outline-offset: 0; }
 /* ---- scrim / sheet / dialog / menu ---------------------------------------------------------------------- */
 #overlay-root { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
 #overlay-root > * { pointer-events: auto; }
-.scrim { position: fixed; inset: 0; background: var(--scrim); opacity: 0; transition: opacity .25s; }
+.scrim { position: fixed; inset: 0; background: var(--scrim); opacity: 0; transition: opacity var(--motion-medium); }
 .scrim.in { opacity: 1; }
 
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; max-height: 88dvh; display: flex; flex-direction: column;
   background: var(--surface-1); border-radius: var(--r-xl) var(--r-xl) 0 0; box-shadow: var(--shadow);
-  transform: translateY(102%); transition: transform .32s var(--ease-decel);
+  transform: translateY(102%); transition: transform var(--motion-slow) var(--ease-decel);
   max-width: 640px; margin: 0 auto; padding-bottom: env(safe-area-inset-bottom);
 }
 .sheet.tall { height: 88dvh; }
@@ -114,7 +114,7 @@ input[type="range"]:focus-visible { outline-offset: 0; }
 .dialog {
   position: fixed; left: 50%; top: 50%; width: min(88vw, 360px); padding: 24px; border-radius: var(--r-xl);
   background: var(--surface-2); box-shadow: var(--shadow); opacity: 0; transform: translate(-50%, -46%) scale(.94);
-  transition: opacity .2s, transform .28s var(--ease-decel);
+  transition: opacity var(--motion-fast), transform var(--motion-medium) var(--ease-decel);
 }
 .dialog.in { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 .dialog h2 { font-size: 22px; line-height: 28px; font-weight: 400; margin-bottom: 12px; }
@@ -128,7 +128,7 @@ input[type="range"]:focus-visible { outline-offset: 0; }
 .toast {
   position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 200; max-width: min(90vw, 420px);
   padding: 12px 20px; border-radius: var(--r-md); background: var(--on-surface); color: var(--surface);
-  transform: translate(-50%, 24px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .3s var(--ease-decel);
+  transform: translate(-50%, 24px); opacity: 0; pointer-events: none; transition: opacity .2s, transform var(--motion-slow) var(--ease-decel);
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -193,11 +193,11 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
 
 /* Koide / MD3E：主要交互从 full shape 按压 morph 到更方的 rounded rectangle。 */
 .btn, .icon-btn, .row-btn, .menu-item, .select-button {
-  transition: border-radius 180ms var(--ease-emph), transform 180ms var(--ease-emph), background 180ms var(--ease-emph), box-shadow 180ms var(--ease-emph);
+  transition: border-radius var(--motion-fast) var(--ease-emph), transform var(--motion-fast) var(--ease-emph), background var(--motion-fast) var(--ease-emph), box-shadow var(--motion-fast) var(--ease-emph);
 }
-.btn:active { transform: scale(.985); border-radius: 12px; transition-duration: 70ms; }
-.icon-btn:active { transform: scale(.94); border-radius: 12px; transition-duration: 70ms; }
-.row-btn:active, .menu-item:active, .select-button:active { transform: scale(.99); border-radius: 12px; transition-duration: 70ms; }
+.btn:active { transform: scale(var(--motion-press-soft)); border-radius: 12px; transition-duration: var(--motion-instant); }
+.icon-btn:active { transform: scale(var(--motion-press)); border-radius: 12px; transition-duration: var(--motion-instant); }
+.row-btn:active, .menu-item:active, .select-button:active { transform: scale(var(--motion-press-soft)); border-radius: 12px; transition-duration: var(--motion-instant); }
 .select-button {
   position: relative; display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
   min-width: 112px; min-height: 44px; padding: 0 14px; border: 1px solid var(--outline-variant);
@@ -389,3 +389,15 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
 .tm-story.open .material-symbols-rounded{color:var(--error)}
 .tl-call{display:block;margin:3px 0 0 64px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}
 @media(max-width:600px){.tl-call{margin-left:0}}
+
+/* Motion 1.0：动态内容以轻量进入反馈表达状态变化，不改变布局语义。 */
+.live-activity, .tl-event, .tm-story { animation: koide-rise var(--motion-medium) var(--ease-decel) both; }
+@keyframes koide-rise {
+  from { opacity: 0; transform: translateY(var(--motion-distance-sm)); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-orb.running, .live-activity.running .live-activity-dot, .live-activity.preparing .live-activity-dot, .spinner {
+    animation: none !important;
+  }
+}
