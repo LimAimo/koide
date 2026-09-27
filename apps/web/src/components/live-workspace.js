@@ -33,7 +33,7 @@ export function openLiveWorkspace({ onOpenTimeline, onOpenMemory } = {}) {
     body,
     onClose: () => off && off(),
     footer: [
-      h("button", { class: "btn tonal", type: "button", onclick: () => { const id = state.get().agent.taskId; if (id && onOpenTimeline) onOpenTimeline(id); } }, icon("history", 17), "时光机"),
+      h("button", { class: "btn tonal", type: "button", onclick: () => { const id = state.get().agent.taskId || state.get().live?.taskId; if (onOpenTimeline) onOpenTimeline(id || null); } }, icon("history", 17), "时光机"),
       h("button", { class: "btn text", type: "button", onclick: () => onOpenMemory && onOpenMemory() }, icon("file", 17), "项目记忆"),
     ],
   });
