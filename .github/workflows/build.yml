@@ -259,15 +259,14 @@ jobs:
 
           NOTES_FILE="$(mktemp)"
           awk -v version="$VERSION" '
-            $0 == "## " version "（2026-09-26）" { capture=1; next }
+            index($0, "## " version "（") == 1 { capture=1; next }
             capture && /^## / { exit }
             capture { print }
           ' CHANGELOG.md > "$NOTES_FILE"
 
-          git tag "$TAG" "$GITHUB_SHA"
-          git push origin "$TAG"
           gh release create "$TAG" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "Koide ${VERSION}" \
             --notes-file "$NOTES_FILE" \
             --latest
