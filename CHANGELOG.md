@@ -1,5 +1,13 @@
 # 更新日志
 
+## 1.0.0（开发中）
+
+- **新增「工作现场」**：顶部状态胶囊现在可点击，打开实时 Agent 工作视图；会展示当前目标、Agent 状态、最近工具调用、正在处理的文件以及每一步的执行状态，不再只能从聊天卡片推断 AI 正在做什么。
+- **新增项目记忆**：每个项目可维护 `.koide/PROJECT_MEMORY.md`。内容由用户显式编辑和保存，Native 与 Bridge Agent 都会在后续任务中读取；不会把聊天内容偷偷写入长期记忆。
+- **设置页版本号改为 Runtime 单一来源**：设置页不再手写 `0.x` 版本字符串，而是直接读取 Native Core / Bridge 的 `hello.version`，避免应用已经升级但「关于/高级」区域仍显示旧版本。
+- **修复 Drawer / Bottom Sheet 标题区域异色色块**：普通 Light/Dark 主题下，Sheet 使用 `--surface-1`，旧标题层却混入 `--surface` 并单独做 backdrop-filter，因此标题到关闭按钮区域会出现一整块偏灰/偏黑矩形；OLED 因两层都为纯黑而看不出。现已取消 Sheet 标题独立着色，让标题与主体 surface 连续。
+- **1.0 开发线建立**：正式开发分支为 `dev/1.0.0`；0.9.0 的 `main` / `v0.9.0` 保持稳定发布基准。
+
 ## 0.9.0（2026-09-26）
 
 - **Koide 正式转正**：应用从 `0.8.0-alpha.7` 升级到 `0.9.0`，移除当前版本的 alpha 标记；Native、Web、Bridge、Cargo、Tauri 与 CodeMirror workspace 包版本统一为 0.9.0。
