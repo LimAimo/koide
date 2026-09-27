@@ -620,6 +620,20 @@ fn run_tool_mode(
                             &tool_title(&call),
                             json!({"tool":call.name.clone(),"arguments":call.arguments.clone(),"summary":summary.clone()}),
                         );
+                    } else if call.name == "shell_run" {
+                        let exit_code = value.get("exit_code").and_then(Value::as_i64).unwrap_or(-1);
+                        let timed_out = value.get("timed_out").and_then(Value::as_bool).unwrap_or(false);
+                        let ok = exit_code == 0 && !timed_out;
+                        let command = call.arguments.get("command").and_then(Value::as_str).unwrap_or("");
+                        let title = format!("{}：{}", if ok { "通过" } else { "失败" }, command.chars().take(80).collect::<String>());
+                        let detail = value.get("output").and_then(Value::as_str).unwrap_or("");
+                        let detail = detail.chars().rev().take(1500).collect::<String>().chars().rev().collect::<String>();
+                        let _ = checkpoints.add_event(
+                            task_id,
+                            if ok { "build_ok" } else { "build_failed" },
+                            &title,
+                            json!({"tool":"shell_run","arguments":call.arguments.clone(),"detail":detail,"exit_code":exit_code}),
+                        );
                     }
                     (value, "done", summary, String::new())
                 },
