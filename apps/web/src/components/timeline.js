@@ -13,6 +13,8 @@ const EVENT_LABEL = {
 };
 const eventDetail = (ev) => ev.detail || ev.summary || "";
 const eventPath = (ev) => ev.path || ev.arguments?.path || "";
+const editLabel = (ev) => ({ create: "创建", write: "写入", patch: "修改", delete: "删除", rename: "重命名", copy: "复制" }[ev.kind] || "修改");
+const editTitle = (ev) => ev.type === "edit" ? `${editLabel(ev)} · ${eventPath(ev).split("/").pop() || ev.title}` : ev.title;
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtDate = (ts) => new Date(ts * 1000).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -69,7 +71,7 @@ export function openTimeMachine(taskId = null) {
       const acts = h("div", { class: "acts" });
       if (ev.type === "edit") {
         if (ev.kind !== "rename") acts.appendChild(h("button", { class: "btn tonal small", type: "button", onclick: () => replay(id, ev) }, icon("play", 14), "Replay"));
-        if (!ev.reverted && ev.kind !== "rename") acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: () => revertStep(id, ev) }, "撤销这一步"));
+        if (!ev.reverted && ev.kind !== "rename") acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: () => revertStep(id, ev) }, "撤销到这一步之前"));
       }
       const detail = eventDetail(ev);
       const path = eventPath(ev);
@@ -77,7 +79,8 @@ export function openTimeMachine(taskId = null) {
         h("div", { class: "time" }, fmtTime(ev.ts)),
         h("div", { class: "ttl" },
           EVENT_LABEL[ev.type] ? h("span", { class: "tl-kind" }, EVENT_LABEL[ev.type]) : null,
-          ev.title),
+          editTitle(ev),
+          ev.reverted ? h("span", { class: "tl-reverted" }, "已撤销") : null),
         path ? h("div", { class: "muted tl-path", title: path }, path) : null,
         detail && (ev.type.startsWith("build") || ev.type === "task_status") ? h("pre", null, detail) : null,
         acts.children.length ? acts : null));
@@ -93,10 +96,10 @@ export function openTimeMachine(taskId = null) {
   }
 
   async function revertStep(id, ev) {
-    try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq }); toast("已撤销这一步"); showTask(id); }
+    try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq }); toast("已恢复到这一步之前"); showTask(id); }
     catch (e) {
-      if (e.code === "CONFLICT" && await confirmDialog({ title: "后面的改动依赖这一步", message: "撤销这一步会丢掉同一个文件里在它之后做的修改。", confirmLabel: "仍然撤销", danger: true })) {
-        try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq, force: true }); toast("已撤销这一步"); showTask(id); } catch (e2) { toast(e2.message); }
+      if (e.code === "CONFLICT" && await confirmDialog({ title: "后续修改依赖这个版本", message: "恢复到这一步之前，会同时移除同一文件在它之后的修改。其他文件不受影响。", confirmLabel: "继续恢复", danger: true })) {
+        try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq, force: true }); toast("已恢复到这一步之前"); showTask(id); } catch (e2) { toast(e2.message); }
       } else if (e.code !== "CONFLICT") toast(e.message);
     }
   }
