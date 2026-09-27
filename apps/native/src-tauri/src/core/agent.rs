@@ -1587,12 +1587,12 @@ fn execute_edit_tool(
             let before_blob = checkpoints.blob_for_event_before(Some(text.as_bytes()))?;
             checkpoints.add_event(task_id, "edit", &format!("删除 {from}"), json!({
                 "path":from,"kind":"delete","before_blob":before_blob,"existed_before":true,
-                "after_rev":"absent","old_path":from,"new_path":to
+                "after_rev":"absent","old_path":from,"new_path":to,"call_id":call.id.clone()
             }))?;
             let after_rev = workspace.read(to)?.get("revision").cloned().unwrap_or(Value::String("absent".into()));
             checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
                 "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
-                "after_rev":after_rev,"old_path":from,"new_path":to
+                "after_rev":after_rev,"old_path":from,"new_path":to,"call_id":call.id.clone()
             }))?;
             let mut event = mutation.event.clone();
             if let Some(obj) = event.as_object_mut() {
@@ -1617,7 +1617,8 @@ fn execute_edit_tool(
             let after = workspace.read(to)?;
             checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
                 "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
-                "after_rev":after.get("revision").cloned().unwrap_or(Value::String("absent".into()))
+                "after_rev":after.get("revision").cloned().unwrap_or(Value::String("absent".into())),
+                "call_id":call.id.clone()
             }))?;
             let _ = app.emit("diffusion://event", RuntimeEvent {
                 event:"fs.changed".into(),
