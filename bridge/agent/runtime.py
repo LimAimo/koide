@@ -178,6 +178,9 @@ class AgentRun:
         agents = ws.primary / "AGENTS.md"
         if agents.is_file():
             text += "\n# Project instructions (AGENTS.md)\n" + agents.read_text("utf-8", "replace")[:8000]
+        memory = ws.primary / ".koide" / "PROJECT_MEMORY.md"
+        if memory.is_file():
+            text += "\n# Project Memory (user-maintained)\n" + memory.read_text("utf-8", "replace")[:8000]
         return text
 
     def _check_limits(self) -> None:
