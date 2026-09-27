@@ -154,6 +154,24 @@ class Workspace:
     def info(self) -> dict:
         return {"roots": [str(r) for r in self.roots], "name": self.primary.name}
 
+    def project_context(self) -> str:
+        """User-visible project context shared by instructions.get and Agent prompts."""
+        sections: list[str] = []
+        for rel, title in (
+            ("AGENTS.md", "Project instructions (AGENTS.md)"),
+            (".koide/PROJECT_MEMORY.md", "Project Memory (user-maintained)"),
+        ):
+            try:
+                item = self.read(rel)
+            except WorkspaceError:
+                continue
+            if item.get("binary"):
+                continue
+            body = str(item.get("content") or "")[:8000]
+            if body.strip():
+                sections.append(f"# {title}\n{body}")
+        return "\n\n".join(sections)
+
     def display(self, abs_path: Path) -> str:
         try:
             return abs_path.relative_to(self.primary).as_posix() or "."
