@@ -12,6 +12,17 @@
   --ease-decel: cubic-bezier(.05, .7, .1, 1);
   --ease-accel: cubic-bezier(.3, 0, .8, .15);
 
+  /* Koide Motion 1.0：普通 UI 共用一套节奏；Diffusion 编辑动画保持独立。 */
+  --motion-instant: 70ms;
+  --motion-fast: 160ms;
+  --motion-medium: 240ms;
+  --motion-slow: 320ms;
+  --motion-page: 360ms;
+  --motion-distance-sm: 8px;
+  --motion-distance-md: 16px;
+  --motion-press: .96;
+  --motion-press-soft: .985;
+
   --font-ui: "Roboto Flex", "Google Sans", Roboto, "Noto Sans", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-code: "JetBrains Mono", "Cascadia Code", "Fira Code", "Sarasa Mono SC", ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
 }
