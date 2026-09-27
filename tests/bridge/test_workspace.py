@@ -99,6 +99,13 @@ class WorkspaceTests(unittest.TestCase):
         ch = self.changes[-1]
         self.assertEqual((ch.kind, ch.before_text, ch.after_text, ch.actor), ("modify", "one", "two", "agent"))
 
+    def test_agent_checkpoint_edit_keeps_tool_call_id(self):
+        task = self.ws.checkpoints.start_task("trace edit", "agent")
+        self.ws.write("trace.txt", "hello", "absent", Ctx("agent", task["id"], "call_trace_123"))
+        saved = self.ws.checkpoints.load_task(task["id"])
+        edit = next(e for e in saved["events"] if e["type"] == "edit")
+        self.assertEqual(edit["call_id"], "call_trace_123")
+
     def test_delete_goes_to_trash_and_restores(self):
         self.ws.write("a.txt", "keep me")
         res = self.ws.delete("a.txt")
