@@ -328,3 +328,50 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   .live-stage-list { grid-template-columns: repeat(5, minmax(54px, 1fr)); overflow-x: auto; padding-bottom: 2px; }
   .live-stage { min-width: 58px; }
 }
+
+
+/* ---- Koide 1.0: Live Workspace + Project Memory --------------------------------------------- */
+.live-workspace { display: grid; gap: 18px; padding: 4px 2px 20px; }
+.live-hero { display: flex; align-items: flex-start; gap: 14px; padding: 18px; border-radius: var(--r-lg); background: var(--surface-2); }
+.live-orb { flex: none; width: 14px; height: 14px; margin-top: 5px; border-radius: 50%; background: var(--outline); }
+.live-orb.running { background: var(--primary); box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 14%, transparent); animation: pulse 1.2s ease-in-out infinite; }
+.live-copy { min-width: 0; }
+.live-copy small { color: var(--on-surface-variant); }
+.live-copy h3 { margin: 3px 0 5px; font-size: 17px; line-height: 1.35; font-weight: 600; overflow-wrap: anywhere; }
+.live-copy p { margin: 0; font-size: 13px; line-height: 1.45; }
+.live-section-title { margin-top: 2px; font-size: 13px; font-weight: 600; color: var(--on-surface-variant); }
+.live-task-note { margin: 4px 0 10px; font-size: 12px; }
+.live-stage-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.live-stage { min-width: 0; display: grid; justify-items: center; gap: 5px; padding: 10px 5px; border-radius: var(--r-md); background: var(--surface-2); text-align: center; }
+.live-stage-mark { width: 9px; height: 9px; border-radius: 50%; background: var(--outline); }
+.live-stage-label { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.live-stage small { font-size: 10px; color: var(--on-surface-variant); }
+.live-stage.active { background: var(--primary-container); color: var(--on-primary-container); }
+.live-stage.active .live-stage-mark { background: var(--primary); animation: pulse 1s ease-in-out infinite; }
+.live-stage.done .live-stage-mark { background: var(--ok); }
+.live-stage.error .live-stage-mark, .live-stage.stopped .live-stage-mark { background: var(--error); }
+.live-stage.skipped { opacity: .55; }
+.live-activity-list { display: grid; gap: 4px; }
+.live-activity { display: grid; grid-template-columns: 10px minmax(0,1fr) auto; align-items: start; gap: 10px; padding: 10px 8px; border-radius: var(--r-md); }
+.live-activity:hover { background: var(--surface-2); }
+.live-activity-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--outline); }
+.live-activity.running .live-activity-dot, .live-activity.waiting .live-activity-dot { background: var(--primary); }
+.live-activity.done .live-activity-dot { background: var(--ok); }
+.live-activity.error .live-activity-dot, .live-activity.denied .live-activity-dot { background: var(--error); }
+.live-activity-main { min-width: 0; display: grid; gap: 2px; }
+.live-activity-title { font-size: 13px; font-weight: 500; }
+.live-activity-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--on-surface-variant); font-size: 11px; }
+.live-activity-main small, .live-activity-state { font-size: 11px; }
+.live-empty { padding: 18px; border-radius: var(--r-md); background: var(--surface-2); text-align: center; font-size: 13px; }
+
+.project-memory { display: grid; gap: 12px; padding: 4px 2px 18px; }
+.project-memory-intro { margin: 0; line-height: 1.55; color: var(--on-surface-variant); font-size: 13px; }
+.project-memory-intro code { color: var(--on-surface); }
+.project-memory-meta { font-size: 12px; }
+.project-memory-editor { min-height: 48dvh; font-family: var(--font-code); line-height: 1.55; }
+
+@media (max-width: 520px) {
+  .live-stage-list { grid-template-columns: 1fr; gap: 4px; }
+  .live-stage { grid-template-columns: 12px minmax(0,1fr) auto; justify-items: start; align-items: center; text-align: left; padding: 9px 10px; }
+  .live-stage-label { white-space: normal; }
+}
