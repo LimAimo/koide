@@ -1,7 +1,7 @@
 // Project Memory: user-visible, editable project context that can also be injected into Agent prompts.
 
 import { h, toast } from "./dom.js";
-import { openSheet } from "./overlays.js";
+import { openSheet, confirmDialog } from "./overlays.js";
 import { runtime, state } from "../services/app.js";
 
 export const PROJECT_MEMORY_PATH = ".koide/PROJECT_MEMORY.md";
@@ -52,7 +52,7 @@ export function openProjectMemory() {
     "这是项目自己的长期上下文。内容保存在 ", h("code", null, PROJECT_MEMORY_PATH),
     "，你可以直接编辑、版本控制或删除它；Koide Agent 会在后续任务中读取它。");
   const body = h("div", { class: "project-memory" }, intro, meta, textarea);
-  let revision = null, exists = false, saving = false;
+  let revision = null, exists = false, saving = false, loadedText = "";
 
   const save = async () => {
     if (saving || !state.get().workspace) return;
@@ -64,12 +64,38 @@ export function openProjectMemory() {
       else res = await createMemory(textarea.value);
       revision = res?.revision || revision;
       exists = true;
+      loadedText = textarea.value;
       meta.textContent = "已保存 · 后续 Agent 任务会读取这份记忆";
       toast("项目记忆已保存");
     } catch (e) {
-      meta.textContent = "保存失败：" + e.message;
-      toast(e.message);
+      if (e?.code === "CONFLICT") {
+        meta.textContent = "检测到外部修改 · 你的未保存内容仍保留在编辑框中";
+        toast("项目记忆已在其他地方修改，请重新载入后合并");
+      } else {
+        meta.textContent = "保存失败：" + e.message;
+        toast(e.message);
+      }
     } finally { saving = false; }
+  };
+
+  const reload = async () => {
+    if (textarea.value !== loadedText && !(await confirmDialog({
+      title: "重新载入项目记忆？",
+      message: "编辑框里还有未保存的内容。重新载入会用磁盘上的最新版本替换它。",
+      confirmLabel: "重新载入",
+      danger: true,
+    }))) return;
+    try {
+      const m = await loadMemory();
+      textarea.value = m.text;
+      loadedText = m.text;
+      revision = m.revision;
+      exists = m.exists;
+      meta.textContent = m.exists ? "已重新载入磁盘上的最新版本" : "记忆文件已不存在；保存时会重新创建";
+    } catch (e) {
+      meta.textContent = "重新载入失败：" + e.message;
+      toast(e.message);
+    }
   };
 
   const sheet = openSheet({
@@ -78,12 +104,14 @@ export function openProjectMemory() {
     body,
     footer: [
       h("button", { class: "btn tonal", type: "button", onclick: save }, "保存"),
+      h("button", { class: "btn text", type: "button", onclick: reload }, "重新载入"),
       h("button", { class: "btn text", type: "button", onclick: () => sheet.close() }, "关闭"),
     ],
   });
 
   loadMemory().then((m) => {
     textarea.value = m.text;
+    loadedText = m.text;
     revision = m.revision;
     exists = m.exists;
     meta.textContent = m.exists ? "已载入项目记忆" : "这个项目还没有记忆文件；首次保存时会创建";
