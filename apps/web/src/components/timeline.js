@@ -15,6 +15,15 @@ const eventDetail = (ev) => ev.detail || ev.summary || "";
 const eventPath = (ev) => ev.path || ev.arguments?.path || "";
 const editLabel = (ev) => ({ create: "创建", write: "写入", patch: "修改", delete: "删除", rename: "重命名", copy: "复制" }[ev.kind] || "修改");
 const editTitle = (ev) => ev.type === "edit" ? `${editLabel(ev)} · ${eventPath(ev).split("/").pop() || ev.title}` : ev.title;
+const callShort = (ev) => ev.call_id ? `调用 ${String(ev.call_id).slice(0, 10)}` : "";
+function validationStory(events) {
+  let failed = -1;
+  for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "build_failed") { failed = i; break; }
+  if (failed < 0) return null;
+  const passed = events.findIndex((e, i) => i > failed && e.type === "build_ok");
+  if (passed < 0) return { state: "open", edits: events.slice(failed + 1).filter((e) => e.type === "edit").length };
+  return { state: "fixed", edits: events.slice(failed + 1, passed).filter((e) => e.type === "edit").length };
+}
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtDate = (ts) => new Date(ts * 1000).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -58,10 +67,16 @@ export function openTimeMachine(taskId = null) {
     try { m = await runtime.checkpoint.task({ task_id: id }); } catch (e) { toast(e.message); return; }
     const touched = Object.keys(m.files);
     const anyEdits = m.events.some((e) => e.type === "edit" && !e.reverted);
+    const story = validationStory(m.events);
     append(body, [
       h("div", { style: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "12px" } },
         h("button", { class: "icon-btn", type: "button", "aria-label": "返回", onclick: showTasks }, icon("back")),
         h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontWeight: 500 } }, m.goal.slice(0, 120)), h("small", { class: "muted" }, fmtDate(m.started) + " · " + (STATUS[m.status] || m.status)))),
+      story ? h("div", { class: `tm-story ${story.state}` },
+        icon(story.state === "fixed" ? "check" : "warning", 18),
+        h("div", null,
+          h("strong", null, story.state === "fixed" ? "验证失败后已修复并重新通过" : "最近一次验证仍未通过"),
+          h("small", { class: "muted" }, story.edits ? `期间记录了 ${story.edits} 个修改节点` : "期间没有记录到文件修改"))) : null,
       touched.length ? h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" } },
         h("button", { class: "btn filled small danger", type: "button", disabled: !anyEdits, onclick: () => revertTask(id) }, icon("undo", 16), "恢复到任务开始之前"),
         ...touched.map((p) => h("button", { class: "btn outlined small", type: "button", onclick: () => revertFile(id, p) }, "撤销 " + p.split("/").pop()))) : null]);
@@ -70,7 +85,7 @@ export function openTimeMachine(taskId = null) {
     for (const ev of m.events) {
       const acts = h("div", { class: "acts" });
       if (ev.type === "edit") {
-        if (ev.kind !== "rename") acts.appendChild(h("button", { class: "btn tonal small", type: "button", onclick: () => replay(id, ev) }, icon("play", 14), "Replay"));
+        if (ev.kind !== "rename") acts.appendChild(h("button", { class: "btn tonal small", type: "button", onclick: () => replay(id, ev) }, icon("play", 14), "查看改动"));
         if (!ev.reverted && ev.kind !== "rename") acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: () => revertStep(id, ev) }, "撤销到这一步之前"));
       }
       const detail = eventDetail(ev);
@@ -82,6 +97,7 @@ export function openTimeMachine(taskId = null) {
           editTitle(ev),
           ev.reverted ? h("span", { class: "tl-reverted" }, "已撤销") : null),
         path ? h("div", { class: "muted tl-path", title: path }, path) : null,
+        callShort(ev) ? h("small", { class: "muted tl-call", title: ev.call_id }, callShort(ev)) : null,
         detail && (ev.type.startsWith("build") || ev.type === "task_status") ? h("pre", null, detail) : null,
         acts.children.length ? acts : null));
     }
