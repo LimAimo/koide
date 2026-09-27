@@ -1,6 +1,6 @@
-# Koide 1.0.0 当前状态
+# Koide 1.0.0-rc.1 当前状态
 
-Koide 1.0.0 当前处于 `dev/1.0.0` 开发阶段。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
+Koide 当前版本标识为 `1.0.0-rc.1`，处于 `dev/1.0.0` 候选版准备阶段，尚未发布。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
 
 ## Native 主链
 
@@ -56,10 +56,10 @@ OpenAI-compatible、Anthropic 与 Gemini Native 均有 Agent 调用路径；交�
 2. LAN 配对 / 远程项目目前由 Python Bridge 提供；
 3. Bridge 仍是协议与回归兼容层。
 
-如果以后加入 Rust Remote Runtime，可以再决定是否删除 Bridge；0.9.0 不把这件事作为正式发布的前提。
+如果以后加入 Rust Remote Runtime，可以再决定是否删除 Bridge；1.0 不把这件事作为正式发布的前提。
 
 ## RC 状态
 
-交接基线 `4e67440d` 的 [Stable Build #104](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36322589378) 五项通过。本轮 Product Polish Pass 继续提交 `dev/1.0.0`，以新提交的 GitHub Actions 结果为准，不能复用基线的通过结论。
+Product Polish 提交 `5a5bf1271e63b3b257e0ce5e4f30069633396cee` 的 [Stable Build #105](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36324930485) 已逐项核对 Job/Step：Web UI + CodeMirror 6、Bridge、Native Core、Windows x64、Android ARM64 均通过，Release 步骤跳过。后续版本标识收尾提交以自己的 CI 为准，不能复用这次通过结论。
 
-未发布 RC、未合并 `main`。Android 真机手感、安全区、软键盘和 SAF 提供商差异仍需设备验收；本轮未接入 Native haptic。详见 [产品打磨记录](PRODUCT_POLISH.md) 和 [1.x 路线](ROADMAP.md)。
+已同步候选版版本号与 Android `versionCode=10001`，未发布 RC、未合并 `main`。前三块核心实现（面板物理交互、连续状态、Rich Diff）已提交；触觉/声音未接入，全局重复入口/信息密度收敛和设备验收尚未全部完成。Android 真机手感、安全区、软键盘和 SAF 提供商差异仍需验收。1.x 功能均为后续计划。详见 [产品打磨记录](PRODUCT_POLISH.md) 和 [1.x 路线](ROADMAP.md)。

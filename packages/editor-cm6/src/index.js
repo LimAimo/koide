@@ -12,6 +12,7 @@ import { languages } from "@codemirror/language-data";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, completeAnyWord } from "@codemirror/autocomplete";
 import { highlightSelectionMatches } from "@codemirror/search";
 import { tags as t } from "@lezer/highlight";
+import metadata from "../package.json";
 import { analyze } from "../../../apps/web/src/animations/diffusion/engine.js";
 import { playDiffusion } from "../../../apps/web/src/animations/diffusion/renderer.js";
 import { langOf } from "../../../apps/web/src/editor/highlight.js";
@@ -202,4 +203,4 @@ class CM6Editor {
 }
 
 export function createCM6Editor(options = {}) { return new CM6Editor(options); }
-export const version = "0.9.0";
+export const version = metadata.version;

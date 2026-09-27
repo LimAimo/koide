@@ -1,6 +1,6 @@
 [package]
 name = "diffusion-native"
-version = "1.0.0"
+version = "1.0.0-rc.1"
 description = "Koide native shell and Rust core"
 authors = ["Koide contributors"]
 edition = "2021"

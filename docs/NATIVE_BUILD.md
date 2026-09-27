@@ -1,6 +1,6 @@
 # Koide Native 构建说明
 
-当前应用版本：`0.9.0`。
+当前应用版本：`1.0.0-rc.1`（候选版准备，尚未发布）。开发分支保持 `dev/1.0.0`。
 
 ## 工具链
 
@@ -43,7 +43,7 @@ pnpm --filter @diffusion/native exec tauri icon koide-icon.svg
 pnpm --filter @diffusion/native exec tauri android build --debug --apk --target aarch64
 ```
 
-Android 0.9.0 的 `versionName` 来自 `tauri.conf.json`，当前 `versionCode` 为 `9000`。CI 会使用 `apksigner verify` 检查 APK 签名。
+Android 的 `versionName` 来自 `tauri.conf.json`，当前 `versionCode` 为 `10001`，高于此前 1.0 开发包的 `10000`。后续 RC 与正式版都必须继续递增安装版本码，不能在去掉 `-rc.1` 时降回 `10000`。CI 会使用 `apksigner verify` 检查 APK 签名。
 
 当前自动构建使用调试签名以保证产物可安装；应用商店或公开生产分发应另外配置正式签名密钥。
 
@@ -68,6 +68,23 @@ Linux 上运行 Tauri Core 测试需要 GTK/WebKit 开发库。
 3. 检查 Runtime API / Native dispatch 对齐并运行 Rust tests；
 4. 构建 Android ARM64 APK；
 5. 构建 Windows x64 NSIS / portable EXE；
-6. 只有 `main` 上全部门禁通过后，才创建 `v<version>` 正式 GitHub Release。
+6. 只有 `main` 上全部门禁通过，且版本为纯 `X.Y.Z` 正式版本号时，才创建 `v<version>` 正式 GitHub Release。
 
-发布不再使用 `-alpha`、`build.N` 或 prerelease 标记。
+候选版使用 `-rc.N` 标识。开发分支构建只提供 Actions 产物；正式 Release 步骤也会跳过预发布版本，不自动创建候选版 Release、修改既有 Release/Tag 或合并 main。RC 发行需要用户另外确认。
+
+## 版本同步范围
+
+| 来源 | 当前值 / 用途 |
+|---|---|
+| 根目录、Native、Web、CodeMirror 的 `package.json` | `1.0.0-rc.1` |
+| `apps/native/src-tauri/tauri.conf.json` | `1.0.0-rc.1`；用于安装包与 CI 产物文件名 |
+| Native / SAF 的 `Cargo.toml` 与 `Cargo.lock` 自有包条目 | `1.0.0-rc.1`；第三方依赖版本不随应用更改 |
+| Native Core `hello.version` | 编译时读取 `CARGO_PKG_VERSION`，不再维护重复常量 |
+| CodeMirror `version` 导出 | 构建时读取自己的 `package.json`，不再维护重复常量 |
+| `bridge/app.py` 的 `VERSION` | `1.0.0-rc.1`；用于 Bridge 握手、HTTP 信息与启动提示 |
+| `pyproject.toml` | `1.0.0rc1`，对应 Python 包版本格式 |
+| Android `bundle.android.versionCode` | `10001`；每次安装包版本迭代递增 |
+
+版本更新时同步上述文件及 README、CHANGELOG、STATUS、能力审计和本页；保持历史 CHANGELOG 与历史分支引用原样。设置页继续读取 Runtime 的 `hello.version`，不另写界面版本常量。
+
+版本格式参考：[Tauri 配置](https://v2.tauri.app/reference/config/#version)、[Python 包版本规范](https://packaging.python.org/en/latest/specifications/version-specifiers/#pre-releases)。

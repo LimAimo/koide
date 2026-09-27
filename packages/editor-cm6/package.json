@@ -1,6 +1,6 @@
 {
   "name": "@diffusion/editor-cm6",
-  "version": "1.0.0",
+  "version": "1.0.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Koide 的正式 CodeMirror 6 编辑器适配器；构建输出到 apps/web/vendor/cm6.js。",

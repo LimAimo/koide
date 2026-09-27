@@ -1,6 +1,6 @@
 # Koide
 
-> **1.0.0 · 开发中（dev/1.0.0）**  
+> **1.0.0-rc.1 · 候选版准备（dev/1.0.0，尚未发布）**  
 > Koide 是一个本地优先、面向桌面与 Android 的 AI IDE。正常本地使用由 **Tauri 2 + Rust Native Core** 驱动，不需要 Python、localhost 或 WebSocket；Python Bridge 仅保留为浏览器/LAN 兼容模式。
 
 AI 修改代码时，Koide 不只是瞬间替换文本：保留下来的代码会移动到新位置，被删除的内容会消散，新增内容会在新位置成形。智能体可以读代码、搜索、修改文件、运行命令与测试；每一步都有权限边界、检查点和可恢复路径。
@@ -140,4 +140,4 @@ tests/                               Web、Bridge 与集成回归测试
 
 ## 1.0 收尾与后续路线
 
-当前 Product Polish Pass 的实现范围、CI 基线和 RC 真机验收项见 [产品打磨记录](docs/PRODUCT_POLISH.md)。1.x 的语义索引、上下文固定、任务恢复、执行图等按版本逐步推进，见 [路线图](docs/ROADMAP.md)；这些规划不代表当前已经实现。
+当前 Product Polish Pass 已实现面板释放/吸附、工作现场与工具状态连续更新、Time Machine Rich Diff；触觉/声音未实现，全局界面收敛与真机验收尚未全部完成。逐项完成度、CI 记录和 RC 验收项见 [产品打磨记录](docs/PRODUCT_POLISH.md)。1.x 的语义索引、上下文固定、任务恢复、执行图等按版本逐步推进，见 [路线图](docs/ROADMAP.md)；这些规划不代表当前已经实现。

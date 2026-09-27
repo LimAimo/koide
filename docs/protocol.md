@@ -1,6 +1,6 @@
 # Python Bridge / LAN 兼容协议
 
-Koide 0.9.0 的 Windows / Android 本地应用不使用本协议；本地应用通过 Runtime API + Tauri IPC 连接 Rust Native Core。这里记录的是**可选浏览器 / LAN 兼容模式**使用的 Python Bridge WebSocket 协议。
+Koide 的 Windows / Android 本地应用不使用本协议；本地应用通过 Runtime API + Tauri IPC 连接 Rust Native Core。这里记录的是**可选浏览器 / LAN 兼容模式**使用的 Python Bridge WebSocket 协议。
 
 传输：`/ws` 上的 WebSocket（JSON 文本帧），外加少量 HTTP 路由（`/api/info`、`/api/pair`、静态文件、`/animation-packs/*`）。
 

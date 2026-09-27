@@ -1,6 +1,6 @@
 {
   "name": "@diffusion/web",
-  "version": "1.0.0",
+  "version": "1.0.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Koide UI：通过 Runtime API 运行于 Native Core 或可选 Bridge。"

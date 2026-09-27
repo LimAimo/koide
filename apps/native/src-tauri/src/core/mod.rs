@@ -28,7 +28,7 @@ use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use watcher::WorkspaceWatcher;
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "1.0.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
