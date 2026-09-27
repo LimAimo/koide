@@ -323,6 +323,20 @@ test("Settings page renders every section and search filters them", async () => 
 // =====================================================================================================================
 const SRC = (p) => path.join(ROOT, "apps/web/src", p);
 
+test("Koide 1.0：普通 UI 使用统一 Motion tokens，Diffusion 编辑动画保持独立", async () => {
+  const tokens = await fs.promises.readFile(path.join(ROOT, "apps/web/src/styles/tokens.css"), "utf8");
+  const base = await fs.promises.readFile(path.join(ROOT, "apps/web/src/styles/base.css"), "utf8");
+  const layout = await fs.promises.readFile(path.join(ROOT, "apps/web/src/styles/layout.css"), "utf8");
+  const overlays = await fs.promises.readFile(path.join(ROOT, "apps/web/src/components/overlays.js"), "utf8");
+  assert.match(tokens, /--motion-fast:\s*160ms/);
+  assert.match(tokens, /--motion-medium:\s*240ms/);
+  assert.match(tokens, /--motion-slow:\s*320ms/);
+  assert.match(base, /var\(--motion-fast\)/);
+  assert.match(layout, /var\(--motion-slow\)/);
+  assert.match(overlays, /reducedMotion/);
+  assert.match(overlays, /motionMs\(320\)/);
+});
+
 test("样式回归：聊天区子元素不参与 flex 收缩，否则工具卡片会被压成一条线", () => {
   const chat = fs.readFileSync(SRC("styles/chat.css"), "utf8");
   assert.match(chat, /\.chat-scroll\s*>\s*\*\s*\{\s*flex:\s*none;/);
