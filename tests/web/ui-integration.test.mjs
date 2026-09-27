@@ -38,7 +38,11 @@ function startMockLlm() {
       };
       const turn = msgs.filter((m) => m.role === "tool").length;
       const goal = [...msgs].reverse().find((m) => m.role === "user").content;   // 有对话历史时，以最后一条用户消息为准
-      if (goal.includes("question please")) {
+      if (goal.includes("memory check")) {
+        const system = msgs.find((m) => m.role === "system")?.content || "";
+        sse({ choices: [{ delta: { content: system.includes("MEMORY_SENTINEL") ? "MEMORY_OK" : "MEMORY_MISSING" } }] });
+        sse({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      } else if (goal.includes("question please")) {
         if (turn === 0) tool("q1", "ask_user", { question: "你希望使用哪种方案？", options: ["方案 A", "方案 B"], allow_custom: true });
         else { sse({ choices: [{ delta: { content: "收到你的选择。" } }] }); sse({ choices: [{ delta: {}, finish_reason: "stop" }] }); }
       } else if (goal.includes("notes")) {
@@ -194,6 +198,32 @@ test("AI edit: chat streams, tool cards render, editor plays Diffusion, tab stay
   assert.equal($$(body(), ".send")[0].classList.contains("running"), false);
 });
 
+test("Koide 1.0：项目记忆可编辑，并会进入后续 Agent 上下文", async () => {
+  const { openProjectMemory } = await import("../../apps/web/src/components/project-memory.js");
+  openProjectMemory();
+  const editor = await until(() => $(body(), ".project-memory-editor")[0], "project memory editor");
+  editor.value = "# Decisions\nMEMORY_SENTINEL\n";
+  const sheet = $(body(), ".sheet").at(-1);
+  $(sheet, ".btn").find((b) => text(b) === "保存").click();
+  await until(() => fs.existsSync(path.join(proj, ".koide", "PROJECT_MEMORY.md")), "project memory file");
+  assert.match(fs.readFileSync(path.join(proj, ".koide", "PROJECT_MEMORY.md"), "utf8"), /MEMORY_SENTINEL/);
+  sheet.querySelector?.(".sheet-close")?.click?.();
+
+  const done = new Promise((r) => bridge.on("agent.done", r));
+  await appMod.startAgent("memory check");
+  assert.equal((await done).status, "done");
+  await until(() => $(body(), ".msg.assistant").some((x) => /MEMORY_OK/.test(text(x))), "memory reaches agent context");
+});
+
+test("Koide 1.0：状态胶囊可以打开工作现场并显示最近工具活动", async () => {
+  assert.ok((appMod.state.get().live.activities || []).length > 0, "live workspace has recorded tool activity");
+  $(body(), ".capsule")[0].click();
+  const sheet = await until(() => $(body(), ".sheet").find((x) => /工作现场/.test(text(x))), "live workspace sheet");
+  assert.ok($(sheet, ".live-activity").length > 0);
+  assert.match(text(sheet), /读取文件|修改文件|处理|运行命令/);
+  $(sheet, ".sheet-close")[0].click();
+});
+
 test("manual mode: approval card appears inline and Allow once lets the agent continue", async () => {
   await bridge.rpc("permissions.set", { mode: "manual" });
   const done = new Promise((r) => bridge.on("agent.done", r));
@@ -243,7 +273,8 @@ test("Settings page renders every section and search filters them", async () => 
   const editorSec = secs.find((s) => s.dataset.id === "editor");
   assert.match(text(editorSec), /CodeMirror 6/);
   assert.match(text(editorSec), /跟随 AI 编辑/);
-  assert.doesNotMatch(text($$(body(), ".page")[0]), /切换全屏/);
+  assert.doesNotMatch(text($(body(), ".page")[0]), /切换全屏/);
+  assert.match(text($(body(), ".page")[0]), /Koide 0\.9\.0 Web/);
   const q = $$($$(body(), ".page")[0], ".search-box .text-field")[0];        // 只取设置页里的搜索框（编辑器的查找栏里也有 search 类型的输入框）
   q.value = "hue";
   q.dispatchEvent({ type: "input" });
@@ -266,6 +297,12 @@ test("样式回归：聊天区子元素不参与 flex 收缩，否则工具卡�
   for (const cls of renderer.match(/dfx-[a-z-]+/g).filter((c) => !c.endsWith("-") && c !== "dfx-keep" && c !== "dfx-move" && c !== "dfx-del" && c !== "dfx-ins")) {
     assert.ok(css.includes("." + cls), `样式表缺少 .${cls}`);
   }
+});
+
+test("样式回归：Sheet 标题不再叠加独立 surface 色块", () => {
+  const baseCss = fs.readFileSync(SRC("styles/base.css"), "utf8");
+  assert.match(baseCss, /\.sheet-heading\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?backdrop-filter:\s*none;/);
+  assert.doesNotMatch(baseCss, /\.appbar,\s*\.settings-head,\s*\.sheet-heading/);
 });
 
 test("样式回归：输入框只有一层边框、没有焦点泛光；OLED 不读取主题色", () => {
