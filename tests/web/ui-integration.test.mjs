@@ -280,6 +280,9 @@ test("Koide 1.0：时光机显示真实探索、修改和验证节点语义", as
   assert.match(src, /edit:\s*"修改"/);
   assert.match(src, /tl-path/);
   assert.match(src, /可能未完成/);
+  assert.match(src, /撤销到这一步之前/);
+  assert.match(src, /已撤销/);
+  assert.match(src, /后续修改依赖这个版本/);
 });
 
 test("Settings page renders every section and search filters them", async () => {
