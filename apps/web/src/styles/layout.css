@@ -26,6 +26,10 @@
 .capsule[data-state="error"] .glyph { background: var(--error); }
 .capsule[data-state="online"] .glyph { background: var(--ok); }
 .capsule[data-state="offline"] .glyph { background: var(--outline); }
+.capsule-button { border: 0; font: inherit; cursor: pointer; }
+.capsule-button:hover { background: color-mix(in srgb, var(--surface-3) 82%, transparent); }
+.capsule-button:active { transform: scale(.97); border-radius: 12px; }
+.capsule-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 .work { flex: 1; min-height: 0; position: relative; display: grid; }
 .editor-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); position: relative; }
