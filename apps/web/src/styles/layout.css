@@ -59,9 +59,10 @@
 #app.mode-port .resizer { display: none; }
 #app.mode-port .ai {
   position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; height: var(--sheet-h, 50dvh); border-radius: var(--r-xl) var(--r-xl) 0 0;
-  box-shadow: 0 -4px 24px oklch(0 0 0 / .35); transition: height var(--motion-slow) var(--ease-decel), border-radius var(--motion-slow), padding-top var(--motion-fast); will-change: height;
+  box-shadow: 0 -4px 24px oklch(0 0 0 / .35); transform: translateY(0); visibility: visible;
+  transition: height var(--motion-slow) var(--ease-decel), transform var(--motion-slow) var(--ease-decel), visibility 0s, border-radius var(--motion-slow), padding-top var(--motion-fast);
 }
-#app.mode-port .ai.dragging { transition: none; }
+#app.mode-port .ai.dragging, #app.mode-port .ai.settling { transition: none; }
 /* 全屏时背景仍延伸到屏幕最顶端，但交互内容从状态栏安全区下方开始。 */
 #app.mode-port .ai.full { border-radius: 0; padding-top: env(safe-area-inset-top); }
 #app.mode-port { --ce-bottom: calc(var(--sheet-h, 50dvh) + 60px); }
@@ -69,14 +70,15 @@
 /* mode switches animate the grid instead of re-building the page */
 #app .work { transition: grid-template-columns var(--motion-slow) var(--ease-decel); }
 .drawer-scrim { position: fixed; inset: 0; z-index: 35; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity var(--motion-medium); }
-#app.files-open .files { transform: translateX(0) !important; }
+#app.files-open .files { transform: translateX(0); }
 #app.files-open .drawer-scrim { opacity: 1; pointer-events: auto; }
 #app.files-dragging .files { transition: none !important; }
 #app.files-dragging .drawer-scrim { transition: none; }
 
-.grip { flex: none; display: flex; justify-content: center; padding: 10px 0 6px; touch-action: none; cursor: grab; }
+.grip { flex: none; min-height: 40px; display: flex; align-items: center; justify-content: center; padding: 10px 0 6px; touch-action: none; cursor: grab; }
 .grip span { width: 36px; height: 4px; border-radius: 2px; background: var(--outline); opacity: .7; transition: width var(--motion-fast), opacity var(--motion-fast); }
 .ai.dragging .grip span { width: 52px; opacity: 1; }
+.files { touch-action: pan-y; }
 
 /* ---- file tree ---------------------------------------------------------------------------------------- */
 .node > .row {

@@ -3,7 +3,8 @@
 //   land  (narrow landscape) editor | AI               files in a drawer
 //   port  (portrait phone)   editor + freely draggable AI bottom sheet, files in a drawer
 
-import { pushLayer } from "./overlays.js";
+import { pushLayer, hasLayers } from "./overlays.js";
+import { velocityTracker, springTo, sheetDestination } from "../services/motion.js";
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const vh = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
@@ -15,6 +16,9 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
     const w = window.innerWidth, hgt = window.innerHeight;
     const next = w >= 900 ? "wide" : w > hgt ? "land" : "port";
     if (next !== mode) {
+      cancelSheetDrag(); stopSpring();
+      endDrawerDrag({ type: "pointercancel" });
+      setFull(false);
       app.classList.remove("mode-wide", "mode-land", "mode-port");
       app.classList.add("mode-" + next);
       mode = next;
@@ -37,37 +41,39 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
   // edge-swipe to open, swipe left to close; the drawer follows the finger
   let dr = null;
   window.addEventListener("pointerdown", (e) => {
-    if (mode === "wide" || e.pointerType === "mouse") return;
+    if (mode === "wide" || e.pointerType === "mouse" || e.isPrimary === false || dr) return;
     const open = app.classList.contains("files-open");
+    if (hasLayers() && !open) return;
+    if (document.getElementById("overlay-root")?.contains(e.target)) return;
     if ((!open && e.clientX <= 22) || (open && files.contains(e.target))) {
-      dr = { x: e.clientX, y: e.clientY, t: performance.now(), lastX: e.clientX, lastT: performance.now(), v: 0, open, w: files.offsetWidth, active: false };
+      const w = files.offsetWidth;
+      const rect = files.getBoundingClientRect();
+      dr = { id: e.pointerId, x: e.clientX, y: e.clientY, velocity: velocityTracker(e.clientX), open, w, base: clamp(rect.left, -w, 0), active: false };
     }
   }, { passive: true });
   window.addEventListener("pointermove", (e) => {
-    if (!dr) return;
+    if (!dr || e.pointerId !== dr.id) return;
     const dx = e.clientX - dr.x, dy = e.clientY - dr.y;
     if (!dr.active) {
       if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) { dr.active = true; app.classList.add("files-dragging"); }
       else if (Math.abs(dy) > 12) { dr = null; return; }
       else return;
     }
-    const now = performance.now();
-    dr.v = (e.clientX - dr.lastX) / Math.max(1, now - dr.lastT);
-    dr.lastX = e.clientX; dr.lastT = now;
-    const base = dr.open ? 0 : -dr.w;
-    const x = clamp(base + dx, -dr.w, 0);
+    dr.velocity.add(e.clientX);
+    const x = clamp(dr.base + dx, -dr.w, 0);
+    dr.position = x;
     files.style.transform = `translateX(${x}px)`;
     scrim.style.opacity = String(1 + x / dr.w);
     scrim.style.pointerEvents = "auto";
   }, { passive: true });
-  function endDrawerDrag() {
-    if (!dr) return;
+  function endDrawerDrag(e = {}) {
+    if (!dr || (e.pointerId != null && e.pointerId !== dr.id)) return;
     const d = dr; dr = null;
     if (!d.active) return;
-    const x = parseFloat((files.style.transform.match(/-?[\d.]+/) || ["0"])[0]);
+    const x = d.position ?? d.base, v = d.velocity.value();
     app.classList.remove("files-dragging");
     files.style.transform = ""; scrim.style.opacity = ""; scrim.style.pointerEvents = "";
-    const wantOpen = d.v > 0.35 ? true : d.v < -0.35 ? false : x > -d.w / 2;
+    const wantOpen = e.type === "pointercancel" ? d.open : v > 0.35 ? true : v < -0.35 ? false : x > -d.w / 2;
     if (wantOpen) { if (!d.open) openDrawer(); } else if (d.open) closeDrawer();
   }
   window.addEventListener("pointerup", endDrawerDrag);
@@ -78,13 +84,23 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
   // dragging upward/downward leaves the sheet exactly where the user releases it, except near the two natural
   // boundaries (close and full-screen). Full-screen keeps its background edge-to-edge, but CSS pads interactive
   // content below Android/iOS's top safe area.
-  let sheetH = null, isFull = false, fullClose = null;
+  let sheetH = null, isFull = false, fullClose = null, sd = null, cancelSpring = null;
+  function stopSpring() { cancelSpring?.(); cancelSpring = null; ai.classList.remove("settling"); }
   const maxSheetH = () => Math.max(1, vh());
   const halfSheetH = () => Math.round(maxSheetH() * 0.5);
   const minOpenH = () => Math.round(maxSheetH() * 0.24);
   function setH(px) {
     sheetH = clamp(Math.round(px), 1, maxSheetH());
     app.style.setProperty("--sheet-h", `${sheetH}px`);
+    grip.setAttribute("aria-valuenow", String(Math.round(sheetH / maxSheetH() * 100)));
+  }
+  function settle(target, velocity = 0) {
+    stopSpring();
+    const from = sheetH ?? ai.offsetHeight ?? halfSheetH();
+    setFull(target === maxSheetH());
+    ai.classList.add("settling");
+    cancelSpring = springTo({ from, to: target, velocity, update: setH,
+      complete: () => { cancelSpring = null; ai.classList.remove("settling"); } });
   }
   function syncFullLayer(viaBack = false) {
     if (isFull && !fullClose) {
@@ -93,7 +109,7 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
         if (isFull) {
           isFull = false;
           ai.classList.remove("full");
-          setH(halfSheetH());
+          settle(halfSheetH());
         }
       });
     } else if (!isFull && fullClose && !viaBack) {
@@ -103,11 +119,11 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
   function setFull(on, viaBack = false) {
     isFull = !!on;
     ai.classList.toggle("full", isFull);
-    if (isFull) setH(maxSheetH());
     syncFullLayer(viaBack);
   }
   function openSheetHalf() {
     if (mode !== "port") return;
+    cancelSheetDrag(); stopSpring();
     setFull(false);
     setH(halfSheetH());
   }
@@ -115,16 +131,17 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
     if (mode !== "port") return;
     const target = Math.round(maxSheetH() * clamp(minRatio, 0.25, 1));
     if (isFull || (sheetH ?? 0) >= target) return;
-    setFull(false);
-    setH(target);
+    settle(target);
   }
   function closeSheet() {
-    if (mode !== "port") return;
-    if (isFull) setFull(false);
+    cancelSheetDrag(); stopSpring();
+    setFull(false);
     onCloseAI && onCloseAI();
   }
+  function hideSheet() { cancelSheetDrag(); stopSpring(); setFull(false); }
   function clampSheetToViewport(openAtHalfWhenUnset = false) {
     if (mode !== "port") return;
+    cancelSheetDrag(); stopSpring();
     if (isFull) { setH(maxSheetH()); return; }
     if (sheetH == null) {
       if (openAtHalfWhenUnset) setH(halfSheetH());
@@ -133,43 +150,53 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
     setH(Math.min(sheetH, maxSheetH()));
   }
 
-  let sd = null;
   grip.addEventListener("pointerdown", (e) => {
-    if (mode !== "port") return;
+    if (mode !== "port" || app.classList.contains("ai-hidden") || sd || e.isPrimary === false || (e.button != null && e.button !== 0)) return;
+    stopSpring();
     grip.setPointerCapture && grip.setPointerCapture(e.pointerId);
-    sd = { y: e.clientY, h: ai.offsetHeight || sheetH || halfSheetH(), lastY: e.clientY, lastT: performance.now(), v: 0, moved: false };
+    sd = { id: e.pointerId, y: e.clientY, h: ai.offsetHeight || sheetH || halfSheetH(), full: isFull, velocity: velocityTracker(-e.clientY), moved: false };
     ai.classList.add("dragging");
   });
   grip.addEventListener("pointermove", (e) => {
-    if (!sd) return;
-    const now = performance.now();
-    sd.v = (sd.lastY - e.clientY) / Math.max(1, now - sd.lastT);      // px/ms, upward positive
-    sd.lastY = e.clientY; sd.lastT = now;
+    if (!sd || e.pointerId !== sd.id) return;
+    sd.velocity.add(-e.clientY);
     if (Math.abs(e.clientY - sd.y) > 4) sd.moved = true;
     const max = maxSheetH();
     let h = sd.h + (sd.y - e.clientY);
-    if (h > max) h = max + (h - max) * 0.18;                           // elastic edge
-    if (h < 1) h *= 0.18;
-    if (isFull && h < max - 2) { isFull = false; ai.classList.remove("full"); }
+    // Keep the full-screen safe area until release; moving a finger must not move the header twice.
     setH(clamp(h, 1, max));
   });
-  const release = () => {
+  function cancelSheetDrag() {
     if (!sd) return;
     const s = sd; sd = null;
     ai.classList.remove("dragging");
+    grip.releasePointerCapture?.(s.id);
+    setFull(s.full); setH(s.h);
+  }
+  const release = (e) => {
+    if (!sd || e.pointerId !== sd.id) return;
+    if (e.type !== "pointerup") { cancelSheetDrag(); return; }
+    const s = sd; sd = null;
+    grip.releasePointerCapture?.(s.id);
+    ai.classList.remove("dragging");
     if (!s.moved) return;
     const max = maxSheetH();
-    const current = ai.offsetHeight || sheetH || halfSheetH();
-    const projected = current + s.v * 180;
-    if (projected < minOpenH() || s.v < -0.75) { closeSheet(); return; }
-    // M3E 式“意图优先”释放：明显向上的 fling 不要求手指先拖到屏幕顶端。
-    // 用户给把手一个向上的力，就把剩余行程交给 spring/height transition 完成。
-    if (s.v > 0.52 || projected >= max * 0.86 || current >= max - 24) { setFull(true); return; }
-    setFull(false);
-    setH(clamp(current, minOpenH(), max - 1));
+    const v = s.velocity.value();
+    const target = sheetDestination(sheetH || halfSheetH(), v, max, s.full);
+    if (!target) { closeSheet(); return; }
+    settle(target, v);
   };
   grip.addEventListener("pointerup", release);
   grip.addEventListener("pointercancel", release);
+  grip.addEventListener("lostpointercapture", release);
+  grip.setAttribute("tabindex", "0");
+  grip.setAttribute("aria-valuemin", "0"); grip.setAttribute("aria-valuemax", "100");
+  grip.addEventListener("keydown", (e) => {
+    if (mode !== "port" || !["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+    e.preventDefault(); cancelSheetDrag();
+    if (e.key === "End") closeSheet();
+    else settle(e.key === "Home" ? maxSheetH() : clamp((sheetH ?? halfSheetH()) + (e.key === "ArrowUp" ? 1 : -1) * maxSheetH() * 0.1, minOpenH(), maxSheetH()));
+  });
   if (window.visualViewport) window.visualViewport.addEventListener("resize", () => clampSheetToViewport(false));
 
   // ---- resizable panels (wide + landscape) -------------------------------------------------------------------------
@@ -191,7 +218,7 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
   window.addEventListener("orientationchange", () => setTimeout(updateMode, 60));
   updateMode();
   return {
-    openDrawer, closeDrawer, openSheetHalf, closeSheet, expandSheet,
+    openDrawer, closeDrawer, openSheetHalf, closeSheet, hideSheet, expandSheet,
     get mode() { return mode; },
   };
 }

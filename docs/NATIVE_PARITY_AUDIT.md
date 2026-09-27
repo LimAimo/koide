@@ -37,7 +37,11 @@
 - [x] Project Memory（`.koide/PROJECT_MEMORY.md`）进入 Agent 上下文
 - [x] Tool Call `call_id` ↔ Checkpoint 精确关联（Native / Bridge）
 - [x] read / edit / web_fetch / shell_run 验证节点语义对齐
-- [x] Time Machine 验证失败 → 修改 → 再验证故事线
+- [x] Time Machine 验证失败 → 修改 → 同一命令再验证故事线
+- [x] 编辑事件 after_blob 与 after_rev：Native / Bridge 保存历史修改后版本
+- [x] LocalFS / SAF 共用历史版本核验；旧数据不匹配明确返回 HISTORY_UNAVAILABLE
+- [x] checkpoint.diff 的 text_available 标记，避免把二进制/超限文本解释为空文件
+- [ ] Native Android 语义触觉（haptic）
 
 ## Providers
 

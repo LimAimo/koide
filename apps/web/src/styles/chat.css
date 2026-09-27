@@ -33,7 +33,12 @@
   transition: border-color var(--motion-medium), background var(--motion-medium);
 }
 .tool-head { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; width: 100%; text-align: left; }
-.tool-head .ico { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; }
+.tool-head .ico { position: relative; flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; }
+.tool-head .state-ico { position: absolute; opacity: 0; transition: opacity var(--motion-fast) var(--ease-emph); }
+.tool[data-state="preparing"] .busy, .tool[data-state="pending"] .busy, .tool[data-state="running"] .busy,
+.tool[data-state="done"] .success, .tool[data-state="waiting"] .waiting,
+.tool[data-state="error"] .failure, .tool[data-state="denied"] .failure { opacity: 1; }
+.tool:not([data-state="preparing"]):not([data-state="pending"]):not([data-state="running"]) .busy { animation-play-state: paused; }
 .tool-head .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-head .s { font-size: 12px; color: var(--on-surface-variant); flex: none; }
 .tool-head .chev { transition: transform var(--motion-fast) var(--ease-emph); color: var(--on-surface-variant); }
@@ -248,7 +253,8 @@ pre.diff { margin: 0; font-family: var(--font-code); font-size: 12.5px; line-hei
 .chat-scroll .tool, .chat-scroll .approval { flex: none; min-height: min-content; }
 
 /* ---- 关闭 AI 面板 ---- */
-#app.ai-hidden .ai, #app.ai-hidden .resizer.r2 { display: none; }
+#app:not(.mode-port).ai-hidden .ai, #app.ai-hidden .resizer.r2 { display: none; }
+#app.mode-port.ai-hidden .ai { transform: translateY(105%); visibility: hidden; pointer-events: none; transition-delay: 0s, 0s, var(--motion-slow), 0s, 0s; }
 #app.mode-wide.ai-hidden .work { grid-template-columns: var(--files-w, 264px) 1px minmax(0, 1fr); }
 #app.mode-land.ai-hidden .work { grid-template-columns: minmax(0, 1fr); }
 #app.mode-port.ai-hidden { --ce-bottom: 80px; }

@@ -1156,26 +1156,11 @@ impl LocalWorkspace {
             .and_then(Value::as_str)
             .map(|sha| self.checkpoints.get_blob(sha))
             .transpose()?;
-        let mut after = None;
-        for later in events.iter().skip(seq + 1) {
-            if later["type"].as_str() == Some("edit") && later["path"].as_str() == Some(rel) {
-                after = later
-                    .get("before_blob")
-                    .and_then(Value::as_str)
-                    .map(|sha| self.checkpoints.get_blob(sha))
-                    .transpose()?;
-                break;
-            }
-        }
-        if after.is_none() {
+        let after = self.checkpoints.event_after(events, seq, || {
             let p = self.resolve_for_write(rel)?;
-            if p.is_file() {
-                after = Some(fs::read(&p).map_err(io_err("READ_FAILED", rel))?);
-            }
-        }
-        Ok(
-            json!({"path":rel, "before":event_text(before.as_deref()), "after":event_text(after.as_deref())}),
-        )
+            if p.is_file() { Ok(Some(fs::read(&p).map_err(io_err("READ_FAILED", rel))?)) } else { Ok(None) }
+        })?;
+        Ok(checkpoint_diff_result(rel, before.as_deref(), after.as_deref()))
     }
 
     pub fn checkpoint_revert_file(
@@ -1767,8 +1752,20 @@ impl SafWorkspace {
         Ok(None)
     }
 
-    fn checkpoint_diff(&self,task_id:&str,seq:usize)->Result<Value,RuntimeError>{
-        let task=self.checkpoints.load(task_id)?;let events=task["events"].as_array().ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","任务 events 无效"))?;let event=events.get(seq).ok_or_else(||RuntimeError::new("BAD_EVENT","Checkpoint 事件编号超出范围"))?;if event["type"].as_str()!=Some("edit"){return Err(RuntimeError::new("NOT_AN_EDIT","这条记录没有可比较的差异"));}let rel=event["path"].as_str().ok_or_else(||RuntimeError::new("CHECKPOINT_CORRUPT","编辑事件缺少 path"))?;let before=event.get("before_blob").and_then(Value::as_str).map(|sha|self.checkpoints.get_blob(sha)).transpose()?;let mut after=None;for later in events.iter().skip(seq+1){if later["type"].as_str()==Some("edit")&&later["path"].as_str()==Some(rel){after=later.get("before_blob").and_then(Value::as_str).map(|sha|self.checkpoints.get_blob(sha)).transpose()?;break;}}if after.is_none(){let stat=self.stat(rel)?;if stat.get("exists").and_then(Value::as_bool)==Some(true)&&stat.get("type").and_then(Value::as_str)==Some("file"){after=Some(self.read_bytes_unbounded(rel)?);}}Ok(json!({"path":rel,"before":event_text(before.as_deref()),"after":event_text(after.as_deref())}))
+    fn checkpoint_diff(&self, task_id: &str, seq: usize) -> Result<Value, RuntimeError> {
+        let task = self.checkpoints.load(task_id)?;
+        let events = task["events"].as_array().ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "任务 events 无效"))?;
+        let event = events.get(seq).ok_or_else(|| RuntimeError::new("BAD_EVENT", "Checkpoint 事件编号超出范围"))?;
+        if event["type"].as_str() != Some("edit") { return Err(RuntimeError::new("NOT_AN_EDIT", "这条记录没有可比较的差异")); }
+        let rel = event["path"].as_str().ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "编辑事件缺少 path"))?;
+        let before = event.get("before_blob").and_then(Value::as_str).map(|sha| self.checkpoints.get_blob(sha)).transpose()?;
+        let after = self.checkpoints.event_after(events, seq, || {
+            let stat = self.stat(rel)?;
+            if stat.get("exists").and_then(Value::as_bool) == Some(true) && stat.get("type").and_then(Value::as_str) == Some("file") {
+                Ok(Some(self.read_bytes_unbounded(rel)?))
+            } else { Ok(None) }
+        })?;
+        Ok(checkpoint_diff_result(rel, before.as_deref(), after.as_deref()))
     }
 
     fn checkpoint_revert_file(&self,task_id:&str,rel:&str)->Result<BatchMutation,RuntimeError>{let task=self.checkpoints.load(task_id)?;let snap=task["files"].get(rel).ok_or_else(||RuntimeError::new("NOT_IN_TASK",format!("任务 {task_id} 没有改动过 {rel}")))?;let event=self.restore_checkpoint_state(rel,snap["existed"].as_bool().unwrap_or(false),snap.get("blob").and_then(Value::as_str))?;Ok(BatchMutation{result:json!({"reverted":[rel]}),events:event.into_iter().collect()})}
@@ -1788,7 +1785,7 @@ fn zip_local_source(source:&Path, archive_root:&str, output:&Path)->Result<u64,R
     if let Err(error)=add(&mut zip,source,archive_root,options,&mut total){drop(zip);let _=fs::remove_file(output);return Err(error);}zip.finish().map_err(|e|RuntimeError::new("EXPORT_FAILED",e.to_string()))?;Ok(total)
 }
 
-fn apply_edits(text: &str, edits: &[Value]) -> Result<String, RuntimeError> {
+pub(crate) fn apply_edits(text: &str, edits: &[Value]) -> Result<String, RuntimeError> {
     let crlf = text.contains("\r\n");
     let normalized = text.replace("\r\n", "\n");
     let line_starts = {
@@ -2001,6 +1998,13 @@ fn revision_of(data: Option<&[u8]>) -> String {
         Some(data) => format!("sha256:{}", sha256_hex(data)),
         None => "absent".to_string(),
     }
+}
+
+fn checkpoint_diff_result(path: &str, before: Option<&[u8]>, after: Option<&[u8]>) -> Value {
+    let before_text = event_text(before);
+    let after_text = event_text(after);
+    let text_available = (before.is_none() || before_text.is_some()) && (after.is_none() || after_text.is_some());
+    json!({"path": path, "before": before_text, "after": after_text, "text_available": text_available})
 }
 
 fn event_text(data: Option<&[u8]>) -> Option<String> {

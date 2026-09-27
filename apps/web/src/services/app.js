@@ -74,13 +74,13 @@ function finishLiveStages(status) {
     return { live: { ...s.live, stages } };
   });
 }
-function upsertLiveActivity(callId, patch) {
+function upsertLiveActivity(callId, patch, replaceCallId) {
   state.set((s) => {
     const now = Date.now();
     const activities = [...(s.live.activities || [])];
-    const i = activities.findIndex((x) => x.callId === callId);
-    if (i >= 0) activities[i] = { ...activities[i], ...patch, updatedAt: now };
-    else activities.push({ callId, startedAt: now, updatedAt: now, ...patch });
+    const i = activities.findIndex((x) => x.callId === callId || (replaceCallId && x.callId === replaceCallId));
+    if (i >= 0) activities[i] = { ...activities[i], viewId: activities[i].viewId || activities[i].callId, ...patch, callId, updatedAt: now };
+    else activities.push({ callId, viewId: callId, startedAt: now, updatedAt: now, ...patch });
     return { live: { ...s.live, activities: activities.slice(-LIVE_LIMIT) } };
   });
 }
@@ -334,7 +334,7 @@ runtime.on("agent.done", (d = {}) => {
 runtime.on("agent.tool", (d) => {
   if (d.args) callPaths.set(d.call_id, d.args.path || d.args.from || d.args.to);
   const p = callPaths.get(d.call_id) || "";
-  upsertLiveActivity(d.call_id, { tool: d.tool, state: d.state, path: p, detail: d.detail || "" });
+  upsertLiveActivity(d.call_id, { tool: d.tool, state: d.state, path: p, detail: d.detail || "" }, d.replace_call_id);
   if (["preparing", "running", "done"].includes(d.state)) {
     if (["fs_read", "fs_list", "fs_search", "fs_glob", "fs_multi_read", "web_fetch"].includes(d.tool)) advanceLiveStage("explore");
     else if (WRITERS.has(d.tool)) advanceLiveStage("change");

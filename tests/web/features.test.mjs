@@ -163,7 +163,7 @@ test("手机 AI 全屏保留状态栏安全区且使用自由高度 bottom sheet
   const layout = fs.readFileSync(new URL("../../apps/web/src/components/layout.js", import.meta.url), "utf8");
   assert.match(css, /\.ai\.full\s*\{[^}]*padding-top:\s*env\(safe-area-inset-top\)/s);
   assert.doesNotMatch(layout, /SNAPS|snapTo\(/);
-  assert.match(layout, /setH\(clamp\(current, minOpenH\(\), max - 1\)\)/);
+  // 拖拽、吸附和取消行为由 polish.test.mjs 的真实组件测试覆盖。
 });
 
 

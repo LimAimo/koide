@@ -289,7 +289,7 @@ test("Koide 1.0：时光机调用关联、验证故事线与项目记忆冲突�
   const timeline = await fs.promises.readFile(path.join(ROOT, "apps/web/src/components/timeline.js"), "utf8");
   const memory = await fs.promises.readFile(path.join(ROOT, "apps/web/src/components/project-memory.js"), "utf8");
   assert.match(timeline, /call_id/);
-  assert.match(timeline, /验证失败后已修复并重新通过/);
+  assert.match(timeline, /验证失败后修改并重新通过/);
   assert.match(timeline, /最近一次验证仍未通过/);
   assert.match(timeline, /查看改动/);
   assert.match(memory, /检测到外部修改/);

@@ -185,6 +185,42 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual((self.proj / "old.txt").read_text(), "data")
         self.assertFalse((self.proj / "new.txt").exists())
 
+    def test_history_snapshot_survives_external_write_and_revert(self):
+        self.ws.write("a.txt", "before\n")
+        task = self.ws.checkpoints.start_task("history")["id"]
+        self.ws.write("a.txt", "after\n", ctx=Ctx("agent", task))
+        event = self.ws.checkpoints.load(task)["events"][-1]
+        self.assertIsNotNone(event["after_blob"])
+        self.ws.write("a.txt", "external\n")
+        self.assertEqual(self.ws.event_diff(task, event["seq"])["after"], "after\n")
+        self.ws.revert_task(task)
+        self.assertEqual(self.ws.event_diff(task, event["seq"])["after"], "after\n")
+
+    def test_legacy_history_refuses_unrelated_current_version(self):
+        self.ws.write("a.txt", "before")
+        task = self.ws.checkpoints.start_task("legacy")["id"]
+        self.ws.write("a.txt", "after", ctx=Ctx("agent", task))
+        event = self.ws.checkpoints.load(task)["events"][-1]
+        del event["after_blob"]
+        self.assertEqual(self.ws.event_diff(task, event["seq"])["after"], "after")
+        self.ws.write("a.txt", "unrelated")
+        with self.assertRaises(WorkspaceError) as error:
+            self.ws.event_diff(task, event["seq"])
+        self.assertEqual(error.exception.code, "HISTORY_UNAVAILABLE")
+
+    def test_delete_then_recreate_and_binary_snapshot_are_not_empty_text(self):
+        self.ws.write("a.txt", "old")
+        task = self.ws.checkpoints.start_task("delete")["id"]
+        self.ws.delete("a.txt", Ctx("agent", task))
+        event = self.ws.checkpoints.load(task)["events"][-1]
+        self.ws.write("a.txt", "new")
+        self.assertIsNone(self.ws.event_diff(task, event["seq"])["after"])
+        del event["after_blob"]
+        self.assertIsNone(self.ws.event_diff(task, event["seq"])["after"])
+        self.ws.write("a.txt", "binary\0", ctx=Ctx("agent", task))
+        event = self.ws.checkpoints.load(task)["events"][-1]
+        self.assertFalse(self.ws.event_diff(task, event["seq"])["text_available"])
+
     def test_search_and_tree(self):
         self.ws.write("src/a.py", "def foo():\n    return 1\n")
         self.ws.write("src/b.py", "x = foo()\n")

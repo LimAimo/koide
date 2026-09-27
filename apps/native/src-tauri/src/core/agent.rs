@@ -1523,7 +1523,7 @@ fn execute_edit_tool(
                 .map(str::as_bytes);
             checkpoints.record_before(task_id, path, before_bytes)?;
             let mutation = workspace.write_text(path, content, base)?;
-            record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, before_bytes)?;
+            if mutation.changed { record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, before_bytes, Some(content.as_bytes()))?; }
             if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
                 read_revisions.insert(path.to_owned(), rev.to_owned());
             }
@@ -1541,8 +1541,11 @@ fn execute_edit_tool(
             let before_text = before_value.get("content").and_then(Value::as_str)
                 .ok_or_else(|| RuntimeError::new("BINARY_FILE", format!("{path} 不是 UTF-8 文本")))?;
             checkpoints.record_before(task_id, path, Some(before_text.as_bytes()))?;
+            let after_text = super::workspace::apply_edits(before_text, edits)?;
             let mutation = workspace.patch(path, &base, edits)?;
-            record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, Some(before_text.as_bytes()))?;
+            if mutation.changed {
+                record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, Some(before_text.as_bytes()), Some(after_text.as_bytes()))?;
+            }
             if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
                 read_revisions.insert(path.to_owned(), rev.to_owned());
             }
@@ -1554,7 +1557,7 @@ fn execute_edit_tool(
             let content = call.arguments.get("content").and_then(Value::as_str).unwrap_or("");
             checkpoints.record_before(task_id, path, None)?;
             let mutation = workspace.create(path, kind, content)?;
-            record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, None)?;
+            if mutation.changed { record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, None, if kind == "file" { Some(content.as_bytes()) } else { None })?; }
             if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
                 read_revisions.insert(path.to_owned(), rev.to_owned());
             }
@@ -1571,7 +1574,7 @@ fn execute_edit_tool(
                 .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许删除 UTF-8 文本文件"))?;
             checkpoints.record_before(task_id, path, Some(text.as_bytes()))?;
             let mutation = workspace.delete(path)?;
-            record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, Some(text.as_bytes()))?;
+            if mutation.changed { record_agent_mutation(app, checkpoints, task_id, &call.id, &mutation.event, Some(text.as_bytes()), None)?; }
             read_revisions.remove(path);
             Ok(mutation.result)
         }
@@ -1587,12 +1590,12 @@ fn execute_edit_tool(
             let before_blob = checkpoints.blob_for_event_before(Some(text.as_bytes()))?;
             checkpoints.add_event(task_id, "edit", &format!("删除 {from}"), json!({
                 "path":from,"kind":"delete","before_blob":before_blob,"existed_before":true,
-                "after_rev":"absent","old_path":from,"new_path":to,"call_id":call.id.clone()
+                "after_rev":"absent","after_blob":Value::Null,"old_path":from,"new_path":to,"call_id":call.id.clone()
             }))?;
             let after_rev = workspace.read(to)?.get("revision").cloned().unwrap_or(Value::String("absent".into()));
             checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
                 "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
-                "after_rev":after_rev,"old_path":from,"new_path":to,"call_id":call.id.clone()
+                "after_rev":after_rev,"after_blob":before_blob,"old_path":from,"new_path":to,"call_id":call.id.clone()
             }))?;
             let mut event = mutation.event.clone();
             if let Some(obj) = event.as_object_mut() {
@@ -1618,6 +1621,7 @@ fn execute_edit_tool(
             checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
                 "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
                 "after_rev":after.get("revision").cloned().unwrap_or(Value::String("absent".into())),
+                "after_blob":checkpoints.blob_for_event_before(after.get("content").and_then(Value::as_str).map(str::as_bytes))?,
                 "call_id":call.id.clone()
             }))?;
             let _ = app.emit("diffusion://event", RuntimeEvent {
@@ -1828,6 +1832,7 @@ fn record_agent_mutation(
     call_id: &str,
     raw_event: &Value,
     before: Option<&[u8]>,
+    after: Option<&[u8]>,
 ) -> Result<(), RuntimeError> {
     let kind = raw_event.get("kind").and_then(Value::as_str).unwrap_or("modify");
     let path = raw_event.get("path").and_then(Value::as_str)
@@ -1835,14 +1840,20 @@ fn record_agent_mutation(
     let before_blob = checkpoints.blob_for_event_before(before)?;
     let after_rev = raw_event.get("after_rev").cloned().unwrap_or(Value::String("absent".into()));
     let verb = match kind {"create"=>"新建","delete"=>"删除","rename"=>"重命名",_=>"修改"};
-    checkpoints.add_event(task_id, "edit", &format!("{verb} {path}"), json!({
+    let mut metadata = json!({
         "path":path,
         "kind":kind,
         "before_blob":before_blob,
         "existed_before":before.is_some(),
         "after_rev":after_rev,
         "call_id":call_id
-    }))?;
+    });
+    let actual_rev = after.map(|bytes| format!("sha256:{}", super::crypto::sha256_hex(bytes))).unwrap_or_else(|| "absent".into());
+    if metadata["after_rev"].as_str() == Some(actual_rev.as_str()) {
+        metadata["after_blob"] = serde_json::to_value(checkpoints.blob_for_event_before(after)?)
+            .map_err(|e| RuntimeError::new("CHECKPOINT_WRITE_FAILED", e.to_string()))?;
+    }
+    checkpoints.add_event(task_id, "edit", &format!("{verb} {path}"), metadata)?;
 
     let mut event = raw_event.clone();
     if let Some(obj)=event.as_object_mut() {

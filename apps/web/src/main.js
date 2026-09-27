@@ -14,7 +14,7 @@ import { openTimeMachine } from "./components/timeline.js";
 import { openLiveWorkspace } from "./components/live-workspace.js";
 import { openProjectMemory } from "./components/project-memory.js";
 import { setupLayout } from "./components/layout.js";
-import { hasLayers, openMenu, confirmDialog } from "./components/overlays.js";
+import { hasLayers, closeTopLayer, openMenu, confirmDialog } from "./components/overlays.js";
 import { runtime, state, events, openFile, initConnection, connectManual, goHome, refreshGit, restoreConversation } from "./services/app.js";
 import { pairFromLocation } from "./services/pairing.js";
 import { settingsStore, saveSettings, applyTheme } from "./services/store.js";
@@ -32,6 +32,7 @@ function boot() {
   applyTheme();
   settingsStore.subscribe(applyTheme);
   matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme());
+  matchMedia("(prefers-reduced-motion: reduce)").addEventListener?.("change", () => applyTheme());
 
   const app = h("div", { id: "app" });
   const scrim = h("div", { class: "drawer-scrim" });
@@ -90,10 +91,7 @@ function boot() {
   const homeBtn = iconButton("home", "返回首页", () => backHome(), "home-btn");
   const filesBtn = iconButton("folder", "显示或隐藏文件面板", () => saveSettings({ filesVisible: !settingsStore.get().filesVisible }), "panel-files-toggle");
   const aiBtn = iconButton("spark", "显示或隐藏 AI 面板", () => {
-    const show = !settingsStore.get().aiVisible;
-    saveSettings({ aiVisible: show });
-    if (show) requestAnimationFrame(() => layout?.openSheetHalf());
-    else layout?.closeSheet();
+    saveSettings({ aiVisible: !settingsStore.get().aiVisible });
   }, "ai-toggle");
   const gitBtn = iconButton("branch", "Git", () => openGitPanel());
   const tmBtn = iconButton("history", "时光机", () => openTimeMachine());
@@ -144,9 +142,15 @@ function boot() {
   });
 
   // Android back: if nothing is layered on top, the browser leaves the app as usual.
-  window.addEventListener("keydown", (e) => { if (e.key === "Escape" && hasLayers()) history.back(); });
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape" && hasLayers()) { e.preventDefault(); closeTopLayer(); } });
 
+  let aiWasVisible = null;
   const paintPanels = (s) => {
+    if (aiWasVisible !== s.aiVisible) {
+      aiWasVisible = s.aiVisible;
+      s.aiVisible ? layout?.openSheetHalf() : layout?.hideSheet();
+      chat.el.inert = !s.aiVisible;
+    }
     app.classList.toggle("files-hidden", !s.filesVisible);
     app.classList.toggle("ai-hidden", !s.aiVisible);
     filesBtn.classList.toggle("active", !!s.filesVisible);

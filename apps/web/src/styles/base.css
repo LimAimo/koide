@@ -105,7 +105,7 @@ input[type="range"]:focus-visible { outline-offset: 0; }
 .sheet.tall { height: 88dvh; }
 .sheet.in { transform: translateY(0); }
 .sheet.dragging { transition: none; }
-.sheet-handle { flex: none; display: flex; justify-content: center; padding: 12px 0 8px; touch-action: none; cursor: grab; }
+.sheet-handle { flex: none; min-height: 40px; display: flex; align-items: center; justify-content: center; padding: 12px 0 8px; touch-action: none; cursor: grab; }
 .sheet-handle span { width: 32px; height: 4px; border-radius: 2px; background: var(--outline); opacity: .6; }
 .sheet-title { padding: 0 24px 8px; font-size: 16px; line-height: 24px; font-weight: 500; }
 .sheet-body { overflow: auto; padding: 0 16px 16px; flex: 1; min-height: 0; overscroll-behavior: contain; }
@@ -140,7 +140,13 @@ input[type="range"]:focus-visible { outline-offset: 0; }
 .muted { color: var(--on-surface-variant); }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  *, *::before, *::after { transition-duration: .01ms !important; transition-delay: 0s !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}
+:root[data-reduced-motion="true"] *, :root[data-reduced-motion="true"] *::before, :root[data-reduced-motion="true"] *::after {
+  transition-duration: .01ms !important; transition-delay: 0s !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+}
+@media (pointer: coarse) {
+  .btn.small, .node > .row, .segmented button, .composer-model-pill { min-height: 40px; }
 }
 
 /* IDE 风格：滚动能力保留，但全局不显示滚动条（触摸、滚轮、触控板仍可滚动）。 */
@@ -391,11 +397,41 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
 @media(max-width:600px){.tl-call{margin-left:0}}
 
 /* Motion 1.0：动态内容以轻量进入反馈表达状态变化，不改变布局语义。 */
-.live-activity, .tl-event, .tm-story { animation: koide-rise var(--motion-medium) var(--ease-decel) both; }
+.live-activity, .tl-ev, .tm-story { animation: koide-rise var(--motion-medium) var(--ease-decel) both; }
+.live-activity-dot { transition: background var(--motion-medium), border-radius var(--motion-medium); }
+.live-activity.done .live-activity-dot { border-radius: 2px; }
+.live-activity-state { transition: color var(--motion-medium); }
 @keyframes koide-rise {
   from { opacity: 0; transform: translateY(var(--motion-distance-sm)); }
   to { opacity: 1; transform: none; }
 }
+
+/* Historical diffs use one readable row per change, including on narrow screens. */
+.tm-files { display: grid; margin: 4px 0 18px; border-block: 1px solid var(--outline-variant); }
+.tm-file { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 8px 4px; text-align: left; }
+.tm-file + .tm-file { border-top: 1px solid var(--outline-variant); }
+.tm-file code { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.tm-file > span { flex: none; font-size: 11px; }
+.tm-file-note, .tm-diff-source { font-size: 12px; overflow-wrap: anywhere; margin-bottom: 10px; }
+.tm-story > div { min-width: 0; }
+.tm-story small { overflow-wrap: anywhere; }
+.tm-story-steps, .diff-hunks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.tm-story-steps { max-height: 160px; overflow: auto; }
+.tl-stats { display: block; margin: 6px 0; font-size: 12px; }
+.diff-stats { display: inline-flex; gap: 10px; font: 600 12px var(--font-code); white-space: nowrap; }
+.diff-added { color: var(--ok); }
+.diff-deleted { color: var(--error); }
+.history-diff { display: grid; gap: 12px; margin-bottom: 16px; }
+.diff-hunk { min-width: 0; scroll-margin-top: 8px; }
+.diff-hunk h4 { margin: 0; padding: 8px; background: var(--surface-2); border-radius: 8px 8px 0 0; font-size: 12px; font-weight: 500; }
+.diff-lines { overflow-x: auto; border: 1px solid var(--outline-variant); border-radius: 0 0 8px 8px; }
+.diff-line { display: grid; grid-template-columns: 4ch 4ch 2ch minmax(0, 1fr); min-height: 22px; font: 12px/1.7 var(--font-code); }
+.diff-line.insert { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.diff-line.delete { background: color-mix(in srgb, var(--error) 12%, transparent); }
+.diff-number { user-select: none; text-align: right; padding-right: 6px; color: var(--on-surface-variant); opacity: .75; }
+.diff-sign { text-align: center; user-select: none; }
+.diff-line code { padding-right: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.diff-eof { display: block; color: var(--on-surface-variant); font-size: 10px; }
 @media (prefers-reduced-motion: reduce) {
   .live-orb.running, .live-activity.running .live-activity-dot, .live-activity.preparing .live-activity-dot, .spinner {
     animation: none !important;

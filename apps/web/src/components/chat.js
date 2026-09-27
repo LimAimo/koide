@@ -197,13 +197,6 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
   const cards = new Map();
   const STATE_TEXT = { preparing: "准备中", pending: "", waiting: "等待中", running: "运行中", done: "", error: "失败", denied: "已拒绝" };
 
-  function stateIcon(state_) {
-    if (state_ === "preparing" || state_ === "running" || state_ === "pending") return h("span", { class: "spinner state-ico" });
-    const name = state_ === "done" ? "check" : state_ === "waiting" ? "shield" : "warning";
-    const i = icon(name, 18, "state-ico");
-    return i;
-  }
-
   function argRows(args = {}) {
     const rows = [];
     const kv = (k, v) => rows.push(h("div", { class: "kv" }, h("span", { class: "k" }, k), h("span", { class: "v" }, String(v))));
@@ -227,7 +220,9 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
     if (!c) {
       flushPending();
       const chev = icon("chevron", 18, "chev"), title = h("span", { class: "t" }), sum = h("span", { class: "s" });
-      const headBtn = h("button", { class: "tool-head", type: "button", "aria-expanded": "false" }, h("span", { class: "ico" }), title, sum, chev);
+      const marks = h("span", { class: "ico", "aria-hidden": "true" }, h("span", { class: "spinner state-ico busy" }),
+        icon("check", 18, "state-ico success"), icon("shield", 18, "state-ico waiting"), icon("warning", 18, "state-ico failure"));
+      const headBtn = h("button", { class: "tool-head", type: "button", "aria-expanded": "false" }, marks, title, sum, chev);
       const inner = h("div", { class: "in" });
       const out = h("pre", { hidden: true });
       const card = h("div", { class: "tool", dataset: { state: "pending" } }, headBtn, h("div", { class: "tool-body" }, h("div", null, inner)));
@@ -244,14 +239,12 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
       for (const r of rows.reverse()) c.inner.insertBefore(r, c.inner.firstChild);
     }
     c.card.dataset.state = d.state;
-    const ico = c.headBtn.querySelector(".ico");
-    ico.replaceChildren ? ico.replaceChildren(stateIcon(d.state)) : (clear(ico), ico.appendChild(stateIcon(d.state)));
     c.sum.textContent = d.summary || STATE_TEXT[d.state] || "";
     if (d.detail) {
       let det = c.inner.querySelector(".detail");
       if (!det) { det = h("div", { class: "kv detail" }, h("span", { class: "k" }, "说明"), h("span", { class: "v" })); c.inner.insertBefore(det, c.out); }
       det.querySelector(".v").textContent = d.detail;
-      if (d.state === "error" || d.state === "denied") c.card.classList.add("open");
+      if (d.state === "error" || d.state === "denied") { c.card.classList.add("open"); c.headBtn.setAttribute("aria-expanded", "true"); }
     }
   }
   runtime.on("agent.tool", upsertCard);

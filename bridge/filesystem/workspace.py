@@ -342,6 +342,7 @@ class Workspace:
             self.checkpoints.add_event(
                 ctx.task_id, "edit", f"{verb} {rel}", path=rel, kind=kind,
                 before_blob=self.checkpoints.blob_for_event_before(before),
+                after_blob=self.checkpoints.blob_for_event_before(after),
                 existed_before=before is not None, after_rev=revision_of(after),
                 call_id=ctx.call_id, **extra)
 
@@ -590,18 +591,27 @@ class Workspace:
         if ev["type"] != "edit":
             raise WorkspaceError("NOT_AN_EDIT", "这条记录没有可比较的差异")
         before = self.checkpoints.get_blob(ev["before_blob"]) if ev.get("before_blob") else None
-        nxt = None
-        for later in m["events"][seq + 1:]:
-            if later["type"] == "edit" and later.get("path") == ev["path"]:
-                nxt = later
-                break
-        after = None
-        if nxt is not None and nxt.get("before_blob"):
-            after = self.checkpoints.get_blob(nxt["before_blob"])
+        expected = ev.get("after_rev")
+        if "after_blob" in ev:
+            after = self.checkpoints.get_blob(ev["after_blob"]) if ev["after_blob"] else None
+        elif expected == "absent":
+            after = None
         else:
-            p = self.resolve(ev["path"])
-            after = p.read_bytes() if p.is_file() else None
-        return {"path": ev["path"], "before": _decode(before), "after": _decode(after)}
+            # Legacy records have no immutable after snapshot. A candidate is only usable
+            # if its revision matches the version recorded by this exact edit.
+            after = None
+            for later in m["events"][seq + 1:]:
+                if later["type"] == "edit" and later.get("path") == ev["path"]:
+                    after = self.checkpoints.get_blob(later["before_blob"]) if later.get("before_blob") else None
+                    break
+            if revision_of(after) != expected:
+                p = self.resolve(ev["path"])
+                after = p.read_bytes() if p.is_file() else None
+        if revision_of(after) != expected:
+            raise WorkspaceError("HISTORY_UNAVAILABLE", "这条旧记录没有保存修改后快照，现有文件也不再匹配当时版本")
+        before_text, after_text = _decode(before), _decode(after)
+        return {"path": ev["path"], "before": before_text, "after": after_text,
+                "text_available": (before is None or before_text is not None) and (after is None or after_text is not None)}
 
     # ---- trash passthrough -----------------------------------------------------------------------
     def restore_from_trash(self, trash_id: str) -> dict:

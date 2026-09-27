@@ -79,6 +79,7 @@ export function applyTheme(s = settingsStore.get()) {
   const root = document.documentElement;
   const dark = s.theme === "dark" || s.theme === "oled" || (s.theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
   root.dataset.theme = s.theme === "oled" ? "oled" : dark ? "dark" : "light";
+  root.dataset.reducedMotion = String(reducedMotion(s));
   root.style.setProperty("--hue", String(s.hue));
   root.style.setProperty("--fs", `${s.fontSize}px`);
   root.style.setProperty("--lh", `${Math.round(s.fontSize * (s.density === "compact" ? 1.4 : 1.65))}px`);

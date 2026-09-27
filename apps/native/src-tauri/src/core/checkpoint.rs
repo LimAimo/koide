@@ -208,6 +208,32 @@ impl CheckpointStore {
         self.save(&task)
     }
 
+    /// Resolve only the after-version recorded by this event, never an unrelated current file.
+    /// The same resolver is used by LocalFS and Android SAF.
+    pub fn event_after<F>(&self, events: &[Value], seq: usize, current: F) -> Result<Option<Vec<u8>>, RuntimeError>
+    where F: FnOnce() -> Result<Option<Vec<u8>>, RuntimeError> {
+        let event = events.get(seq).ok_or_else(|| RuntimeError::new("BAD_EVENT", "Checkpoint 事件编号超出范围"))?;
+        let expected = event["after_rev"].as_str();
+        let matches = |data: Option<&[u8]>| {
+            let revision = data.map(|bytes| format!("sha256:{}", sha256_hex(bytes))).unwrap_or_else(|| "absent".into());
+            expected == Some(revision.as_str())
+        };
+        let blob = |value: &Value| value.as_str().map(|sha| self.get_blob(sha)).transpose();
+        let after = if let Some(value) = event.get("after_blob") {
+            blob(value)?
+        } else if expected == Some("absent") {
+            None
+        } else {
+            let next = events.iter().skip(seq + 1).find(|later| later["type"] == "edit" && later["path"] == event["path"]);
+            let candidate = next.map(|later| blob(&later["before_blob"])).transpose()?.flatten();
+            if matches(candidate.as_deref()) { candidate } else { current()? }
+        };
+        if !matches(after.as_deref()) {
+            return Err(RuntimeError::new("HISTORY_UNAVAILABLE", "这条旧记录没有保存修改后快照，现有文件也不再匹配当时版本"));
+        }
+        Ok(after)
+    }
+
     pub fn list_tasks(&self, limit: usize) -> Result<Vec<Value>, RuntimeError> {
         let mut paths = fs::read_dir(&self.tasks)
             .map_err(io_err(
@@ -256,4 +282,40 @@ fn unix_seconds_f64() -> f64 {
 fn io_err(code: &'static str, subject: &str) -> impl FnOnce(std::io::Error) -> RuntimeError {
     let subject = subject.to_owned();
     move |e| RuntimeError::new(code, format!("{subject}: {e}"))
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn immutable_after_does_not_read_current_workspace() {
+        let base = std::env::temp_dir().join(unique_id("koide-history-"));
+        let store = CheckpointStore::new(base.clone()).unwrap();
+        let blob = store.put_blob(b"then").unwrap();
+        let events = vec![json!({"path":"a", "type":"edit", "after_blob":blob, "after_rev":format!("sha256:{}", sha256_hex(b"then")), "reverted":true})];
+        assert_eq!(store.event_after(&events, 0, || panic!("must not read current file")).unwrap(), Some(b"then".to_vec()));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn legacy_candidates_must_match_recorded_revision() {
+        let base = std::env::temp_dir().join(unique_id("koide-history-"));
+        let store = CheckpointStore::new(base.clone()).unwrap();
+        let mut events = vec![json!({"path":"a", "type":"edit", "after_rev":format!("sha256:{}", sha256_hex(b"then"))})];
+        assert_eq!(store.event_after(&events, 0, || Ok(Some(b"now".to_vec()))).unwrap_err().code, "HISTORY_UNAVAILABLE");
+        let blob = store.put_blob(b"then").unwrap();
+        events.push(json!({"path":"a", "type":"edit", "before_blob":blob}));
+        assert_eq!(store.event_after(&events, 0, || panic!("next snapshot is sufficient")).unwrap(), Some(b"then".to_vec()));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn historical_delete_stays_absent_after_recreation() {
+        let base = std::env::temp_dir().join(unique_id("koide-history-"));
+        let store = CheckpointStore::new(base.clone()).unwrap();
+        let events = vec![json!({"path":"a", "type":"edit", "after_rev":"absent"})];
+        assert_eq!(store.event_after(&events, 0, || panic!("deleted state is known")).unwrap(), None);
+        fs::remove_dir_all(base).unwrap();
+    }
 }

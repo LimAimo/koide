@@ -22,14 +22,18 @@ Koide 1.0.0 当前处于 `dev/1.0.0` 开发阶段。0.9.0 仍是 `main` 的稳�
 
 - 普通 UI 使用统一 motion tokens：即时反馈 70ms、快速 160ms、中等 240ms、容器/抽屉 320ms、页面级 360ms。
 - 按钮按压、文件抽屉、AI Bottom Sheet、Dialog、Toast、页面切换、聊天/工具卡、工作现场与 Time Machine 使用同一套 easing/时长层级。
-- 浮层退出会等待对应动画结束后再卸载 DOM；系统或 Koide 的 reduced-motion 设置会把这类过渡降级。
+- AI Bottom Sheet 的释放使用可中断阻尼弹簧，半屏/全屏吸附与自由高度共存；取消手势恢复原位，停顿后释放不沿用旧速度。
+- 浮层关闭立即更新交互和返回栈，退出动画结束后卸载 DOM；连点关闭后重开不会被旧返回事件误关。工作现场按稳定节点更新，工具状态图标连续过渡。
+- 系统或 Koide 的 reduced-motion 设置覆盖普通 UI；触屏把手、小按钮和文件行至少 40px。
 - Diffusion 代码编辑动画属于内容变化可视化，继续使用独立动画引擎，不与导航/控件 Motion tokens 混用。
 
 ## 1.0 Agent 可观测性
 
 - **工作现场**：只根据真实 Agent 事件推进阶段；没有发生的探索/修改/验证会标记为「未经过」。
 - **Time Machine**：Native 与 Bridge 新任务都会把 checkpoint 节点关联到真实 Tool Call `call_id`；读取、文件修改、`web_fetch` 与 `shell_run` 验证均可追踪。
-- **验证故事线**：时间线可识别最近一次「验证失败 → 修改 → 验证通过」，验证仍失败时也会明确显示未闭环。
+- **Rich Diff**：文件级逐步累计增删统计（含撤销记录）、旧/新行号、修改范围、区域跳转与独立动画重播。二进制、过大文本或缺失历史不伪造数据。
+- **历史快照**：Native / Bridge 新修改保存 `after_blob`；旧记录只接受匹配 `after_rev` 的历史候选或当前文件，否则明确报错。
+- **验证故事线**：按同一命令与 cwd 关联失败/通过，区分无修改重试、修改后通过、通过后又有修改或撤销；可跳转对应事件。
 - **项目记忆**：`.koide/PROJECT_MEMORY.md` 由用户显式维护并进入 Native/Bridge Agent 上下文；revision 冲突不会覆盖用户编辑框里的未保存内容。
 
 ## Runtime API
@@ -53,3 +57,9 @@ OpenAI-compatible、Anthropic 与 Gemini Native 均有 Agent 调用路径；交�
 3. Bridge 仍是协议与回归兼容层。
 
 如果以后加入 Rust Remote Runtime，可以再决定是否删除 Bridge；0.9.0 不把这件事作为正式发布的前提。
+
+## RC 状态
+
+交接基线 `4e67440d` 的 [Stable Build #104](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36322589378) 五项通过。本轮 Product Polish Pass 继续提交 `dev/1.0.0`，以新提交的 GitHub Actions 结果为准，不能复用基线的通过结论。
+
+未发布 RC、未合并 `main`。Android 真机手感、安全区、软键盘和 SAF 提供商差异仍需设备验收；本轮未接入 Native haptic。详见 [产品打磨记录](PRODUCT_POLISH.md) 和 [1.x 路线](ROADMAP.md)。
