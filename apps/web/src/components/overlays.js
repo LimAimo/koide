@@ -2,8 +2,10 @@
 // context menu -> dialog -> bottom sheet -> drawer -> AI fullscreen -> settings page -> (finally) leave the app.
 
 import { h, icon, clear } from "./dom.js";
+import { reducedMotion } from "../services/store.js";
 
 const stack = [];
+const motionMs = (normal) => reducedMotion() ? 0 : normal;
 
 /** Register a closable layer. Returns `request()`; call it to close the layer (goes through history). */
 export function pushLayer(close) {
@@ -53,7 +55,7 @@ export function openSheet({ title, body, onClose, tall = false, footer = null } 
     scrim.classList.remove("in");
     sheet.classList.remove("in");
     sheet.style.transform = "";
-    setTimeout(() => { scrim.remove(); sheet.remove(); }, 260);
+    setTimeout(() => { scrim.remove(); sheet.remove(); }, motionMs(320));
     onClose && onClose();
   };
   request = pushLayer(closeImpl);
@@ -105,7 +107,7 @@ export function openDialog({ title, body, actions = [], onClose } = {}) {
     if (closed) return;
     closed = true;
     scrim.classList.remove("in"); dlg.classList.remove("in");
-    setTimeout(() => { scrim.remove(); dlg.remove(); }, 200);
+    setTimeout(() => { scrim.remove(); dlg.remove(); }, motionMs(240));
     onClose && onClose();
   };
   const request = pushLayer(closeImpl);
@@ -145,7 +147,7 @@ export function openMenu(title, items) {
     if (!it) continue;
     list.appendChild(h("button", {
       class: "menu-item" + (it.danger ? " danger" : ""), type: "button",
-      onclick: () => { sheet.close(); setTimeout(() => it.onClick && it.onClick(), 30); },
+      onclick: () => { sheet.close(); setTimeout(() => it.onClick && it.onClick(), motionMs(160)); },
     }, it.icon ? icon(it.icon, 20) : null, h("span", null, it.label)));
   }
   sheet = openSheet({ title, body: list });
