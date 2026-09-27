@@ -39,7 +39,7 @@ from .security.permissions import MODES, TOOL_SETTINGS, PermissionEngine
 from .security.policy import HardPolicy
 from .tools.builtin import build_registry
 
-VERSION = "0.9.0"
+VERSION = "1.0.0"
 
 
 class Connection:
