@@ -380,7 +380,7 @@ class AgentRun:
             finally:
                 cancel_wait.cancel()
 
-        tc = ToolContext(ws, Ctx("agent", self.task_id), self.cancel, app.emit, cid, self.read_revisions, app.terminals, ask_question)
+        tc = ToolContext(ws, Ctx("agent", self.task_id, cid), self.cancel, app.emit, cid, self.read_revisions, app.terminals, ask_question)
         try:
             coro = tool.handler(tc, args)
             result = await asyncio.wait_for(coro, tool.timeout) if tool.timeout and tool.timeout > 0 else await coro
@@ -401,14 +401,16 @@ class AgentRun:
             summary = "退出码 0" if ok else ("已超时" if result["timed_out"] else f"退出码 {result['exit_code']}")
             ws.checkpoints.add_event(self.task_id, "build_ok" if ok else "build_failed",
                                      f"{'通过' if ok else '失败'}：{args['command'][:80]}",
-                                     detail=result["output"][-1500:], exit_code=result["exit_code"])
+                                     detail=result["output"][-1500:], exit_code=result["exit_code"],
+                                     call_id=cid, tool=name, arguments=args)
         elif name == "fs_read":
             summary = f"{result.get('total_lines', '?')} 行"
-            ws.checkpoints.add_event(self.task_id, "read", f"读取 {result['path']}")
+            ws.checkpoints.add_event(self.task_id, "read", f"读取 {result['path']}",
+                                     call_id=cid, tool=name, arguments=args, path=result["path"])
         elif name in ("fs_list", "fs_search", "fs_glob"):
             n = len(result.get("entries") or result.get("matches") or [])
             summary = f"{n} 条结果"
-            ws.checkpoints.add_event(self.task_id, "read", title)
+            ws.checkpoints.add_event(self.task_id, "read", title, call_id=cid, tool=name, arguments=args)
         elif name == "fs_multi_read":
             n = len(result.get("files") or [])
             summary = f"{n} 个文件"
