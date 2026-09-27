@@ -202,8 +202,8 @@ pub fn agent_context_with_project(data_dir: &Path, project: Option<&str>) -> Str
         }
     }
     if let Some(raw) = project.filter(|raw| !raw.is_empty()) {
-        text.push_str("\n# Project instructions (AGENTS.md)\n");
-        text.extend(raw.chars().take(8000));
+        text.push_str("\n# Project context\n");
+        text.extend(raw.chars().take(16000));
     }
     text
 }
