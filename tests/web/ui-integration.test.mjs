@@ -216,6 +216,8 @@ test("Koide 1.0：项目记忆可编辑，并会进入后续 Agent 上下文", a
   $$(sheet, ".btn").find((b) => text(b) === "保存").click();
   await until(() => fs.existsSync(path.join(proj, ".koide", "PROJECT_MEMORY.md")), "project memory file");
   assert.match(fs.readFileSync(path.join(proj, ".koide", "PROJECT_MEMORY.md"), "utf8"), /MEMORY_SENTINEL/);
+  const projectContext = await bridge.rpc("instructions.get");
+  assert.match(projectContext.project || "", /MEMORY_SENTINEL/, "Runtime 项目上下文必须包含显式保存的项目记忆");
   sheet.querySelector?.(".sheet-close")?.click?.();
 
   const done = new Promise((r) => bridge.on("agent.done", r));
