@@ -25,6 +25,7 @@ export const state = createStore({
   conn: "offline", hello: null, workspace: null,
   tabs: [], active: null,
   agent: { running: false, state: "idle", detail: "", taskId: null },
+  live: { goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [] },
   editing: {},             // path -> true while the agent is writing that file
   approvals: [],
   profiles: [], permissions: null,
@@ -33,6 +34,18 @@ export const state = createStore({
 });
 
 const setAgent = (patch) => state.set((s) => ({ agent: { ...s.agent, ...patch } }));
+const setLive = (patch) => state.set((s) => ({ live: { ...s.live, ...patch } }));
+const LIVE_LIMIT = 40;
+function upsertLiveActivity(callId, patch) {
+  state.set((s) => {
+    const now = Date.now();
+    const activities = [...(s.live.activities || [])];
+    const i = activities.findIndex((x) => x.callId === callId);
+    if (i >= 0) activities[i] = { ...activities[i], ...patch, updatedAt: now };
+    else activities.push({ callId, startedAt: now, updatedAt: now, ...patch });
+    return { live: { ...s.live, activities: activities.slice(-LIVE_LIMIT) } };
+  });
+}
 export const tabOf = (path) => state.get().tabs.find((t) => t.path === path);
 export const activeTab = () => tabOf(state.get().active);
 const patchTab = (path, patch) => state.set((s) => ({ tabs: s.tabs.map((t) => (t.path === path ? { ...t, ...patch } : t)) }));
@@ -63,7 +76,7 @@ export async function connectManual(target) {
 export async function openWorkspace(location) {
   const params = typeof location === "string" ? { path: location } : { location };
   const ws = await runtime.workspace.open(params);
-  state.set({ workspace: ws, tabs: [], active: null, editing: {}, conversationId: null });
+  state.set({ workspace: ws, tabs: [], active: null, editing: {}, conversationId: null, live: { goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [] } });
   if (ws?.capabilities?.git === false) state.set({ git: { is_repo: false, files: {} } });
   else refreshGit();
   return ws;
@@ -264,13 +277,24 @@ runtime.on("fs.external", async (d) => {
 const callPaths = new Map();
 const WRITERS = new Set(["fs_patch", "fs_write", "fs_create", "fs_delete", "fs_rename", "fs_copy"]);
 
-runtime.on("agent.started", (d) => setAgent({ running: true, taskId: d.task_id, state: "thinking", detail: "" }));
-runtime.on("agent.status", (d) => setAgent({ state: d.state, detail: d.detail || "", running: !["idle", "stopped", "error"].includes(d.state), taskId: d.task_id }));
-runtime.on("agent.done", () => { setAgent({ running: false }); state.set({ editing: {} }); });
+runtime.on("agent.started", (d) => {
+  setAgent({ running: true, taskId: d.task_id, state: "thinking", detail: "" });
+  setLive({ startedAt: Date.now(), finishedAt: null, status: "running", activities: [] });
+});
+runtime.on("agent.status", (d) => {
+  setAgent({ state: d.state, detail: d.detail || "", running: !["idle", "stopped", "error"].includes(d.state), taskId: d.task_id });
+  setLive({ status: d.state || "working" });
+});
+runtime.on("agent.done", (d = {}) => {
+  setAgent({ running: false });
+  setLive({ status: d.status || "done", finishedAt: Date.now() });
+  state.set({ editing: {} });
+});
 runtime.on("agent.tool", (d) => {
+  if (d.args) callPaths.set(d.call_id, d.args.path || d.args.from || d.args.to);
+  const p = callPaths.get(d.call_id) || "";
+  upsertLiveActivity(d.call_id, { tool: d.tool, state: d.state, path: p, detail: d.detail || "" });
   if (!WRITERS.has(d.tool)) return;
-  if (d.args) callPaths.set(d.call_id, d.args.path || d.args.from);
-  const p = callPaths.get(d.call_id);
   if (!p) return;
   if (d.state === "running") state.set((s) => ({ editing: { ...s.editing, [p]: true } }));
   else if (["done", "error", "denied"].includes(d.state)) state.set((s) => { const e = { ...s.editing }; delete e[p]; return { editing: e }; });
@@ -281,7 +305,7 @@ runtime.on("approval.resolved", (a) => state.set((s) => ({ approvals: s.approval
 /** 返回开始页：关闭当前项目（同时停止正在运行的智能体和终端），清空标签页。 */
 export async function goHome() {
   if (state.get().workspace && runtime.status === "online") await runtime.workspace.close().catch(() => {});
-  state.set({ workspace: null, tabs: [], active: null, editing: {}, conversationId: null, git: { is_repo: false, files: {} } });
+  state.set({ workspace: null, tabs: [], active: null, editing: {}, conversationId: null, git: { is_repo: false, files: {} }, live: { goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [] } });
   events.emit("conversation:load", null);
 }
 
@@ -297,6 +321,7 @@ export function moveTab(path, dir) {
 
 export async function startAgent(goal) {
   const s = settingsStore.get();
+  setLive({ goal, startedAt: Date.now(), finishedAt: null, status: "starting", activities: [] });
   const profile = s.agent.profile || state.get().profiles[0]?.id;
   if (!profile) throw new Error("请先在「设置」里添加一个模型服务商");
   const t = activeTab();
