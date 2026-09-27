@@ -380,3 +380,5 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
 .tl-kind{display:inline-flex;align-items:center;margin-right:8px;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--primary);font-size:11px;font-weight:600;vertical-align:1px}
 .tl-path{margin:3px 0 0 64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
 @media(max-width:600px){.tl-path{margin-left:0;padding-left:0;white-space:normal;overflow-wrap:anywhere}}
+
+.tl-reverted{display:inline-flex;margin-left:8px;padding:1px 6px;border-radius:999px;border:1px solid var(--outline-variant);color:var(--on-surface-variant);font-size:10px;font-weight:500}
