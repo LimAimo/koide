@@ -1,6 +1,6 @@
 # Koide Native 能力审计
 
-> 当前版本：`0.9.0`。本文记录 Native 主链的真实能力和明确限制，不再作为预发布迁移交接清单。
+> 当前版本：`1.0.0-dev`（`dev/1.0.0`）。本文记录 Native 主链与 Bridge 兼容链的真实能力和明确限制。
 
 ## 总览
 
@@ -34,6 +34,10 @@
 - [x] HardPolicy 始终优先
 - [x] max_tool_calls / max_seconds / max_repair_attempts
 - [x] zero-tool incomplete protection
+- [x] Project Memory（`.koide/PROJECT_MEMORY.md`）进入 Agent 上下文
+- [x] Tool Call `call_id` ↔ Checkpoint 精确关联（Native / Bridge）
+- [x] read / edit / web_fetch / shell_run 验证节点语义对齐
+- [x] Time Machine 验证失败 → 修改 → 再验证故事线
 
 ## Providers
 
@@ -62,7 +66,7 @@
 - [ ] Native LAN server / 一次性配对码
 - [ ] Native Remote Runtime adapter
 
-Native 模式下 `devices.pair_code` 明确返回 `LAN_OFF`。需要跨设备访问时，0.9.0 继续提供 Python Bridge 的 `--lan` 模式。
+Native 模式下 `devices.pair_code` 明确返回 `LAN_OFF`。需要跨设备访问时，1.0 开发线继续提供 Python Bridge 的 `--lan` 模式。
 
 ## CI 基线
 
