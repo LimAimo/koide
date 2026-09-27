@@ -1,6 +1,6 @@
-# Koide 0.9.0 当前状态
+# Koide 1.0.0 当前状态
 
-Koide 0.9.0 已从预发布阶段转为正式版本。**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
+Koide 1.0.0 当前处于 `dev/1.0.0` 开发阶段。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
 
 ## Native 主链
 
@@ -17,6 +17,13 @@ Koide 0.9.0 已从预发布阶段转为正式版本。**Native Runtime 是本地
 | Export | ✅ | ✅ | SAF 会经 backend 遍历生成归档 |
 | 外部文件变化 | ✅ | ✅/受 DocumentsProvider 能力影响 | LocalFS 与 SAF 采用不同后端策略 |
 | Native LAN Remote Runtime | ❌ | ❌ | 跨设备访问继续使用可选 Python Bridge |
+
+## 1.0 Agent 可观测性
+
+- **工作现场**：只根据真实 Agent 事件推进阶段；没有发生的探索/修改/验证会标记为「未经过」。
+- **Time Machine**：Native 与 Bridge 新任务都会把 checkpoint 节点关联到真实 Tool Call `call_id`；读取、文件修改、`web_fetch` 与 `shell_run` 验证均可追踪。
+- **验证故事线**：时间线可识别最近一次「验证失败 → 修改 → 验证通过」，验证仍失败时也会明确显示未闭环。
+- **项目记忆**：`.koide/PROJECT_MEMORY.md` 由用户显式维护并进入 Native/Bridge Agent 上下文；revision 冲突不会覆盖用户编辑框里的未保存内容。
 
 ## Runtime API
 
