@@ -175,12 +175,9 @@ class AgentRun:
         glob = self.app.data_dir / "global_instructions.md"
         if glob.is_file():
             text += "\n# Global instructions\n" + glob.read_text("utf-8", "replace")[:6000]
-        agents = ws.primary / "AGENTS.md"
-        if agents.is_file():
-            text += "\n# Project instructions (AGENTS.md)\n" + agents.read_text("utf-8", "replace")[:8000]
-        memory = ws.primary / ".koide" / "PROJECT_MEMORY.md"
-        if memory.is_file():
-            text += "\n# Project Memory (user-maintained)\n" + memory.read_text("utf-8", "replace")[:8000]
+        project_context = ws.project_context()
+        if project_context:
+            text += "\n" + project_context
         return text
 
     def _check_limits(self) -> None:
