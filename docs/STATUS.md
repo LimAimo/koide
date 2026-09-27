@@ -18,6 +18,13 @@ Koide 1.0.0 当前处于 `dev/1.0.0` 开发阶段。0.9.0 仍是 `main` 的稳�
 | 外部文件变化 | ✅ | ✅/受 DocumentsProvider 能力影响 | LocalFS 与 SAF 采用不同后端策略 |
 | Native LAN Remote Runtime | ❌ | ❌ | 跨设备访问继续使用可选 Python Bridge |
 
+## 1.0 UI Motion System
+
+- 普通 UI 使用统一 motion tokens：即时反馈 70ms、快速 160ms、中等 240ms、容器/抽屉 320ms、页面级 360ms。
+- 按钮按压、文件抽屉、AI Bottom Sheet、Dialog、Toast、页面切换、聊天/工具卡、工作现场与 Time Machine 使用同一套 easing/时长层级。
+- 浮层退出会等待对应动画结束后再卸载 DOM；系统或 Koide 的 reduced-motion 设置会把这类过渡降级。
+- Diffusion 代码编辑动画属于内容变化可视化，继续使用独立动画引擎，不与导航/控件 Motion tokens 混用。
+
 ## 1.0 Agent 可观测性
 
 - **工作现场**：只根据真实 Agent 事件推进阶段；没有发生的探索/修改/验证会标记为「未经过」。
