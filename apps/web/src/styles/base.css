@@ -375,3 +375,8 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   .live-stage { grid-template-columns: 12px minmax(0,1fr) auto; justify-items: start; align-items: center; text-align: left; padding: 9px 10px; }
   .live-stage-label { white-space: normal; }
 }
+
+/* Time Machine 1.0: keep event semantics readable without turning the timeline into cards. */
+.tl-kind{display:inline-flex;align-items:center;margin-right:8px;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--primary);font-size:11px;font-weight:600;vertical-align:1px}
+.tl-path{margin:3px 0 0 64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
+@media(max-width:600px){.tl-path{margin-left:0;padding-left:0;white-space:normal;overflow-wrap:anywhere}}
