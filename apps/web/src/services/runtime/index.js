@@ -6,17 +6,23 @@ const nativeAvailable = () => !!globalThis.__TAURI__?.core?.invoke;
 export function createRuntime(adapter = nativeAvailable() ? new NativeRuntimeAdapter() : new BridgeRuntimeAdapter()) {
   const call = (method, params, timeoutMs) => adapter.call(method, params, timeoutMs);
   const empty = () => ({});
+  const children = new Set();
+  adapter.on("agent.started", (data) => { if (data.parent_task_id && data.task_id) { children.add(data.task_id); if (children.size > 256) children.delete(children.values().next().value); } });
+  const isolated = new Set(["agent.started","agent.status","agent.tool","agent.message","agent.reasoning","agent.turn_end","agent.done","fs.changed","terminal.start","terminal.output","terminal.exit"]);
   const api = {
     kind: adapter.kind,
     get status() { return adapter.status; },
     onStatus: (fn) => adapter.onStatus(fn),
-    on: (event, fn) => adapter.on(event, fn),
+    on: (event, fn) => adapter.on(event, (data) => { if (isolated.has(event) && (data?.parent_task_id || children.has(data?.task_id))) return; fn(data); }),
+    onAll: (event, fn) => adapter.on(event, fn),
     discover: (remembered) => adapter.discover(remembered),
     connect: (target, options) => adapter.connect(target, options),
     close: (silent) => adapter.close(silent),
     // Transitional escape hatch for tests and migration tooling; components must use the domain APIs below.
     call,
 
+    engineering: { get: (p) => call("engineering.get", p), put: (p) => call("engineering.put", p) },
+    sandbox: { create: (p = {}) => call("sandbox.create", p), inspect: (p) => call("sandbox.inspect", p), apply: (p) => call("sandbox.apply", p) },
     feedback: { emit: (p) => call("feedback.emit", p) },
 
     workspace: {

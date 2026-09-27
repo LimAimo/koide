@@ -1,6 +1,6 @@
 [package]
 name = "koide-feedback"
-version = "1.0.0-rc.2"
+version = "1.4.0-alpha.1"
 description = "Koide semantic platform feedback"
 edition = "2021"
 rust-version = "1.77.2"

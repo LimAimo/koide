@@ -27,7 +27,7 @@ test("设置搜索保留结果层级、展示空状态，关闭后旧动画不�
   await wait();
   assert.equal(first.el.classList.contains("in"), false);
   assert.equal(next.el.classList.contains("in"), true);
-  assert.equal(document.querySelectorAll(".page").length, 1);
+  assert.equal(document.body.querySelectorAll(".page").length, 1);
   next.close(); await wait();
 });
 
@@ -87,9 +87,9 @@ test("切换项目拒绝旧文件树响应，读取失败提供重试而不冒�
     await tree.reset();
     assert.match(tree.el.textContent, /读取权限已撤销/);
     assert.doesNotMatch(tree.el.textContent, /这个文件夹是空的/);
-    runtime.files.tree = async () => [];
+    runtime.files.tree = async () => ({ nodes: [] });
     tree.el.querySelector("button").click(); await wait();
-    assert.equal(tree.el.querySelector('[role="alert"]').hidden, true);
+    assert.equal(tree.el.querySelector('.tree-empty').hidden, true);
     assert.match(tree.el.textContent, /这个文件夹是空的/);
   } finally { tree.el.remove(); runtime.files.tree = oldTree; state.set({ workspace: null }); }
 });

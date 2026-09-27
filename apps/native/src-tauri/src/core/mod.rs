@@ -1,3 +1,5 @@
+pub mod engineering;
+pub mod sandbox;
 mod agent;
 mod checkpoint;
 mod conversation;
@@ -116,6 +118,24 @@ impl NativeCore {
     ) -> Result<Value, RuntimeError> {
         match method {
             "hello" => Ok(self.hello()),
+            "engineering.get" => engineering::get(self.ws()?, req_str(&params, "key")?),
+            "engineering.put" => engineering::put(self.ws()?, req_str(&params, "key")?, &params["value"], req_str(&params, "base_revision")?, false),
+            "sandbox.create" => sandbox::create(self.ws()?, &self.data_dir, params.get("task_id").and_then(Value::as_str), params.get("seq").and_then(Value::as_u64).map(|x| x as usize)),
+            "sandbox.inspect" => sandbox::inspect(self.ws()?, &self.data_dir, req_str(&params, "id")?),
+            "sandbox.apply" => {
+                if self.agent.is_running() { return Err(RuntimeError::new("AGENT_BUSY", "请先停止任务再应用沙箱")); }
+                let result = match sandbox::apply(self.ws()?, &self.data_dir, req_str(&params, "id")?, req_str(&params, "revision")?) {
+                    Ok(result)=>result,
+                    Err(error)=>{
+                        for event in error.data["events"].as_array().map(Vec::as_slice).unwrap_or(&[]) {Self::emit(app,"fs.changed",event.clone());}
+                        Self::emit(app,"workspace.changed",json!({"source":"sandbox"}));
+                        return Err(error);
+                    }
+                };
+                for event in result["events"].as_array().map(Vec::as_slice).unwrap_or(&[]) { Self::emit(app, "fs.changed", event.clone()); }
+                Self::emit(app, "workspace.changed", json!({"source":"sandbox"}));
+                Ok(result)
+            },
             "feedback.emit" => {
                 let kind = req_str(&params, "kind")?;
                 if !matches!(kind, "snap" | "confirm" | "complete" | "restore") {
@@ -208,7 +228,8 @@ impl NativeCore {
                 let workspace = self.ws()?.clone();
                 let checkpoints = workspace.checkpoint_handle();
                 let project_instructions = workspace.project_instructions();
-                let system_context = instructions::agent_context_with_project(&self.data_dir, Some(&project_instructions));
+                let task_context = engineering::context(&workspace, params.get("resume_task").and_then(Value::as_str))?;
+                let system_context = format!("{}{}\nSelected context: {}", instructions::agent_context_with_project(&self.data_dir, Some(&project_instructions)), engineering::PROMPT, task_context);
                 let limits = AgentLimits::from_params(
                     params.get("limits"),
                     params.get("web_search").and_then(Value::as_bool).unwrap_or(false),
@@ -219,6 +240,7 @@ impl NativeCore {
                     .and_then(Value::as_str)
                     .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "新建任务缺少 id"))?
                     .to_owned();
+                checkpoints.add_event(&task_id, "context", "任务上下文", json!({"record":task_context,"resume_task":params["resume_task"],"base_git":sandbox::baseline(&workspace)}))?;
                 self.agent.start(
                     app.clone(),
                     store,
@@ -274,6 +296,7 @@ impl NativeCore {
                 Ok(result)
             },
             "workspace.open" => {
+                if self.agent.is_running() { return Err(RuntimeError::new("AGENT_BUSY", "请先停止任务再切换工作区")); }
                 let mut location = params.get("location").cloned().or_else(|| {
                     params.get("path").and_then(Value::as_str).map(|path| Value::String(path.to_owned()))
                 }).ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "缺少工作区位置"))?;
@@ -284,6 +307,7 @@ impl NativeCore {
                 }
                 let ws = Workspace::open_location(app, &location, &self.data_dir)?;
                 if let Some(watcher) = self.watcher.take() { watcher.stop(); }
+                for task in ws.checkpoint_tasks(200)? { if task["status"] == "running" { ws.checkpoint_handle().finish_task(task["id"].as_str().unwrap_or(""), "interrupted", "运行环境已中断；工具调用没有重放")?; } }
                 let info = ws.info();
                 let canonical_location = ws.location();
                 let conversations = ConversationStore::new(
@@ -299,7 +323,10 @@ impl NativeCore {
                 Ok(info)
             }
             "workspace.close" => {
-                let _ = self.agent.stop();
+                if self.agent.is_running() {
+                    let _ = self.agent.stop();
+                    return Err(RuntimeError::new("AGENT_BUSY", "已请求停止任务，请等任务结束后关闭工作区"));
+                }
                 self.terminal.close_all();
                 if let Some(watcher) = self.watcher.take() { watcher.stop(); }
                 self.workspace = None;
@@ -624,7 +651,7 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "parity-audit",
-                "runtime_dispatch": "73/73",
+                "runtime_dispatch": "78/78",
                 "python_bridge_removal_allowed": false,
                 "capabilities": {
                     "workspace_path_backend": true,

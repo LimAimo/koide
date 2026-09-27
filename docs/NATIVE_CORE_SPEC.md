@@ -105,3 +105,9 @@ UI 必须根据 capability 显示真实能力，不得伪装支持。
 ## 10. 测试门槛
 
 行为变化至少覆盖对应的 Web/Rust/Bridge 单测或集成测试；文件破坏性操作必须额外覆盖越界、revision conflict 和恢复路径。主 CI 同时构建 Windows 与 Android。
+
+## 11. 工程可观测性与隔离执行
+
+`core/engineering.rs` 保存独立于 Project Memory 的项目上下文/索引/视觉元数据，revision 保护写入，并实现计划、调查、审查与受限任务历史工具。`core/agent.rs` 将实际工具开始/结果写入 checkpoint，在修改和命令前要求计划；分派最多四项真实子任务，共享权限审批与取消信号，分别保存调用历史。
+
+`core/sandbox.rs` 管理登记的 Git worktree，只通过 Workspace 应用文本变更。验证绑定 Git HEAD 与当前文件指纹，应用前核对主工作区 revision；任何冲突、不可表示的二进制/权限/链接变化都会阻止自动应用。沙箱目录位于私有数据目录旁，不允许通过此接口打开任意目录，不自动提交或合并。详见 [ENGINEERING_1X.md](ENGINEERING_1X.md)。

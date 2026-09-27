@@ -87,6 +87,8 @@ def validate(schema: dict, value: Any, path: str = "$") -> list[str]:
     if isinstance(value, list):
         if "minItems" in schema and len(value) < schema["minItems"]:
             errs.append(f"{path}: needs at least {schema['minItems']} item(s)")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errs.append(f"{path}: exceeds maximum item count")
         if "items" in schema:
             for i, item in enumerate(value):
                 errs += validate(schema["items"], item, f"{path}[{i}]")

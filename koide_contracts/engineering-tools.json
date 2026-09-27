@@ -1,0 +1,267 @@
+[
+  {
+    "name": "task_plan",
+    "description": "Publish or revise an auditable execution plan BEFORE any edit or shell command. List concrete reads, modules, and validation commands. A revised plan preserves the old plan. Supply plan_node_id on subsequent tool calls to associate actual execution; never mark a plan as already executed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "inspect",
+                  "edit",
+                  "validate",
+                  "delegate"
+                ]
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "command": {
+                "type": "string"
+              },
+              "depends_on": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rationale": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "project_query",
+    "description": "Query the project syntax index for definitions, references, calls, imports and cross-runtime links. Results carry source revisions; re-read before editing. Unresolved or ambiguous references are explicitly marked and are not proof of a call.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "investigation_record",
+    "description": "Record a concise user-facing engineering observation, hypothesis, experiment or conclusion. This is an auditable assertion, never private reasoning. Cite actual tool call IDs as evidence; conclusions require evidence. Failed experiments must remain in the history.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "observation",
+            "hypothesis",
+            "experiment",
+            "conclusion"
+          ]
+        },
+        "statement": {
+          "type": "string"
+        },
+        "hypothesis_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "open",
+            "supported",
+            "rejected",
+            "inconclusive"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "statement"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "review_report",
+    "description": "Report evidence-backed findings from a real read-only workspace diff review. An empty findings list means no findings in the inspected scope, not proof that the project is safe. Include source path, line, severity, title, explanation and evidence call IDs.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "explanation": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "severity",
+              "title",
+              "explanation",
+              "evidence"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "scope",
+        "findings"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "delegate_tasks",
+    "description": "Run real model sub-tasks with independent contexts. Read-only children share guarded reads; editing children require separate Git worktrees based on a clean repository. Up to 4 siblings; dependencies must refer to earlier siblings. Return actual child task IDs, status, reports and sandbox IDs. Never apply child changes automatically. Children cannot delegate again.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "goal": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "edit",
+                  "agent"
+                ]
+              },
+              "depends_on": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sandbox_id": {
+                "type": "string",
+                "description": "Reuse this existing sandbox owned by the current project; omit to create a fresh worktree."
+              }
+            },
+            "required": [
+              "id",
+              "goal",
+              "mode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_history",
+    "description": "Read persisted records of this task or the explicitly resumed task. Use pagination to recover earlier reads, edits, failures and plans without replaying calls.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+]

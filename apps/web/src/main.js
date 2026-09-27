@@ -1,3 +1,5 @@
+import { openEngineering } from "./components/engineering.js";
+import { registerComponent } from "./services/inspection.js";
 // Koide entry point.
 
 import { h, icon, iconButton, toast } from "./components/dom.js";
@@ -96,17 +98,29 @@ function boot() {
     saveSettings({ aiVisible: !settingsStore.get().aiVisible });
   }, "ai-toggle");
   const gitBtn = iconButton("branch", "Git", () => openGitPanel());
+  const reviewBadge = h("button", { class: "btn text small", type: "button", hidden: true, onclick: () => openEngineering("tasks", state.get().review?.task_id) });
+  runtime.on("agent.done", async (event) => {
+    const workspace = state.get().workspace;
+    try { const task = await runtime.checkpoint.task({ task_id: event.task_id }); const report = task.events?.filter((e) => e.type === "review").at(-1);
+      if (report && workspace === state.get().workspace) state.set({ review: { task_id: task.id, count: report.record.findings?.length || 0, stale: false } });
+    } catch { /* Task records remain available in the engineering panel. */ }
+  });
+  runtime.on("fs.changed", () => { if (state.get().review) state.set({ review: { ...state.get().review, stale: true } }); });
+  runtime.on("workspace.opened", () => state.set({ review: null }));
+  const engineeringBtn = iconButton("branch", "工程：任务、上下文与架构", () => openEngineering());
   const tmBtn = iconButton("history", "时光机", () => openTimeMachine());
   const termBtn = iconButton("terminal", "显示或隐藏终端", () => {
     if (layout?.mode === "wide") saveSettings({ terminalVisible: !settingsStore.get().terminalVisible });
     else openTerminal();
   });
-  const live = () => openLiveWorkspace({ onOpenTimeline: (id) => openTimeMachine(id), onOpenMemory: () => openProjectMemory() });
+  const live = () => openLiveWorkspace({ onOpenTimeline: (id) => openTimeMachine(id), onOpenMemory: () => openProjectMemory(), onOpenEngineering: () => openEngineering("tasks", state.get().agent.taskId || null) });
   const bar = h("header", { class: "appbar" },
-    homeBtn, iconButton("menu", "文件", () => layout.openDrawer(), "menu-btn"), title, createCapsule(live), h("div", { class: "spacer" }),
-    filesBtn, aiBtn, gitBtn, tmBtn, termBtn, iconButton("tune", "设置", () => openSettings()));
+    homeBtn, iconButton("menu", "文件", () => layout.openDrawer(), "menu-btn"), title, createCapsule(live), reviewBadge, h("div", { class: "spacer" }),
+    filesBtn, aiBtn, gitBtn, engineeringBtn, tmBtn, termBtn, iconButton("tune", "设置", () => openSettings()));
   app.append(bar, work, scrim);
   document.body.appendChild(app);
+  registerComponent(chat.el, { component: "AI 面板", source: { path: "apps/web/src/components/chat.js", line: 1 }, state: () => ({ agent: state.get().agent, visible: settingsStore.get().aiVisible }) });
+  registerComponent(files, { component: "文件抽屉", source: { path: "apps/web/src/components/file-tree.js", line: 1 }, state: () => ({ workspace: state.get().workspace?.name, active: state.get().active }) });
   window.__KOIDE_BOOT_OK__ = true;
   document.getElementById("boot-fallback")?.remove();
 
@@ -117,12 +131,14 @@ function boot() {
 
 
   state.subscribe((s) => {
+    reviewBadge.hidden = !s.review?.count;
+    reviewBadge.textContent = s.review?.count ? `${s.review.count} 处待检查${s.review.stale ? " · 源码已变化" : ""}` : "";
     const ws = s.workspace;
     title.textContent = ws ? ws.name : "Koide";
     filesName.textContent = ws ? ws.name : "Files";
     app.classList.toggle("no-ws", !ws);
     homeBtn.hidden = !ws && !s.tabs.length;                          // 项目里或草稿本里都能一键回到首页
-    aiBtn.hidden = tmBtn.hidden = termBtn.hidden = gitBtn.hidden = !ws;   // 首页还没有项目，这些按钮没有意义，直接隐藏而不是灰掉
+    engineeringBtn.hidden = aiBtn.hidden = tmBtn.hidden = termBtn.hidden = gitBtn.hidden = !ws;   // 首页还没有项目，这些按钮没有意义，直接隐藏而不是灰掉
     const canGit = ws?.capabilities?.git !== false;
     const canTerminal = ws?.capabilities?.terminal_cwd !== false;
     gitBtn.disabled = !!ws && !canGit;

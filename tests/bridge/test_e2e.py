@@ -56,7 +56,7 @@ class Handler(BaseHTTPRequestHandler):
             self._sse({"choices": [{"delta": {"content": '{"decision":"ALLOW","reason":"looks fine"}'}}]})
             self._sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
             return
-        turn = sum(1 for m in msgs if m["role"] == "tool")
+        turn = sum(1 for m in msgs if m["role"] == "tool" and m.get("tool_call_id") != "plan0")
         if Mock.mode == "truncate":
             self._tool(0, "call_x", "fs_write", {"path": "should_not_exist.txt", "content": "x"})
             return   # stream dies without finish_reason
@@ -68,7 +68,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._sse({"choices": [{"delta": {"content": "blocked"}}]})
                 self._sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
             return
-        if turn == 0:
+        if not any(m.get("tool_call_id") == "plan0" for m in msgs if m["role"] == "tool"):
+            self._tool(0, "plan0", "task_plan", {"nodes":[{"id":"read","title":"读取","kind":"inspect"},{"id":"edit","title":"修改","kind":"edit","depends_on":["read"]},{"id":"check","title":"验证","kind":"validate","depends_on":["edit"]}]})
+            self._sse({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+        elif turn == 0:
             self._sse({"choices": [{"delta": {"content": "Looking at the code. "}}]})
             self._tool(0, "c1", "fs_read", {"path": "src/app.py"})
             self._sse({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})

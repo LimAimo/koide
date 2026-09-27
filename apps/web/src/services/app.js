@@ -365,7 +365,11 @@ export function moveTab(path, dir) {
   });
 }
 
-export async function startAgent(goal) {
+let startingAgent = false, startGeneration = 0;
+export async function startAgent(goal, options = {}) {
+  if (startingAgent || state.get().agent.running) throw new Error("已有任务正在准备或执行");
+  const currentStart = ++startGeneration; startingAgent = true;
+  try {
   const s = settingsStore.get();
   setLive({ goal, startedAt: Date.now(), finishedAt: null, status: "starting", activities: [], stages: freshTaskStages() });
   const profile = s.agent.profile || state.get().profiles[0]?.id;
@@ -377,7 +381,16 @@ export async function startAgent(goal) {
   const t = activeTab();
   const goalText = t ? `${goal}\n\n(The user currently has "${t.path}" open in the editor.)` : goal;
   try {
-    const r = await runtime.agent.start({ goal: goalText, profile, mode: s.agent.mode, reasoning: s.agent.reasoning, web_search: !!s.agent.webSearch, limits: s.agent.limits, conversation_id: state.get().conversationId });
+    if ((options.mode || s.agent.mode) !== "chat") {
+      const indexed = await runtime.engineering.get({ key: "index" });
+      if (currentStart !== startGeneration) throw new Error("任务准备已取消");
+      if (!indexed.value) {
+        const { buildIndex } = await import("./engineering.js");
+        await buildIndex((p) => setLive({ goal, detail: `建立项目索引：${p.files} 个文件` }));
+      }
+    }
+    if (currentStart !== startGeneration) throw new Error("任务准备已取消");
+    const r = await runtime.agent.start({ goal: goalText, profile, mode: options.mode || s.agent.mode, reasoning: s.agent.reasoning, web_search: !!s.agent.webSearch, limits: s.agent.limits, conversation_id: options.resume_task ? null : state.get().conversationId, resume_task: options.resume_task });
     if (r.conversation_id && r.conversation_id !== state.get().conversationId) setConversation(r.conversation_id);
     return r;
   } catch (e) {
@@ -385,6 +398,11 @@ export async function startAgent(goal) {
     setLive({ status: "error", finishedAt: Date.now() });
     throw e;
   }
+  } finally { startingAgent = false; }
 }
-export const stopAgent = () => runtime.agent.stop();
+export const stopAgent = async () => {
+  startGeneration++;
+  if (startingAgent) (await import("./engineering.js")).cancelIndex();
+  return runtime.agent.stop();
+};
 export const respondApproval = (id, allow, scope = "once") => runtime.approval.respond({ approval_id: id, allow, scope });

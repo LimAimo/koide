@@ -1,10 +1,10 @@
 # Koide Native 能力审计
 
-> 当前版本：`1.0.0-rc.2`（`dev/1.0.0`，候选版准备，尚未发布）。本文记录 Native 主链与 Bridge 兼容链的真实能力和明确限制。
+> 当前版本：`1.4.0-alpha.1`（`dev/1.0.0`，工程能力开发预览，尚未发布）。本文记录 Native 主链与 Bridge 兼容链的真实能力和明确限制。
 
 ## 总览
 
-- Runtime API：73 个业务方法；Native dispatch 当前 73 / 73 有路由。
+- Runtime API：78 个业务方法；Native dispatch 当前 78 / 78 有路由。
 - Windows / Android 本地应用默认使用 Rust Native Core。
 - Python Bridge 是可选 Web/LAN 兼容端，不是本地 Native 前置条件。
 - 平台不支持的能力必须返回明确错误或 `capability=false`，不能伪装为空结果。
@@ -86,3 +86,9 @@ Native 模式下 `devices.pair_code` 明确返回 `LAN_OFF`。需要跨设备访
 - Windows x64 构建通过。
 
 这些平台限制会继续如实记录，但不再用“是否删除 Python Bridge”来定义 Koide 能否发布正式版。
+
+## 1.x 工程能力
+
+Native 与 Bridge 共用 `koide_contracts/engineering-tools.json` 的六个结构化工具契约。双方实现计划门禁、真实调用记录、证据校验、任务续接、revision 保护的项目元数据、子任务分派以及 Git worktree 创建/审查/应用。语法索引与 Inspector 在 Web 层通过 Runtime 接入。
+
+编辑子任务使用独立 worktree，SAF 明确不支持；Android LocalFS 需要环境中真实可用的 Git/命令，不因有 API 就宣称系统自带。浏览器截图授权依赖运行环境支持，Native WebView 可以导入截图与测量布局。完整边界及开发预览验收状态见 [ENGINEERING_1X.md](ENGINEERING_1X.md) 和 [STATUS.md](STATUS.md)。

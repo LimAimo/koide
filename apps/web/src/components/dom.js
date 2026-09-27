@@ -1,3 +1,4 @@
+import { registerElement, creationSource } from "../services/inspection.js";
 // Tiny DOM helpers. No framework: components are plain functions returning elements.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -14,6 +15,8 @@ export function h(tag, props, ...children) {
     else if (v === true) el.setAttribute(k, "");
     else el.setAttribute(k, String(v));
   }
+  const handlers = Object.fromEntries(Object.entries(props || {}).filter(([key, value]) => key.startsWith("on") && typeof value === "function").map(([key, value]) => [key.slice(2), { name: value.name || "匿名处理器", source: String(value).slice(0, 1200) }]));
+  if (Object.keys(handlers).length) registerElement(el, creationSource(), handlers);
   append(el, children);
   return el;
 }

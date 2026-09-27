@@ -20,9 +20,13 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
   const historyBtn = iconButton("history", "对话历史", () => openConversations());
   const closeBtn = iconButton("close", "关闭 AI 面板", () => saveSettings({ aiVisible: false }), "ai-close");
   const head = h("div", { class: "ai-head" }, h("div", { class: "seg-wrap" }, modeSeg), historyBtn, closeBtn);
+  const contextBtn = h("button", { class: "btn text small", type: "button", onclick: async () => (await import("./engineering.js")).openEngineering("context") }, "上下文");
+  let contextGeneration = 0;
+  const updateContextCount = async () => { const current = ++contextGeneration; if (!state.get().workspace) return; try { const r = await runtime.engineering.get({ key: "context" }); if (current === contextGeneration) contextBtn.textContent = `上下文 ${(r.value?.pins || []).filter((p) => p.enabled !== false).length}`; } catch { contextBtn.textContent = "上下文"; } };
+  events.on("engineering:changed", updateContextCount); runtime.on("workspace.opened", updateContextCount);
   const composerCard = h("div", { class: "composer-card" },
     input,
-    h("div", { class: "composer-actions" }, profileChip, h("span", { class: "composer-spacer" }), send));
+    h("div", { class: "composer-actions" }, profileChip, contextBtn, h("span", { class: "composer-spacer" }), send));
   const composer = h("div", { class: "composer" }, composerCard);
   const el = h("section", { class: "ai", "aria-label": "AI 助手" }, head, scroll, composer);
 

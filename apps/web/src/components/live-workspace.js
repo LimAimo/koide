@@ -24,7 +24,7 @@ function ago(ts) {
   return min < 60 ? min + " 分钟前" : Math.round(min / 60) + " 小时前";
 }
 
-export function openLiveWorkspace({ onOpenTimeline, onOpenMemory } = {}) {
+export function openLiveWorkspace({ onOpenTimeline, onOpenMemory, onOpenEngineering } = {}) {
   const body = h("div", { class: "live-workspace" });
   let off = null;
   const sheet = openSheet({
@@ -33,6 +33,7 @@ export function openLiveWorkspace({ onOpenTimeline, onOpenMemory } = {}) {
     body,
     onClose: () => off && off(),
     footer: [
+      h("button", { class: "btn tonal", type: "button", onclick: () => onOpenEngineering?.() }, "执行图"),
       h("button", { class: "btn tonal", type: "button", onclick: () => { const id = state.get().agent.taskId || state.get().live?.taskId; if (onOpenTimeline) onOpenTimeline(id || null); } }, icon("history", 17), "时光机"),
       h("button", { class: "btn text", type: "button", onclick: () => onOpenMemory && onOpenMemory() }, icon("file", 17), "项目记忆"),
     ],

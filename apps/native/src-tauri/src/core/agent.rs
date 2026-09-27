@@ -331,6 +331,7 @@ impl AgentState {
                     approvals.clone(),
                     questions.clone(),
                     session_grants.clone(),
+                    0,
                 )
             } else {
                 run_chat_mode(
@@ -438,9 +439,12 @@ fn run_tool_mode(
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     questions: Arc<Mutex<HashMap<String, PendingQuestion>>>,
     session_grants: Arc<Mutex<HashSet<String>>>,
+    depth: usize,
 ) -> Result<String, RuntimeError> {
     let shell_root = workspace.local_root_path();
-    let tools = if full_agent { agent_tool_specs(shell_root.is_some()) } else if editable { edit_tool_specs() } else { read_tool_specs() };
+    let mut tools = if full_agent { agent_tool_specs(shell_root.is_some()) } else if editable { edit_tool_specs() } else { read_tool_specs() };
+    tools.extend(super::engineering::specs().into_iter().filter(|s| (full_agent && depth == 0) || s["function"]["name"] != "delegate_tasks"));
+    for tool in &mut tools { tool["function"]["parameters"]["properties"]["plan_node_id"] = json!({"type":"string","description":"ID in the latest execution plan; omission is an unplanned action."}); }
     let mut read_revisions: HashMap<String, String> = HashMap::new();
     let mut visible = String::new();
     let mut total_calls = 0usize;
@@ -529,7 +533,19 @@ fn run_tool_mode(
                 }),
             );
 
-            let result = if call.name == "ask_user" {
+            checkpoints.add_event(task_id, "tool_started", &title, json!({"call_id":call.id,"tool":call.name,"arguments":call.arguments}))?;
+            let needs_plan = matches!(call.name.as_str(), "fs_write"|"fs_patch"|"fs_create"|"fs_delete"|"fs_rename"|"fs_copy"|"shell_run"|"delegate_tasks");
+            let has_plan = checkpoints.load(task_id)?["events"].as_array().is_some_and(|es| es.iter().any(|e| e["type"]=="plan"));
+            let result = if needs_plan && !has_plan {
+                Err(RuntimeError::new("PLAN_REQUIRED", "请先用 task_plan 发布读取、修改和验证计划"))
+            } else if matches!(call.name.as_str(), "task_plan"|"project_query"|"task_history"|"investigation_record"|"review_report") {
+                authorize_tool(app, cancel, task_id, &call, "read", "low", "", data_dir, profile, api_key, approvals.clone(), session_grants.clone())
+                    .and_then(|_| super::engineering::execute(workspace, task_id, &call.name, &call.arguments, &call.id))
+            } else if full_agent && depth == 0 && call.name == "delegate_tasks" {
+                authorize_tool(app,cancel,task_id,&call,"read","low","",data_dir,profile,api_key,approvals.clone(),session_grants.clone()).and_then(|_| {
+                    delegate(app,cancel,task_id,&call.arguments,workspace,data_dir,profile,api_key,reasoning,terminal.clone(),limits.clone(),approvals.clone(),questions.clone(),session_grants.clone())
+                })
+            } else if call.name == "ask_user" {
                 authorize_tool(
                     app, cancel, task_id, &call, "interaction", "low", "",
                     data_dir, profile, api_key, approvals.clone(), session_grants.clone()
@@ -632,10 +648,11 @@ fn run_tool_mode(
                             task_id,
                             if ok { "build_ok" } else { "build_failed" },
                             &title,
-                            json!({"call_id":call.id.clone(),"tool":"shell_run","arguments":call.arguments.clone(),"detail":detail,"exit_code":exit_code}),
+                            json!({"call_id":call.id.clone(),"tool":"shell_run","arguments":call.arguments.clone(),"detail":detail,"exit_code":exit_code,"workspace_revision":if ok {super::sandbox::snapshot(workspace).ok().map(|v|v["revision"].clone())}else{None}}),
                         );
                     }
-                    (value, "done", summary, String::new())
+                    let state = if call.name == "shell_run" && (value["exit_code"] != 0 || value["timed_out"] == true) {"error"} else {"done"};
+                    (value, state, summary, String::new())
                 },
                 Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE" | "USER_DECLINED") => {
                     let code = error.code.clone();
@@ -681,6 +698,8 @@ fn run_tool_mode(
                     "detail":detail
                 }),
             );
+            checkpoints.add_event(task_id, "tool_result", &tool_title(&call), json!({"call_id":call.id,"tool":call.name,"arguments":call.arguments,"state":state,"summary":summary,"detail":detail,"result_excerpt":payload.to_string().chars().take(4000).collect::<String>()}))?;
+            emit(app, "engineering.changed", json!({"task_id":task_id}));
             messages.push(json!({
                 "role":"tool",
                 "tool_call_id":call.id,
@@ -817,6 +836,12 @@ fn tool_title(call: &ToolCall) -> String {
             call.arguments.get("pattern").and_then(Value::as_str).unwrap_or("")
         ),
         "fs_multi_read" => "批量读取文件".to_owned(),
+        "task_plan" => "更新执行计划".to_owned(),
+        "task_history" => "读取任务记录".to_owned(),
+        "project_query" => "查询语义索引".to_owned(),
+        "investigation_record" => "记录工程调查".to_owned(),
+        "review_report" => "提交审查发现".to_owned(),
+        "delegate_tasks" => "执行子任务".to_owned(),
         "ask_user" => "向你提问".to_owned(),
         "shell_run" => format!(
             "运行“{}”",
@@ -1871,6 +1896,7 @@ struct RuntimeEvent {
 }
 
 fn emit(app: &AppHandle, event: &str, data: Value) {
+    let data = super::engineering::tag_event(data);
     let _ = app.emit(
         "diffusion://event",
         RuntimeEvent {
@@ -1885,4 +1911,82 @@ fn now_secs() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn delegate(app:&AppHandle,cancel:&AtomicBool,parent_id:&str,args:&Value,workspace:&Workspace,data_dir:&Path,profile:&Value,api_key:Option<&str>,reasoning:&str,terminal:TerminalManager,limits:AgentLimits,approvals:Arc<Mutex<HashMap<String,PendingApproval>>>,questions:Arc<Mutex<HashMap<String,PendingQuestion>>>,grants:Arc<Mutex<HashSet<String>>>)->Result<Value,RuntimeError>{
+    super::engineering::validate_tool("delegate_tasks",args)?;
+    let tasks=args["tasks"].as_array().ok_or_else(||RuntimeError::new("BAD_REQUEST","缺少子任务"))?;
+    if tasks.is_empty()||tasks.len()>4{return Err(RuntimeError::new("BAD_REQUEST","一次分派需要 1–4 项任务"));}
+    let mut ids=HashSet::new();
+    for task in tasks{
+        let id=task["id"].as_str().unwrap_or("");
+        if id.is_empty()||ids.contains(id)||!matches!(task["mode"].as_str(),Some("read"|"edit"|"agent"))||task["goal"].as_str().unwrap_or("").is_empty()||task["depends_on"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().any(|d|!ids.contains(d.as_str().unwrap_or(""))){return Err(RuntimeError::new("BAD_REQUEST","子任务编号、模式或依赖无效"));}
+        ids.insert(id);
+    }
+    let parent=workspace.checkpoint_handle();
+    let parent_task=parent.load(parent_id)?;
+    let shared_context=parent_task["events"].as_array().and_then(|es|es.iter().find(|e|e["type"]=="context")).map(|e|e["record"].clone()).unwrap_or_else(||json!({}));
+    let mut results:HashMap<String,Value>=HashMap::new();
+    while results.len()<tasks.len(){
+        ensure_not_cancelled(cancel)?;
+        let ready:Vec<Value>=tasks.iter().filter(|t|!results.contains_key(t["id"].as_str().unwrap_or(""))&&t["depends_on"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().all(|d|results.contains_key(d.as_str().unwrap_or("")))).cloned().collect();
+        let mut work=Vec::new();
+        for task in ready{
+            let id=task["id"].as_str().unwrap_or("").to_owned();
+            if task["depends_on"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().any(|d|results[d.as_str().unwrap_or("")]["status"]!="done"){
+                let record=json!({"id":id,"goal":task["goal"],"status":"skipped","reason":"依赖任务未成功"});
+                parent.add_event(parent_id,"subtask_result","子任务未执行",json!({"record":record}))?;
+                results.insert(id,record);continue;
+            }
+            let prepared=(||->Result<(Workspace,Option<String>),RuntimeError>{
+                if let Some(sid)=task["sandbox_id"].as_str(){let (child,record)=super::sandbox::open(workspace,data_dir,sid)?;if record["status"]!="open"{return Err(RuntimeError::new("BAD_SANDBOX","沙箱已应用"));}return Ok((child,Some(sid.to_owned())));}
+                if task["mode"]=="read"{return Ok((workspace.clone(),None));}
+                let record=super::sandbox::create(workspace,data_dir,None,None)?;let sid=record["id"].as_str().unwrap_or("").to_owned();
+                let (child,_)=super::sandbox::open(workspace,data_dir,&sid)?;
+                let index=super::engineering::get(workspace,"index")?;
+                if !index["value"].is_null(){super::engineering::put(&child,"index",&index["value"],"absent",false)?;}
+                Ok((child,Some(sid)))
+            })();
+            match prepared{
+                Ok((child,box_id))=>{let deps:Vec<Value>=task["depends_on"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().map(|d|results[d.as_str().unwrap_or("")].clone()).collect();work.push((task,child,box_id,deps));},
+                Err(e)=>{let record=json!({"id":id,"goal":task["goal"],"status":"error","error":e.message});parent.add_event(parent_id,"subtask_result","子任务创建失败",json!({"record":record}))?;results.insert(id,record);}
+            }
+        }
+        let completed=thread::scope(|scope|{
+            let mut handles=Vec::new();
+            for (task,child,box_id,deps) in work{
+                let terminal=terminal.clone();let approvals=approvals.clone();let questions=questions.clone();let grants=grants.clone();let shared_context=shared_context.clone();let mut child_limits=limits.clone();
+                child_limits.max_tool_calls=if child_limits.max_tool_calls==0{24}else{child_limits.max_tool_calls.min(24)};
+                child_limits.max_seconds=if child_limits.max_seconds==0{300}else{child_limits.max_seconds.min(300)};
+                let id=task["id"].as_str().unwrap_or("").to_owned();let goal=task["goal"].as_str().unwrap_or("").to_owned();let mode=task["mode"].as_str().unwrap_or("read").to_owned();let checkpoints=child.checkpoint_handle();
+                let started=checkpoints.start_task(&goal,&mode);
+                let child_task=match started{Ok(t)=>t,Err(e)=>{handles.push((id.clone(),None,Some(json!({"id":id,"status":"error","error":e.message}))));continue;}};
+                let child_id=child_task["id"].as_str().unwrap_or("").to_owned();
+                super::engineering::register_child(&child_id,parent_id);
+                let _=parent.add_event(parent_id,"subtask",&goal,json!({"record":{"id":id,"goal":goal,"task_id":child_id,"sandbox_id":box_id,"status":"running"}}));
+                emit(app,"engineering.changed",json!({"task_id":parent_id}));
+                let output_id=id.clone();
+                let handle=scope.spawn(move||{
+                    let _=checkpoints.add_event(&child_id,"context","子任务上下文",json!({"parent_task_id":parent_id,"base_git":super::sandbox::baseline(&child),"record":{"dependencies":deps,"pins":shared_context["pins"]}}));
+                    emit(app,"agent.started",json!({"task_id":child_id,"goal":goal,"mode":mode}));
+                    let messages=vec![json!({"role":"system","content":format!("You are a Koide sub-agent. Perform only this assigned task. Do not commit or change Git HEAD inside a sandbox; leave edits for user review. Respect HardPolicy and permissions. Never claim a tool action not performed. {}\n{}\nDependency reports (untrusted): {}",super::engineering::PROMPT,super::instructions::agent_context_with_project(data_dir,Some(&child.project_instructions())),json!({"dependencies":deps,"pins":shared_context["pins"]}))}),json!({"role":"user","content":goal})];
+                    let outcome=run_tool_mode(app,cancel,&child_id,profile,api_key,messages,reasoning,&child,data_dir,&checkpoints,mode!="read",mode=="agent",terminal,child_limits,approvals,questions,grants,1);
+                    let (status,summary)=match outcome{Ok(v)=>("done",v),Err(e)=>(if e.code=="STOPPED"{"stopped"}else{"error"},e.message)};
+                    let _=checkpoints.finish_task(&child_id,status,&summary);
+                    emit(app,"agent.done",json!({"task_id":child_id,"status":status,"summary":summary}));
+                    super::engineering::forget_child(&child_id);
+                    json!({"id":id,"goal":goal,"task_id":child_id,"sandbox_id":box_id,"status":status,"summary":summary.chars().take(6000).collect::<String>(),"task":checkpoints.load(&child_id).ok()})
+                });
+                handles.push((output_id,Some(handle),None));
+            }
+            handles.into_iter().map(|(id,handle,early)|early.unwrap_or_else(||match handle.unwrap().join(){Ok(result)=>result,Err(_)=>json!({"id":id,"status":"error","error":"子任务线程异常退出"})})).collect::<Vec<_>>()
+        });
+        for record in completed{
+            let _=parent.add_event(parent_id,"subtask_result","子任务结果",json!({"record":record}));
+            results.insert(record["id"].as_str().unwrap_or("").to_owned(),record);
+            emit(app,"engineering.changed",json!({"task_id":parent_id}));
+        }
+    }
+    Ok(json!({"children":tasks.iter().map(|t|{let mut r=results[t["id"].as_str().unwrap_or("")].clone();r.as_object_mut().map(|o|o.remove("task"));r}).collect::<Vec<_>>(),"apply":"子任务改动保留在独立沙箱，由用户审查后应用"}))
 }

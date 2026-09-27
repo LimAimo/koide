@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "diffusion-native"
-version = "1.0.0-rc.2"
+version = "1.4.0-alpha.1"
 dependencies = [
  "diffusion-saf",
  "koide-feedback",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "diffusion-saf"
-version = "1.0.0-rc.2"
+version = "1.4.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "koide-feedback"
-version = "1.0.0-rc.2"
+version = "1.4.0-alpha.1"
 dependencies = [
  "serde_json",
  "tauri",

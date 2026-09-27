@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .agent.conversations import ConversationStore
 from .agent.constitution import AIMO_CONSTITUTION
+from .agent import engineering
 from .agent.runtime import AgentRun, MODE_CLASSES
 from .git import ops as gitops
 from .protocol.net import lan_addresses
@@ -39,7 +40,7 @@ from .security.permissions import MODES, TOOL_SETTINGS, PermissionEngine
 from .security.policy import HardPolicy
 from .tools.builtin import build_registry
 
-VERSION = "1.0.0-rc.2"
+VERSION = "1.4.0-alpha.1"
 
 
 class Connection:
@@ -231,9 +232,33 @@ class BridgeApp:
             "agent": {"running": bool(self.agent), "task_id": self.agent.task_id if self.agent else None},
             "approvals": list(self.pending_approvals.values()),
             "questions": list(self.pending_questions.values()),
-            "tools": [t.describe() for t in self.tools.all()], "recent": self.settings.get("recent", []),
+            "tools": [t.describe() for t in self.tools.all()] + [{"id":s["name"], "permission_class":"read", "risk":"low", "input_schema":s["parameters"]} for s in engineering.specs()], "recent": self.settings.get("recent", []),
             "agent_modes": list(MODE_CLASSES), "approval_profile": self.settings.get("approval_profile"),
         }
+
+    async def rpc_engineering_get(self, p, conn):
+        from .agent import engineering
+        return engineering.get(self._ws(), p["key"])
+
+    async def rpc_engineering_put(self, p, conn):
+        from .agent import engineering
+        return engineering.put(self._ws(), p["key"], p["value"], p["base_revision"])
+
+    async def rpc_sandbox_create(self, p, conn):
+        from .agent import sandbox
+        return await asyncio.to_thread(sandbox.create, self._ws(), self.data_dir, p.get("task_id"), p.get("seq"))
+
+    async def rpc_sandbox_inspect(self, p, conn):
+        from .agent import sandbox
+        return await asyncio.to_thread(sandbox.inspect, self._ws(), self.data_dir, p["id"])
+
+    async def rpc_sandbox_apply(self, p, conn):
+        from .agent import sandbox
+        if self.agent:
+            raise WorkspaceError("BUSY", "请先停止任务再应用沙箱")
+        result = await asyncio.to_thread(sandbox.apply, self._ws(), self.data_dir, p["id"], p["revision"])
+        self.emit("workspace.changed", {"source": "sandbox"})
+        return result
 
     async def rpc_feedback_emit(self, p, conn):
         if p.get("kind") not in ("snap", "confirm", "complete", "restore"):
@@ -243,6 +268,7 @@ class BridgeApp:
 
     # ---- workspace ------------------------------------------------------------------------------------
     async def rpc_workspace_open(self, p, conn):
+        if self.agent: raise WorkspaceError("BUSY", "请先停止任务再切换工作区")
         roots = [Path(x).expanduser() for x in (p.get("paths") or [p["path"]])]
 
         def build():
@@ -256,6 +282,8 @@ class BridgeApp:
         self.terminals.close_all()
         if self.workspace:
             self.workspace.listeners.clear()
+        for task in ws.checkpoints.list_tasks(200):
+            if task["status"] == "running": ws.checkpoints.finish_task(task["id"], "interrupted", "运行环境已中断；工具调用没有重放")
         self.workspace = ws
         ws.listeners.append(self._on_change)
         if self._watch_task:
@@ -271,6 +299,7 @@ class BridgeApp:
     async def rpc_workspace_close(self, p, conn):
         if self.agent:
             self.agent.stop()
+            raise WorkspaceError("BUSY", "已请求停止任务，请等任务结束后关闭工作区")
         self.terminals.close_all()
         if self._watch_task:
             self._watch_task.cancel()
@@ -520,6 +549,8 @@ class BridgeApp:
         if not cid:
             cid = store.create(p["goal"])["id"]
         run = AgentRun(self, p["goal"], mode, p["profile"], limits, conversation_id=cid, reasoning=p.get("reasoning", "auto"), web_search=bool(p.get("web_search")))
+        from .agent import engineering
+        run.task_context = engineering.context(self.workspace, p.get("resume_task"))
         self.agent = run
 
         async def go():

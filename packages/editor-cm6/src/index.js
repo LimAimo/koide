@@ -204,3 +204,5 @@ class CM6Editor {
 
 export function createCM6Editor(options = {}) { return new CM6Editor(options); }
 export const version = metadata.version;
+
+export { indexSource, linkProject } from "./semantic.js";

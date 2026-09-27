@@ -14,7 +14,9 @@ from pathlib import Path
 from ..filesystem.workspace import Ctx, WorkspaceError
 from ..providers.openai_compat import ProviderError, get_provider
 from ..tools.builtin import ToolContext
-from ..tools.registry import validate
+from ..tools.registry import validate, Tool
+from . import engineering, sandbox
+import copy
 from .approval import make_reviewer
 from .constitution import AIMO_CONSTITUTION
 
@@ -150,13 +152,16 @@ class AgentRun:
         self.failed_runs = 0
         self.started = 0.0
         self.last_text = ""
+        self.task_context = None
+        self.parent_task_id = None
+        self.child_results = []
 
     # ------------------------------------------------------------------------------------------
     def stop(self) -> None:
         self.cancel.set()
 
     def _emit(self, event: str, **data) -> None:
-        self.app.emit(event, {"task_id": self.task_id, **data})
+        self.app.emit(event, {"task_id": self.task_id, "parent_task_id": self.parent_task_id, **data})
 
     def _status(self, state: str, detail: str = "") -> None:
         self._emit("agent.status", state=state, detail=detail)
@@ -178,7 +183,7 @@ class AgentRun:
         project_context = ws.project_context()
         if project_context:
             text += "\n" + project_context
-        return text
+        return text + engineering.PROMPT + "\nSelected context: " + json.dumps(self.task_context or {}, ensure_ascii=False)
 
     def _check_limits(self) -> None:
         if self.cancel.is_set():
@@ -200,12 +205,26 @@ class AgentRun:
         self.started = time.monotonic()
         task = ws.checkpoints.start_task(self.goal, self.mode)
         self.task_id = task["id"]
+        if self.task_context is None:
+            self.task_context = engineering.context(ws)
+        ws.checkpoints.add_event(self.task_id, "context", "任务上下文", record=self.task_context, parent_task_id=self.parent_task_id, base_git=sandbox.baseline(ws))
         self._emit("agent.started", goal=self.goal, mode=self.mode)
         try:
             profile, key = app.profiles.get(self.profile_id)
             profile = {**profile, "_reasoning_mode": self.reasoning, "_web_search": self.web_search}
             provider = get_provider(profile["kind"])
-            tools = app.tools.for_classes(MODE_CLASSES[self.mode])
+            tools = copy.deepcopy(app.tools.for_classes(MODE_CLASSES[self.mode]))
+            if self.mode != "chat":
+                for spec in engineering.specs():
+                    if spec["name"] == "delegate_tasks" and (self.mode != "agent" or self.parent_task_id):
+                        continue
+                    async def handle(tc, args, name=spec["name"]):
+                        if name == "delegate_tasks":
+                            return await self._delegate(args)
+                        return engineering.execute(ws, self.task_id, name, args, tc.call_id)
+                    tools.append(Tool(spec["name"], spec["description"], spec["parameters"], "read", "low", handle, timeout=0 if spec["name"] == "delegate_tasks" else 60, display_name={"task_plan":"执行计划","project_query":"语义索引","investigation_record":"工程调查","review_report":"代码审查","delegate_tasks":"子任务","task_history":"任务记录"}[spec["name"]]))
+                for tool in tools:
+                    tool.input_schema.setdefault("properties", {})["plan_node_id"] = {"type":"string"}
             by_id = {t.id: t for t in tools}
             specs = app.tools.openai_specs(tools) if tools else None
             reviewer = None
@@ -318,6 +337,20 @@ class AgentRun:
 
     # ------------------------------------------------------------------------------------------
     async def _execute(self, call: dict, by_id: dict, reviewer) -> dict:
+        ws = self.app.workspace
+        ws.checkpoints.add_event(self.task_id, "tool_started", _tool_label(call["name"], by_id.get(call["name"])), call_id=call["id"], tool=call["name"], arguments=call.get("arguments"))
+        try:
+            result = await self._execute_inner(call, by_id, reviewer)
+        except (Exception, asyncio.CancelledError) as error:
+            ws.checkpoints.add_event(self.task_id, "tool_result", "调用中断", call_id=call["id"], tool=call["name"], arguments=call.get("arguments"), state="stopped" if isinstance(error, (Stopped, asyncio.CancelledError)) else "error", detail=str(error))
+            self._emit("engineering.changed")
+            raise
+        failed = "error" in result or (call["name"] == "shell_run" and (result.get("exit_code") != 0 or result.get("timed_out")))
+        ws.checkpoints.add_event(self.task_id, "tool_result", _tool_label(call["name"], by_id.get(call["name"])), call_id=call["id"], tool=call["name"], arguments=call.get("arguments"), state="error" if failed else "done", result_excerpt=json.dumps(result, ensure_ascii=False)[:4000])
+        self._emit("engineering.changed")
+        return result
+
+    async def _execute_inner(self, call: dict, by_id: dict, reviewer) -> dict:
         app, ws = self.app, self.app.workspace
         name, cid = call["name"], call["id"]
         tool = by_id.get(name)
@@ -345,6 +378,9 @@ class AgentRun:
             card("error", title=tool.title(args) or _tool_label(name, tool), detail="; ".join(errs[:3]))
             return {"error": {"code": "SCHEMA_VALIDATION", "message": "; ".join(errs)}}
 
+        if (tool.permission_class in ("write", "delete") or name in ("shell_run", "delegate_tasks")) and not any(e["type"] == "plan" for e in ws.checkpoints.load(self.task_id)["events"]):
+            card("error", title="需要执行计划", detail="请先调用 task_plan")
+            return {"error": {"code":"PLAN_REQUIRED", "message":"先用 task_plan 发布读取、修改与验证计划"}}
         title = tool.title(args) or _tool_label(name, tool)
         card("pending", title=title, args=args, activity=tool.activity)
         self.tool_calls += 1
@@ -402,7 +438,7 @@ class AgentRun:
             ws.checkpoints.add_event(self.task_id, "build_ok" if ok else "build_failed",
                                      f"{'通过' if ok else '失败'}：{args['command'][:80]}",
                                      detail=result["output"][-1500:], exit_code=result["exit_code"],
-                                     call_id=cid, tool=name, arguments=args)
+                                     call_id=cid, tool=name, arguments=args, workspace_revision=(sandbox.fingerprint(ws) if ok else None))
         elif name == "fs_read":
             summary = f"{result.get('total_lines', '?')} 行"
             ws.checkpoints.add_event(self.task_id, "read", f"读取 {result['path']}",
@@ -423,10 +459,63 @@ class AgentRun:
             summary = "已回答" if len(pairs) <= 1 else f"已回答 {len(pairs)} 个问题"
             text = "\n".join(f'对"{p["question"]}"的回答：{p["answer"]}' for p in pairs) or "已回答"
             self.transcript.append({"role": "user", "text": text, "ts": time.time()})
-        card("done", title=title, summary=summary, activity=tool.activity)
+        result_state = "error" if name == "shell_run" and (result.get("exit_code") != 0 or result.get("timed_out")) else "done"
+        card(result_state, title=title, summary=summary, activity=tool.activity)
         self.transcript.append({"role": "tool", "text": title, "tool": name, "args": args,
-                                "state": "done", "summary": summary, "ts": time.time()})
+                                "state": result_state, "summary": summary, "ts": time.time()})
         return result
+
+    async def _delegate(self, args):
+        if self.parent_task_id:
+            raise WorkspaceError("DELEGATION_DEPTH", "子任务不能再次分派")
+        tasks = args.get("tasks", [])
+        if not 1 <= len(tasks) <= 4:
+            raise WorkspaceError("BAD_REQUEST", "一次分派需要 1–4 项任务")
+        ids = set()
+        for spec in tasks:
+            if not spec.get("id") or spec["id"] in ids or any(x not in ids for x in spec.get("depends_on", [])):
+                raise WorkspaceError("BAD_REQUEST", "子任务编号重复或依赖无效")
+            ids.add(spec["id"])
+        results = {}
+        pending = list(tasks)
+        async def execute(spec):
+            if self.cancel.is_set():
+                return {"id":spec["id"], "status":"stopped"}
+            if any(results[d]["status"] != "done" for d in spec.get("depends_on", [])):
+                return {"id":spec["id"], "status":"skipped", "reason":"依赖任务未成功"}
+            shadow = copy.copy(self.app)
+            box = None
+            try:
+                if spec.get("sandbox_id"):
+                    shadow.workspace, box = sandbox.open_workspace(self.app.workspace, self.app.data_dir, spec["sandbox_id"])
+                    if box["status"] != "open": raise WorkspaceError("BAD_SANDBOX", "沙箱已应用")
+                elif spec["mode"] != "read":
+                    box = await asyncio.to_thread(sandbox.create, self.app.workspace, self.app.data_dir)
+                    shadow.workspace, _ = sandbox.open_workspace(self.app.workspace, self.app.data_dir, box["id"])
+                child = AgentRun(shadow, spec["goal"], spec["mode"], self.profile_id, {**self.limits, "max_tool_calls": min(self.limits.get("max_tool_calls") or 24, 24), "max_seconds": min(self.limits.get("max_seconds") or 300, 300)}, reasoning=self.reasoning)
+                child.parent_task_id = self.task_id
+                child.cancel = self.cancel
+                child.task_context = {"pins":(self.task_context or {}).get("pins", []), "parent_goal":self.goal, "sandbox_rule":"不要提交或移动 Git HEAD；保留改动由用户审查", "dependencies":[results[d] for d in spec.get("depends_on", [])]}
+                shadow.emit = lambda event, data: self.app.emit(event, {**data, "task_id":data.get("task_id") or child.task_id, "parent_task_id":self.task_id})
+                if box:
+                    shadow.workspace.listeners.append(lambda change: shadow.emit("fs.changed", change.to_dict()))
+                    index = engineering.get(self.app.workspace, "index")["value"]
+                    if index: engineering.put(shadow.workspace, "index", index, engineering.get(shadow.workspace, "index")["revision"])
+                self.app.workspace.checkpoints.add_event(self.task_id, "subtask", spec["goal"], record={"id":spec["id"], "goal":spec["goal"], "sandbox_id":box["id"] if box else None, "status":"running"})
+                self._emit("engineering.changed")
+                await child.run()
+                actual = shadow.workspace.checkpoints.load(child.task_id)
+                return {"id":spec["id"], "goal":spec["goal"], "task_id":child.task_id, "sandbox_id":box["id"] if box else None, "status":actual["status"], "task":actual}
+            except Exception as error:
+                return {"id":spec["id"], "status":"error", "error":str(error), "sandbox_id":box["id"] if box else None}
+        while pending:
+            ready = [s for s in pending if all(d in results for d in s.get("depends_on", []))]
+            for spec, result in zip(ready, await asyncio.gather(*(execute(s) for s in ready))):
+                results[spec["id"]] = result
+                pending.remove(spec)
+                self.app.workspace.checkpoints.add_event(self.task_id, "subtask_result", spec["goal"], record=result)
+                self._emit("engineering.changed")
+        return {"children":[{k:v for k,v in r.items() if k != "task"} for r in results.values()], "apply":"子任务改动保留在各自沙箱，由用户审查后应用"}
 
     async def _ask_user(self, tool, args, title, decision, call_id) -> dict:
         fut = self.app.request_approval({

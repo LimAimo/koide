@@ -171,7 +171,7 @@ test("文件树兼容 Native 数组返回，应用 UI 默认禁止长按选择�
   const tree = fs.readFileSync(new URL("../../apps/web/src/components/file-tree.js", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../../apps/web/src/styles/base.css", import.meta.url), "utf8");
   assert.match(tree, /Array\.isArray\(res\)\s*\?\s*res/);
-  assert.match(tree, /Array\.isArray\(res\?\.nodes\)/);
+  // Native 数组与 Bridge 对象的实际加载行为在 ui-polish.test.mjs 覆盖。
   assert.match(css, /body[^{}]*\{[^}]*user-select:\s*none/s);
   assert.match(css, /input, textarea[^{}]*\{[^}]*user-select:\s*text/s);
 });

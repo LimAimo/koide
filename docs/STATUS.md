@@ -1,6 +1,6 @@
-# Koide 1.0.0-rc.2 当前状态
+# Koide 1.4.0-alpha.1 当前状态
 
-Koide 当前版本标识为 `1.0.0-rc.2`，处于 `dev/1.0.0` 候选版准备阶段，尚未发布。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
+Koide 当前版本为 `1.4.0-alpha.1`。按用户本轮要求提前接入原 1.1–1.4 功能，仍在 `dev/1.0.0`，属于开发预览，尚未发布。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
 
 ## Native 主链
 
@@ -41,7 +41,7 @@ Koide 当前版本标识为 `1.0.0-rc.2`，处于 `dev/1.0.0` 候选版准备阶
 
 ## Runtime API
 
-UI 只通过 `apps/web/src/services/runtime/` 调用领域能力。当前 Native dispatch 覆盖全部 73 个业务方法（新增 `feedback.emit`）；其中 `devices.pair_code` 在 Native 模式明确返回 `LAN_OFF`，因为 Native LAN server 尚未提供。Windows/Bridge 的触觉返回 `supported=false, performed=false`，不能伪装已执行。
+UI 只通过 `apps/web/src/services/runtime/` 调用领域能力。当前 Native dispatch 覆盖全部 78 个业务方法（工程记录 2 项、沙箱 3 项）；其中 `devices.pair_code` 在 Native 模式明确返回 `LAN_OFF`，因为 Native LAN server 尚未提供。Windows/Bridge 的触觉返回 `supported=false, performed=false`，不能伪装已执行。
 
 ## Android SAF
 
@@ -61,10 +61,15 @@ OpenAI-compatible、Anthropic 与 Gemini Native 均有 Agent 调用路径；交�
 
 如果以后加入 Rust Remote Runtime，可以再决定是否删除 Bridge；1.0 不把这件事作为正式发布的前提。
 
-## RC 状态
+## 工程能力开发预览
 
-Product Polish 提交 `5a5bf1271e63b3b257e0ce5e4f30069633396cee` 的 [Stable Build #105](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36324930485) 已逐项核对 Job/Step：Web UI + CodeMirror 6、Bridge、Native Core、Windows x64、Android ARM64 均通过，Release 步骤跳过。后续版本标识收尾提交以自己的 CI 为准，不能复用这次通过结论。
+本轮加入语义索引/架构地图、显式 Context Pin、持久任务、执行图/调查/Why、只读代码审查、真实多 Agent、Git worktree、历史分叉/A-B 对比、UI Inspector 与视觉回归。Web、Native 与 Bridge 都有对应接入；实现范围和明确限制见 [ENGINEERING_1X.md](ENGINEERING_1X.md)，不以未来规划替代已实现说明。
 
-`64028e1` 的 [Stable Build #106](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36325820428) 只有 Web 回归失败：设置页测试写死旧版本，CodeMirror 构建及另外四项通过。已依据日志修正断言；RC.2 的新实现与版本同步等待本次提交自己的 CI，不沿用前次通过结论。
+## CI 与验收状态
 
-已同步 `1.0.0-rc.2` 与 Android `versionCode=10002`，未发布 RC、未合并 `main`。四块核心实现均已接入；全局视觉一致性和设备验收尚未全部完成，触觉手感、安全区、软键盘和 SAF 提供商差异仍需真机验收。1.x 功能均为后续计划。详见 [产品打磨记录](PRODUCT_POLISH.md) 和 [1.x 路线](ROADMAP.md)。
+- Product Polish `5a5bf12` 的 [Stable Build #105](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36324930485) 五项通过，仅证明当时的提交。
+- `64028e1` 的 #106 只有 Web 设置页版本断言失败，已在 rc.2 修复。
+- rc.2 `63f327c` 的 [Stable Build #107](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36328057552)：Native、Bridge、Windows、Android 通过；Web 构建通过，三处回归断言/测试环境失败。本轮按具体日志修正，未把旧绿灯视为新功能验收。
+- `1.4.0-alpha.1` 的完整结果以本次提交 GitHub Actions 为准。按用户要求未在本地运行测试或构建。
+
+已同步 Android `versionCode=10401`。未创建 Release/Tag、未合并 main。原 1.0 的全局视觉一致性、真机触觉/安全区/软键盘与 SAF 提供商差异仍需设备验收。新功能同样需要实机与真实 Provider 使用反馈；不能仅凭代码已接入宣称产品全部验收完成。

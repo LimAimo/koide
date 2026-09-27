@@ -10,7 +10,7 @@ import { lineDiff, validationStories } from "../services/history-diff.js";
 import { createHistoryDiff, diffStats } from "./history-diff.js";
 import { emitFeedback } from "../services/feedback.js";
 
-const STATUS = { done: "已完成", incomplete: "可能未完成", stopped: "已停止", error: "失败", running: "进行中" };
+const STATUS = { interrupted: "已中断", done: "已完成", incomplete: "可能未完成", stopped: "已停止", error: "失败", running: "进行中" };
 const EVENT_LABEL = {
   task_started: "开始", read: "探索", edit: "修改", build_failed: "验证失败",
   build_ok: "验证通过", task_complete: "完成", task_status: "结束",
@@ -102,9 +102,18 @@ export function openTimeMachine(taskId = null) {
         h("button", { class: "btn filled small danger", type: "button", disabled: !anyEdits, onclick: () => revertTask(id) }, icon("undo", 16), "恢复到任务开始之前"),
         ...touched.map((p) => h("button", { class: "btn outlined small", type: "button", onclick: () => revertFile(id, p) }, "撤销 " + p.split("/").pop()))) : null]);
 
+    body.appendChild(h("button", { class: "btn tonal", type: "button", onclick: async () => (await import("./engineering.js")).openEngineering("tasks", id) }, "执行图与调查记录"));
     const tl = h("div", { class: "tl" });
     for (const ev of m.events) {
       const acts = h("div", { class: "acts" });
+      if (ev.call_id) acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: async () => {
+        const result = m.events.find((e) => e.call_id === ev.call_id && e.type === "tool_result") || ev;
+        (await import("./engineering.js")).openWhy(m, result);
+      } }, "Why?"));
+      if (ev.type === "edit" || ev.type === "build_ok" || ev.type === "build_failed") acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: async () => {
+        try { await runtime.sandbox.create({ task_id: id, seq: ev.seq }); toast("已从该节点创建独立分支"); (await import("./engineering.js")).openEngineering("sandbox"); }
+        catch (e) { toast(e.message); }
+      } }, "从这里分叉"));
       if (ev.type === "edit") {
         if (ev.kind !== "rename") acts.appendChild(h("button", { class: "btn tonal small", type: "button", onclick: () => replay(id, ev) }, icon("play", 14), "查看改动"));
         if (!ev.reverted && ev.kind !== "rename") acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: () => revertStep(id, ev) }, "撤销到这一步之前"));

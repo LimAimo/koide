@@ -38,7 +38,7 @@ Native Core 会调用 SAF picker，并把最终 `{kind, uri, name}` 写入 recen
 
 ## Native 语义
 
-当前 Runtime 共 73 个业务方法，Native dispatch 全部有明确路由。存在平台不支持的能力时必须返回明确错误或 capability=false，不能使用固定空值假装成功。
+当前 Runtime 共 78 个业务方法，Native dispatch 全部有明确路由。存在平台不支持的能力时必须返回明确错误或 capability=false，不能使用固定空值假装成功。
 
 ## 语义反馈
 
@@ -71,3 +71,21 @@ Native Core 会调用 SAF picker，并把最终 `{kind, uri, name}` 写入 recen
 UI 的文件统计是逐步修改量之和，包含已撤销事件，不表示整任务的净 Git Diff；行比较具有计算预算，超限、非文本或不可用事件不显示猜测的增删数。Diff 内容通过 DOM 文本节点渲染。
 
 验证故事线依据 `arguments.command` 和 `arguments.cwd` 的精确关联；缺少这些元数据的旧失败记录不自动认定为已修复。无编辑重试和修改后通过使用不同文案，后续编辑/撤销会提示仍需验证。
+
+## 1.x 工程记录与沙箱
+
+| Runtime 方法 | 参数 | 结果/约束 |
+|---|---|---|
+| `engineering.get` | `{key}` | `{revision,value}`；key 为 context/index/visual/sandboxes，缺失 value=null、revision=absent |
+| `engineering.put` | `{key,value,base_revision}` | revision 冲突返回 CONFLICT；8 MB 上限与结构校验；sandboxes 仅后端内部写入 |
+| `sandbox.create` | `{task_id?,seq?}` | 创建已登记的 Git worktree；历史分叉要求干净基准与固定快照 |
+| `sandbox.inspect` | `{id}` | 基准、逐文件前后文本/revision、任务记录、当前内容是否有真实通过的验证 |
+| `sandbox.apply` | `{id,revision}` | 用户显式应用；当前沙箱验证、主工作区 revision、运行中任务门禁；返回 task_id、applied |
+
+`agent.start` 可传 `resume_task`，读取该任务及其最后 120 条事件进入明确标记的续接上下文，新任务独立留档。更早记录通过 `task_history` 分页读取；该工具仅可读取当前任务和用户明确续接的任务。
+
+新增模型工具：`task_plan`、`project_query`、`investigation_record`、`review_report`、`delegate_tasks`、`task_history`。具体 JSON Schema 是 `koide_contracts/engineering-tools.json`。实际工具调用可携带 `plan_node_id`，不是普通文本解析。工程工具不能由模型直接应用沙箱。
+
+新增 checkpoint 类型：context、plan、tool_started、tool_result、investigation、review、subtask、subtask_result。调用失败也保存；节点状态由真实结果推导。`engineering.changed` 通知记录更新。子任务事件带 `parent_task_id`；普通 `runtime.on` 隔离子任务的聊天、文件和终端事件，工程视图用 `runtime.onAll` 查看全部；审批/用户提问仍可到达主界面。
+
+`workspace.open/close` 在任务未退出时返回 BUSY / AGENT_BUSY；关闭先请求协作停止，不会在仍执行时移走工作区。Native 同步 Provider read 的延迟仍然存在。沙箱部分应用失败携带可恢复的检查点；界面不得宣称整批成功。

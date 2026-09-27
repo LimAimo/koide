@@ -2,7 +2,7 @@
 
 日期：2026-09-27。开发分支：`dev/1.0.0`。本轮以 `4e67440d6aefa4867a11f37360b5a9a393a0a2c7` 为基线，不修改交接快照分支，不合并 main，不创建 Release / Tag。
 
-当前版本标识：`1.0.0-rc.2`（候选版准备，尚未发布）。Android 安装版本码为 `10002`。
+本页记录 1.0 Product Polish 阶段；当时版本为 `1.0.0-rc.2`、Android 安装版本码 `10002`。当前版本已进入 `1.4.0-alpha.1` 开发预览，见 [STATUS.md](STATUS.md)。以下历史记录不表示真机验收已完成。
 
 ## 交接需求完成度
 
@@ -38,7 +38,7 @@
 - 文件统计是逐步累计，包含撤销记录；不是整任务净差异。
 - 超出行比较预算、二进制和无法核对的旧历史明确降级；预览最多渲染 1200 行，统计仅在完整比较成功时提供。
 - Runtime API 业务方法数量为 73；新增 `feedback.emit`。Native / Bridge 均有明确响应，不提供任意振动模式或远端振动。
-- 原生触觉是否真正执行由 Android 系统/设备决定；提示音需要启用并有用户交互解锁，详情见 [FEEDBACK.md](FEEDBACK.md)。1.x 功能仍未接入。保留 Android one-shot shell、Native LAN 尚未实现、同步网络读取停止可能延迟等现有限制。
+- 原生触觉是否真正执行由 Android 系统/设备决定；提示音需要启用并有用户交互解锁，详情见 [FEEDBACK.md](FEEDBACK.md)。此阶段尚未接入的 1.x 功能已在后续开发预览实现，见 [ENGINEERING_1X.md](ENGINEERING_1X.md)。保留 Android one-shot shell、Native LAN 尚未实现、同步网络读取停止可能延迟等现有限制。
 - 本轮没有更换 UI 风格，也没有重写 Diffusion 动画系统。
 
 ## 验证记录与发布状态

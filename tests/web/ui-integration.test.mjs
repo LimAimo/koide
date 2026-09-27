@@ -36,9 +36,12 @@ function startMockLlm() {
         for (let i = 0; i < s.length; i += 9) sse({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: s.slice(i, i + 9) } }] } }] });
         sse({ choices: [{ delta: {}, finish_reason: "tool_calls" }] });
       };
-      const turn = msgs.filter((m) => m.role === "tool").length;
+      const turn = msgs.filter((m) => m.role === "tool" && m.tool_call_id !== "plan0").length;
       const goal = [...msgs].reverse().find((m) => m.role === "user").content;   // 有对话历史时，以最后一条用户消息为准
-      if (goal.includes("memory check")) {
+      const planned = msgs.some((m) => m.role === "tool" && m.tool_call_id === "plan0");
+      if (!planned && !goal.includes("memory check") && !goal.includes("question please")) {
+        tool("plan0", "task_plan", { nodes: [{ id: "read", title: "读取目标文件", kind: "inspect" }, { id: "edit", title: "修正文件", kind: "edit", depends_on: ["read"] }] });
+      } else if (goal.includes("memory check")) {
         const system = msgs.find((m) => m.role === "system")?.content || "";
         sse({ choices: [{ delta: { content: system.includes("MEMORY_SENTINEL") ? "MEMORY_OK" : "MEMORY_MISSING" } }] });
         sse({ choices: [{ delta: {}, finish_reason: "stop" }] });

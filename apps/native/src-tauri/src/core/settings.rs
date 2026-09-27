@@ -193,6 +193,12 @@ impl SettingsStore {
 
 pub fn tool_descriptions() -> Vec<Value> {
     vec![
+        tool("task_plan", "read", "low"),
+        tool("task_history", "read", "low"),
+        tool("project_query", "read", "low"),
+        tool("investigation_record", "read", "low"),
+        tool("review_report", "read", "low"),
+        tool("delegate_tasks", "read", "low"),
         tool("fs_read", "read", "low"),
         tool("fs_list", "read", "low"),
         tool("fs_search", "read", "low"),

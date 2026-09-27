@@ -1,0 +1,26 @@
+.engineering { min-width: 0; }
+.engineering-tabs { display: flex; gap: 4px; overflow-x: auto; position: sticky; top: -16px; z-index: 2; background: var(--surface); padding: 8px 0; }
+.engineering-tabs button { flex-shrink: 0; min-height: 40px; }
+.engineering-tabs [aria-selected="true"] { background: var(--secondary-container); color: var(--on-secondary-container); }
+.engineering-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--outline-variant); }
+.engineering-copy { min-width: 0; flex: 1; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.engineering-copy small, .engineering-note { color: var(--on-surface-variant); white-space: pre-wrap; line-height: 1.5; }
+.engineering-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.engineering-actions button { min-height: 40px; }
+.engineering-fold { margin: 12px 0; }
+.engineering-fold > summary { min-height: 44px; padding: 10px 4px; cursor: pointer; font-weight: 600; }
+.engineering-fold[open] > summary { color: var(--primary); }
+.engineering-code { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font: 12px/1.5 var(--font-code); user-select: text; padding: 12px; border-radius: 12px; background: var(--surface-2); }
+.engineering-graph { display: grid; gap: 8px; position: relative; margin: 8px 0; padding-left: 40px; }
+.engineering-graph-node { position: relative; padding: 6px 10px; border-radius: 12px; border: 1px solid var(--outline-variant); display: grid; background: var(--surface-1); }
+.engineering-edges { position: absolute; left: 0; top: 0; pointer-events: none; }
+.engineering-graph-node[data-status="failed"] { border-color: var(--error); }
+.engineering-graph-node[data-status="completed"] { border-color: var(--primary); }
+.engineering-node-button { background: none; border: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; min-height: 44px; padding: 4px 0; overflow-wrap: anywhere; }
+.engineering-node-button:active { transform: scale(.98); }
+.engineering-dependency { color: var(--on-surface-variant); overflow-wrap: anywhere; }
+.engineering-investigation { border-left: 2px solid var(--primary); padding-left: 12px; margin: 12px 0; }
+.engineering-preview { width: 100%; overflow: auto; overscroll-behavior: contain; }
+.engineering-preview iframe { display: block; max-width: none; border: 1px solid var(--outline-variant); background: white; }
+.engineering-screenshot { display: inline-block; max-width: 100%; max-height: 500px; object-fit: contain; margin: 8px 0; }
+@media(max-width: 600px) { .engineering-row { flex-wrap: wrap; } .engineering-copy { flex-basis: 100%; } }

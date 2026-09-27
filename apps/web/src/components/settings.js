@@ -201,7 +201,7 @@ function agentSection(instructionDraft) {
   ]);
 }
 
-const TOOL_ZH = { fs_read: "读取文件", fs_list: "列出目录", fs_search: "搜索文本", fs_glob: "按名称查找文件", fs_multi_read: "批量读取文件", fs_patch: "精确修改文件", fs_write: "新建或覆盖文件", fs_delete: "删除（先进回收站）", fs_rename: "重命名或移动", shell_run: "运行 shell 命令", terminal_read: "读取终端输出", ask_user: "向你提问", web_fetch: "访问网页" };
+const TOOL_ZH = { task_plan: "执行计划", task_history: "任务记录", project_query: "语义查询", investigation_record: "工程调查", review_report: "审查报告", delegate_tasks: "分派子任务", fs_read: "读取文件", fs_list: "列出目录", fs_search: "搜索文本", fs_glob: "按名称查找文件", fs_multi_read: "批量读取文件", fs_patch: "精确修改文件", fs_write: "新建或覆盖文件", fs_delete: "删除（先进回收站）", fs_rename: "重命名或移动", shell_run: "运行 shell 命令", terminal_read: "读取终端输出", ask_user: "向你提问", web_fetch: "访问网页" };
 const CLASS_ZH = { read: "读取", write: "写入", delete: "删除", exec: "执行命令", network: "联网", interaction: "用户交互" };
 const RISK_ZH = { low: "低风险", medium: "中风险", high: "高风险" };
 function permissionsSection() {

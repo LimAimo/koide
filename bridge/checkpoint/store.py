@@ -47,6 +47,8 @@ class CheckpointStore:
 
     # ---- tasks -------------------------------------------------------------------------------
     def _path(self, task_id: str) -> Path:
+        if not isinstance(task_id, str) or not task_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in task_id):
+            raise ValueError("Checkpoint 任务编号无效")
         return self.base / "tasks" / f"{task_id}.json"
 
     def _save(self, m: dict) -> None:
@@ -79,7 +81,7 @@ class CheckpointStore:
             m["status"], m["ended"] = status, time.time()
             self._save(m)
         self.add_event(task_id, "task_complete" if status == "done" else f"task_{status}",
-                       {"done": "任务完成", "incomplete": "任务可能未完成", "stopped": "任务已停止", "error": "任务失败"}.get(status, status),
+                       {"done": "任务完成", "incomplete": "任务可能未完成", "stopped": "任务已停止", "error": "任务失败", "interrupted": "任务已中断"}.get(status, status),
                        detail=summary[:500])
 
     def add_event(self, task_id: str, type_: str, title: str, **extra) -> dict:
