@@ -52,7 +52,10 @@ function advanceLiveStage(id) {
     const target = stages.findIndex((x) => x.id === id);
     const current = stages.reduce((n, x, i) => (x.state === "active" || x.state === "done" ? Math.max(n, i) : n), 0);
     if (target < 0 || target <= current) return {};
-    for (let i = 0; i < target; i++) if (["pending", "active"].includes(stages[i].state)) stages[i].state = "done";
+    for (let i = 0; i < target; i++) {
+      if (stages[i].state === "active") stages[i].state = "done";
+      else if (stages[i].state === "pending") stages[i].state = "skipped";
+    }
     if (!["done", "error", "stopped"].includes(stages[target].state)) stages[target].state = "active";
     return { live: { ...s.live, stages } };
   });
