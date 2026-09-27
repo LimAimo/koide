@@ -382,3 +382,10 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
 @media(max-width:600px){.tl-path{margin-left:0;padding-left:0;white-space:normal;overflow-wrap:anywhere}}
 
 .tl-reverted{display:inline-flex;margin-left:8px;padding:1px 6px;border-radius:999px;border:1px solid var(--outline-variant);color:var(--on-surface-variant);font-size:10px;font-weight:500}
+
+.tm-story{display:flex;gap:10px;align-items:flex-start;margin:0 0 12px;padding:10px 12px;border:1px solid var(--outline-variant);border-radius:14px;background:color-mix(in srgb,var(--surface-container-high) 82%,transparent)}
+.tm-story strong,.tm-story small{display:block}.tm-story small{margin-top:2px}
+.tm-story.fixed .material-symbols-rounded{color:var(--primary)}
+.tm-story.open .material-symbols-rounded{color:var(--error)}
+.tl-call{display:block;margin:3px 0 0 64px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}
+@media(max-width:600px){.tl-call{margin-left:0}}
