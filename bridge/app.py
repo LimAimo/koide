@@ -760,12 +760,12 @@ class BridgeApp:
 
     async def rpc_instructions_get(self, p, conn):
         g = self.data_dir / "global_instructions.md"
-        out = {"global": g.read_text("utf-8", "replace") if g.is_file() else "", "project_exists": False, "project": ""}
-        if self.workspace:
-            a = self.workspace.primary / "AGENTS.md"
-            if a.is_file():
-                out["project_exists"], out["project"] = True, a.read_text("utf-8", "replace")[:8000]
-        return out
+        project = self.workspace.project_context() if self.workspace else ""
+        return {
+            "global": g.read_text("utf-8", "replace") if g.is_file() else "",
+            "project_exists": bool(project),
+            "project": project,
+        }
 
     async def rpc_instructions_set(self, p, conn):
         text = str(p.get("global", ""))
