@@ -6,7 +6,13 @@ import { openSheet, confirmDialog } from "./overlays.js";
 import { CodeEditor } from "../editor/code-editor.js";
 import { runtime } from "../services/app.js";
 
-const STATUS = { done: "已完成", stopped: "已停止", error: "失败", running: "进行中" };
+const STATUS = { done: "已完成", incomplete: "可能未完成", stopped: "已停止", error: "失败", running: "进行中" };
+const EVENT_LABEL = {
+  task_started: "开始", read: "探索", edit: "修改", build_failed: "验证失败",
+  build_ok: "验证通过", task_complete: "完成", task_status: "结束",
+};
+const eventDetail = (ev) => ev.detail || ev.summary || "";
+const eventPath = (ev) => ev.path || ev.arguments?.path || "";
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtDate = (ts) => new Date(ts * 1000).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -65,9 +71,16 @@ export function openTimeMachine(taskId = null) {
         if (ev.kind !== "rename") acts.appendChild(h("button", { class: "btn tonal small", type: "button", onclick: () => replay(id, ev) }, icon("play", 14), "Replay"));
         if (!ev.reverted && ev.kind !== "rename") acts.appendChild(h("button", { class: "btn text small", type: "button", onclick: () => revertStep(id, ev) }, "撤销这一步"));
       }
+      const detail = eventDetail(ev);
+      const path = eventPath(ev);
       tl.appendChild(h("div", { class: `tl-ev ${ev.type}${ev.reverted ? " reverted" : ""}` },
-        h("div", { class: "time" }, fmtTime(ev.ts)), h("div", { class: "ttl" }, ev.title),
-        ev.detail && ev.type.startsWith("build") ? h("pre", null, ev.detail) : null, acts.children.length ? acts : null));
+        h("div", { class: "time" }, fmtTime(ev.ts)),
+        h("div", { class: "ttl" },
+          EVENT_LABEL[ev.type] ? h("span", { class: "tl-kind" }, EVENT_LABEL[ev.type]) : null,
+          ev.title),
+        path ? h("div", { class: "muted tl-path", title: path }, path) : null,
+        detail && (ev.type.startsWith("build") || ev.type === "task_status") ? h("pre", null, detail) : null,
+        acts.children.length ? acts : null));
     }
     body.appendChild(tl);
   }
