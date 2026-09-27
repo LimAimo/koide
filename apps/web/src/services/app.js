@@ -326,9 +326,14 @@ export async function startAgent(goal) {
   if (!profile) throw new Error("请先在「设置」里添加一个模型服务商");
   const t = activeTab();
   const goalText = t ? `${goal}\n\n(The user currently has "${t.path}" open in the editor.)` : goal;
-  const r = await runtime.agent.start({ goal: goalText, profile, mode: s.agent.mode, reasoning: s.agent.reasoning, web_search: !!s.agent.webSearch, limits: s.agent.limits, conversation_id: state.get().conversationId });
-  if (r.conversation_id && r.conversation_id !== state.get().conversationId) setConversation(r.conversation_id);
-  return r;
+  try {
+    const r = await runtime.agent.start({ goal: goalText, profile, mode: s.agent.mode, reasoning: s.agent.reasoning, web_search: !!s.agent.webSearch, limits: s.agent.limits, conversation_id: state.get().conversationId });
+    if (r.conversation_id && r.conversation_id !== state.get().conversationId) setConversation(r.conversation_id);
+    return r;
+  } catch (e) {
+    setLive({ status: "error", finishedAt: Date.now() });
+    throw e;
+  }
 }
 export const stopAgent = () => runtime.agent.stop();
 export const respondApproval = (id, allow, scope = "once") => runtime.approval.respond({ approval_id: id, allow, scope });
