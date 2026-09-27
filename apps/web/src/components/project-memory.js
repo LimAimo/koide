@@ -23,8 +23,9 @@ async function loadMemory() {
     const res = await runtime.files.read({ path: PROJECT_MEMORY_PATH });
     if (res.binary) throw new Error("项目记忆文件不是文本文件");
     return { text: res.content || "", revision: res.revision || null, exists: true };
-  } catch {
-    return { text: TEMPLATE, revision: null, exists: false };
+  } catch (e) {
+    if (e?.code === "NOT_FOUND") return { text: TEMPLATE, revision: null, exists: false };
+    throw e;
   }
 }
 
@@ -32,7 +33,8 @@ async function createMemory(text) {
   try { await runtime.files.create({ path: ".koide", kind: "dir", content: "" }); } catch { /* already exists */ }
   try {
     return await runtime.files.create({ path: PROJECT_MEMORY_PATH, kind: "file", content: text });
-  } catch {
+  } catch (e) {
+    if (e?.code !== "ALREADY_EXISTS") throw e;
     const current = await runtime.files.read({ path: PROJECT_MEMORY_PATH });
     return runtime.files.write({ path: PROJECT_MEMORY_PATH, content: text, base_revision: current.revision });
   }
