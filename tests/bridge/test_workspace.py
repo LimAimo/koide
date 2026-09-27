@@ -102,7 +102,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_agent_checkpoint_edit_keeps_tool_call_id(self):
         task = self.ws.checkpoints.start_task("trace edit", "agent")
         self.ws.write("trace.txt", "hello", "absent", Ctx("agent", task["id"], "call_trace_123"))
-        saved = self.ws.checkpoints.load_task(task["id"])
+        saved = self.ws.checkpoints.load(task["id"])
         edit = next(e for e in saved["events"] if e["type"] == "edit")
         self.assertEqual(edit["call_id"], "call_trace_123")
 
