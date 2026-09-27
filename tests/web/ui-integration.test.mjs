@@ -272,6 +272,16 @@ test("Time Machine lists the tasks and can restore the whole first task", async 
   assert.equal(fs.readFileSync(path.join(proj, "src/app.py"), "utf8").includes("a - b"), true);
 });
 
+test("Koide 1.0：时光机显示真实探索、修改和验证节点语义", async () => {
+  const src = await fs.promises.readFile(path.join(ROOT, "apps/web/src/components/timeline.js"), "utf8");
+  assert.match(src, /build_failed:\s*"验证失败"/);
+  assert.match(src, /build_ok:\s*"验证通过"/);
+  assert.match(src, /read:\s*"探索"/);
+  assert.match(src, /edit:\s*"修改"/);
+  assert.match(src, /tl-path/);
+  assert.match(src, /可能未完成/);
+});
+
 test("Settings page renders every section and search filters them", async () => {
   const { openSettings } = await import("../../apps/web/src/components/settings.js");
   openSettings();
