@@ -613,7 +613,7 @@ fn run_tool_mode(
                         "web_fetch" => format!("HTTP {}", value.get("status").and_then(Value::as_u64).unwrap_or(0)),
                         _ => "完成".to_owned(),
                     };
-                    if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search" | "fs_glob" | "fs_multi_read") {
+                    if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search" | "fs_glob" | "fs_multi_read" | "web_fetch") {
                         let _ = checkpoints.add_event(
                             task_id,
                             "read",
