@@ -205,10 +205,20 @@ impl Workspace {
     pub fn supports_git(&self) -> bool { !self.is_saf() }
     pub fn supports_terminal_cwd(&self) -> bool { !self.is_saf() }
     pub fn project_instructions(&self) -> String {
-        match self.read("AGENTS.md") {
-            Ok(v) if v.get("binary").and_then(Value::as_bool) != Some(true) => v.get("content").and_then(Value::as_str).unwrap_or("").chars().take(8000).collect(),
-            _ => String::new(),
+        let mut sections = Vec::new();
+        if let Ok(v) = self.read("AGENTS.md") {
+            if v.get("binary").and_then(Value::as_bool) != Some(true) {
+                let text: String = v.get("content").and_then(Value::as_str).unwrap_or("").chars().take(8000).collect();
+                if !text.trim().is_empty() { sections.push(format!("# Project instructions (AGENTS.md)\n{text}")); }
+            }
         }
+        if let Ok(v) = self.read(".koide/PROJECT_MEMORY.md") {
+            if v.get("binary").and_then(Value::as_bool) != Some(true) {
+                let text: String = v.get("content").and_then(Value::as_str).unwrap_or("").chars().take(8000).collect();
+                if !text.trim().is_empty() { sections.push(format!("# Project Memory (user-maintained)\n{text}")); }
+            }
+        }
+        sections.join("\n\n")
     }
 
     pub fn read(&self, raw:&str)->Result<Value,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.read(raw),WorkspaceBackend::Saf(x)=>x.read(raw)}}
