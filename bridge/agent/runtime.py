@@ -414,10 +414,10 @@ class AgentRun:
         elif name == "fs_multi_read":
             n = len(result.get("files") or [])
             summary = f"{n} 个文件"
-            ws.checkpoints.add_event(self.task_id, "read", title)
+            ws.checkpoints.add_event(self.task_id, "read", title, call_id=cid, tool=name, arguments=args)
         elif name == "web_fetch":
             summary = f"状态码 {result.get('status', '?')}"
-            ws.checkpoints.add_event(self.task_id, "read", title)
+            ws.checkpoints.add_event(self.task_id, "read", title, call_id=cid, tool=name, arguments=args)
         elif name == "ask_user":
             pairs = result.get("summary") or []
             summary = "已回答" if len(pairs) <= 1 else f"已回答 {len(pairs)} 个问题"
