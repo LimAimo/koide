@@ -249,3 +249,57 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
 #boot-fallback[hidden] { display: none; }
 #boot-fallback strong { display: block; margin-bottom: 10px; font-size: 18px; }
 #boot-fallback pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace,monospace; }
+
+
+/* ---- Koide 1.0：工作现场 / 项目记忆 -------------------------------------------------------------- */
+.capsule-button { border: 0; font: inherit; cursor: pointer; }
+.capsule-button:active { transform: scale(.98); }
+.live-workspace { display: grid; gap: 18px; }
+.live-hero {
+  display: grid; grid-template-columns: auto minmax(0,1fr); gap: 14px; align-items: start;
+  padding: 16px; border-radius: var(--r-lg); background: var(--surface-2);
+}
+.live-orb {
+  width: 14px; height: 14px; margin-top: 6px; border-radius: 50%;
+  background: var(--outline); box-shadow: 0 0 0 6px color-mix(in srgb, var(--outline) 12%, transparent);
+}
+.live-orb.running {
+  background: var(--primary); box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 14%, transparent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.live-copy { min-width: 0; display: grid; gap: 4px; }
+.live-copy small { color: var(--primary); font-weight: 600; }
+.live-copy h3 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
+.live-copy p { margin: 0; }
+.live-section-title { padding: 0 2px; font-size: 12px; font-weight: 700; color: var(--on-surface-variant); letter-spacing: .04em; }
+.live-empty { padding: 18px 4px; }
+.live-activity-list { display: grid; gap: 2px; }
+.live-activity {
+  display: grid; grid-template-columns: 12px minmax(0,1fr) auto; gap: 10px; align-items: start;
+  min-height: 52px; padding: 10px 8px; border-radius: var(--r-md);
+}
+.live-activity:hover { background: var(--surface-2); }
+.live-activity-dot {
+  width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--outline);
+}
+.live-activity.running .live-activity-dot, .live-activity.preparing .live-activity-dot {
+  background: var(--primary); animation: pulse 1s ease-in-out infinite;
+}
+.live-activity.done .live-activity-dot { background: var(--ok); }
+.live-activity.error .live-activity-dot, .live-activity.denied .live-activity-dot { background: var(--error); }
+.live-activity-main { min-width: 0; display: grid; gap: 2px; }
+.live-activity-title { font-weight: 550; }
+.live-activity-main code {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--on-surface-variant); font-size: 12px;
+}
+.live-activity-main small { overflow-wrap: anywhere; }
+.live-activity-state { color: var(--on-surface-variant); white-space: nowrap; padding-top: 1px; }
+.project-memory { display: grid; gap: 12px; min-height: 0; }
+.project-memory-intro { color: var(--on-surface-variant); line-height: 1.55; }
+.project-memory-intro code { color: var(--on-surface); }
+.project-memory-meta { font-size: 12px; }
+.project-memory-editor {
+  min-height: min(58dvh, 560px); resize: none !important; font-family: var(--font-code);
+  line-height: 1.6; background: var(--surface); 
+}
