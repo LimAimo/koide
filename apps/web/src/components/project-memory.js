@@ -30,7 +30,8 @@ async function loadMemory() {
 }
 
 async function createMemory(text) {
-  try { await runtime.files.create({ path: ".koide", kind: "dir", content: "" }); } catch { /* already exists */ }
+  try { await runtime.files.create({ path: ".koide", kind: "dir", content: "" }); }
+  catch (e) { if (e?.code !== "ALREADY_EXISTS") throw e; }
   try {
     return await runtime.files.create({ path: PROJECT_MEMORY_PATH, kind: "file", content: text });
   } catch (e) {
