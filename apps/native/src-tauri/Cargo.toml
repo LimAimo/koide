@@ -1,6 +1,6 @@
 [package]
 name = "diffusion-native"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 description = "Koide native shell and Rust core"
 authors = ["Koide contributors"]
 edition = "2021"
@@ -26,6 +26,7 @@ zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 diffusion-saf = { path = "plugins/saf" }
+koide-feedback = { path = "plugins/feedback" }
 
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

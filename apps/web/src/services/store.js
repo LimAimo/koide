@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS = {
   editorKind: "cm6",          // 兼容旧设置导入；产品界面固定使用 CodeMirror 6
   showMinimap: false,
   followAgentEdits: true,      // AI 创建或修改文件时自动打开并定位到改动位置
+  feedback: { haptics: true, sound: false }, // 仅关键语义节点；声音需用户主动开启
   anim: {
     mode: "auto",             // auto | manual   (AI-auto is planned)
     pack: "dissolve",

@@ -1,6 +1,6 @@
-# Koide 1.0.0-rc.1 当前状态
+# Koide 1.0.0-rc.2 当前状态
 
-Koide 当前版本标识为 `1.0.0-rc.1`，处于 `dev/1.0.0` 候选版准备阶段，尚未发布。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
+Koide 当前版本标识为 `1.0.0-rc.2`，处于 `dev/1.0.0` 候选版准备阶段，尚未发布。0.9.0 仍是 `main` 的稳定基线；**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。
 
 ## Native 主链
 
@@ -17,6 +17,7 @@ Koide 当前版本标识为 `1.0.0-rc.1`，处于 `dev/1.0.0` 候选版准备阶
 | Export | ✅ | ✅ | SAF 会经 backend 遍历生成归档 |
 | 外部文件变化 | ✅ | ✅/受 DocumentsProvider 能力影响 | LocalFS 与 SAF 采用不同后端策略 |
 | Native LAN Remote Runtime | ❌ | ❌ | 跨设备访问继续使用可选 Python Bridge |
+| 原生语义触觉 | 不支持 | 已实现，待真机验收 | 系统触觉设置 + 本机开关；能力可用不代表每次都实际振动 |
 
 ## 1.0 UI Motion System
 
@@ -25,6 +26,8 @@ Koide 当前版本标识为 `1.0.0-rc.1`，处于 `dev/1.0.0` 候选版准备阶
 - AI Bottom Sheet 的释放使用可中断阻尼弹簧，半屏/全屏吸附与自由高度共存；取消手势恢复原位，停顿后释放不沿用旧速度。
 - 浮层关闭立即更新交互和返回栈，退出动画结束后卸载 DOM；连点关闭后重开不会被旧返回事件误关。工作现场按稳定节点更新，工具状态图标连续过渡。
 - 系统或 Koide 的 reduced-motion 设置覆盖普通 UI；触屏把手、小按钮和文件行至少 40px。
+- 设置页按区更新、取消关闭后的旧动画和跳转；搜索有分组过滤与无结果状态。文件树拒绝过期请求，快速展开/收起保持最终用户意图，读取失败可以重试。
+- 声音与触觉独立于 Motion：Android 原生触觉只用于少数语义节点，可选提示音默认关闭；后台与重复完成事件不补播，详见 [反馈契约](FEEDBACK.md)。
 - Diffusion 代码编辑动画属于内容变化可视化，继续使用独立动画引擎，不与导航/控件 Motion tokens 混用。
 
 ## 1.0 Agent 可观测性
@@ -38,7 +41,7 @@ Koide 当前版本标识为 `1.0.0-rc.1`，处于 `dev/1.0.0` 候选版准备阶
 
 ## Runtime API
 
-UI 只通过 `apps/web/src/services/runtime/` 调用领域能力。当前 Native dispatch 覆盖全部 72 个业务方法；其中 `devices.pair_code` 在 Native 模式明确返回 `LAN_OFF`，因为 Native LAN server 尚未提供。这是有意的 capability，而不是静默假实现。
+UI 只通过 `apps/web/src/services/runtime/` 调用领域能力。当前 Native dispatch 覆盖全部 73 个业务方法（新增 `feedback.emit`）；其中 `devices.pair_code` 在 Native 模式明确返回 `LAN_OFF`，因为 Native LAN server 尚未提供。Windows/Bridge 的触觉返回 `supported=false, performed=false`，不能伪装已执行。
 
 ## Android SAF
 
@@ -62,4 +65,6 @@ OpenAI-compatible、Anthropic 与 Gemini Native 均有 Agent 调用路径；交�
 
 Product Polish 提交 `5a5bf1271e63b3b257e0ce5e4f30069633396cee` 的 [Stable Build #105](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36324930485) 已逐项核对 Job/Step：Web UI + CodeMirror 6、Bridge、Native Core、Windows x64、Android ARM64 均通过，Release 步骤跳过。后续版本标识收尾提交以自己的 CI 为准，不能复用这次通过结论。
 
-已同步候选版版本号与 Android `versionCode=10001`，未发布 RC、未合并 `main`。前三块核心实现（面板物理交互、连续状态、Rich Diff）已提交；触觉/声音未接入，全局重复入口/信息密度收敛和设备验收尚未全部完成。Android 真机手感、安全区、软键盘和 SAF 提供商差异仍需验收。1.x 功能均为后续计划。详见 [产品打磨记录](PRODUCT_POLISH.md) 和 [1.x 路线](ROADMAP.md)。
+`64028e1` 的 [Stable Build #106](https://github.com/LimAimo/Diffusion-IDE/actions/runs/36325820428) 只有 Web 回归失败：设置页测试写死旧版本，CodeMirror 构建及另外四项通过。已依据日志修正断言；RC.2 的新实现与版本同步等待本次提交自己的 CI，不沿用前次通过结论。
+
+已同步 `1.0.0-rc.2` 与 Android `versionCode=10002`，未发布 RC、未合并 `main`。四块核心实现均已接入；全局视觉一致性和设备验收尚未全部完成，触觉手感、安全区、软键盘和 SAF 提供商差异仍需真机验收。1.x 功能均为后续计划。详见 [产品打磨记录](PRODUCT_POLISH.md) 和 [1.x 路线](ROADMAP.md)。

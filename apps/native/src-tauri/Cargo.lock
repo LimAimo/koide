@@ -629,9 +629,10 @@ dependencies = [
 
 [[package]]
 name = "diffusion-native"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "diffusion-saf",
+ "koide-feedback",
  "portable-pty",
  "reqwest 0.12.28",
  "serde",
@@ -645,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "diffusion-saf"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1798,6 +1799,15 @@ dependencies = [
  "bitflags 2.13.2",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "koide-feedback"
+version = "1.0.0-rc.2"
+dependencies = [
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

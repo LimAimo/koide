@@ -309,7 +309,9 @@ test("Settings page renders every section and search filters them", async () => 
   assert.match(text(editorSec), /CodeMirror 6/);
   assert.match(text(editorSec), /跟随 AI 编辑/);
   assert.doesNotMatch(text($$(body(), ".page")[0]), /切换全屏/);
-  assert.match(String($$(body(), ".page")[0]?.textContent || ""), /Koide 1\.0\.0 Web/);
+  const runtimeVersion = String(appMod.state.get().hello?.version || "").trim();
+  assert.ok(runtimeVersion, "Runtime 握手必须提供真实版本号");
+  assert.ok(text($$(body(), ".page")[0]).includes(`Koide ${runtimeVersion} Web`), "设置页显示 Runtime 返回的完整版本（含预发布后缀）");
   const q = $$($$(body(), ".page")[0], ".search-box .text-field")[0];        // 只取设置页里的搜索框（编辑器的查找栏里也有 search 类型的输入框）
   q.value = "hue";
   q.dispatchEvent({ type: "input" });

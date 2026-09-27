@@ -5,6 +5,7 @@
 
 import { pushLayer, hasLayers } from "./overlays.js";
 import { velocityTracker, springTo, sheetDestination } from "../services/motion.js";
+import { emitFeedback } from "../services/feedback.js";
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const vh = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
@@ -94,13 +95,13 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
     app.style.setProperty("--sheet-h", `${sheetH}px`);
     grip.setAttribute("aria-valuenow", String(Math.round(sheetH / maxSheetH() * 100)));
   }
-  function settle(target, velocity = 0) {
+  function settle(target, velocity = 0, feedback = false) {
     stopSpring();
     const from = sheetH ?? ai.offsetHeight ?? halfSheetH();
     setFull(target === maxSheetH());
     ai.classList.add("settling");
     cancelSpring = springTo({ from, to: target, velocity, update: setH,
-      complete: () => { cancelSpring = null; ai.classList.remove("settling"); } });
+      complete: () => { cancelSpring = null; ai.classList.remove("settling"); if (feedback) void emitFeedback("snap"); } });
   }
   function syncFullLayer(viaBack = false) {
     if (isFull && !fullClose) {
@@ -183,8 +184,8 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers, onCloseAI }
     const max = maxSheetH();
     const v = s.velocity.value();
     const target = sheetDestination(sheetH || halfSheetH(), v, max, s.full);
-    if (!target) { closeSheet(); return; }
-    settle(target, v);
+    if (!target) { closeSheet(); void emitFeedback("snap"); return; }
+    settle(target, v, target === halfSheetH() || target === max);
   };
   grip.addEventListener("pointerup", release);
   grip.addEventListener("pointercancel", release);

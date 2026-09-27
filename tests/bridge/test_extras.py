@@ -26,6 +26,14 @@ def http_get(url):
 
 
 class Extras(E2EBase):
+    async def test_feedback_is_explicitly_unsupported_on_remote_bridge(self):
+        hello = await self.c.rpc("hello")
+        self.assertFalse(hello["capabilities"]["haptics"])
+        result = await self.c.rpc("feedback.emit", {"kind": "complete"})
+        self.assertEqual(result, {"supported": False, "performed": False, "reason": "unsupported"})
+        error = await self.c.rpc("feedback.emit", {"kind": "arbitrary_vibration"}, expect_error=True)
+        self.assertEqual(error["code"], "BAD_REQUEST")
+
     @unittest.skipUnless(HAVE_PTY, "需要 PTY")
     async def test_pty_terminal(self):
         r = await self.c.rpc("terminal.open", {"cols": 100, "rows": 30})

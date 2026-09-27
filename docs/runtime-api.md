@@ -38,7 +38,15 @@ Native Core 会调用 SAF picker，并把最终 `{kind, uri, name}` 写入 recen
 
 ## Native 语义
 
-当前 Runtime 共 72 个业务方法，Native dispatch 全部有明确路由。存在平台不支持的能力时必须返回明确错误或 capability=false，不能使用固定空值假装成功。
+当前 Runtime 共 73 个业务方法，Native dispatch 全部有明确路由。存在平台不支持的能力时必须返回明确错误或 capability=false，不能使用固定空值假装成功。
+
+## 语义反馈
+
+`hello.capabilities.haptics` 表示当前客户端是否有原生触觉通路：Android Native 为 true，Windows 与 Bridge 为 false，不代表系统一定允许每次振动。
+
+`runtime.feedback.emit({ kind })` 调用 `feedback.emit`，只接受 `snap`、`confirm`、`complete`、`restore`。返回 `{ supported, performed, reason }`；Windows / Bridge 返回 `{ supported:false, performed:false, reason:"unsupported" }`，非法类型返回 `BAD_REQUEST`。Android 的 `reason` 可为 `performed`、`background`、`expired`、`throttled`、`system_or_device`，原生插件不可用映射为 `FEEDBACK_UNAVAILABLE`。
+
+反馈不是 Agent 工具，不写入工程时间线，也不构造 Checkpoint。提示音在当前客户端本地合成，不发送给 Bridge；设置、触发与降级语义见 [FEEDBACK.md](FEEDBACK.md)。
 
 
 ## Koide 1.0 Checkpoint 事件元数据

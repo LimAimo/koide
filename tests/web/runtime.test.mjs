@@ -20,11 +20,13 @@ test("Runtime API hides transport details behind domain methods", async () => {
   await runtime.git.status();
   await runtime.agent.stop();
   await runtime.workspace.removeRecent({ path: "/tmp/x" });
+  await runtime.feedback.emit({ kind: "snap" });
   assert.deepEqual(a.calls, [
     ["fs.read", { path: "src/a.js" }],
     ["git.status", {}],
     ["agent.stop", {}],
     ["workspace.remove_recent", { path: "/tmp/x" }],
+    ["feedback.emit", { kind: "snap" }],
   ]);
   assert.equal(runtime.kind, "fake");
   assert.equal(runtime.status, "online");

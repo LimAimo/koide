@@ -94,6 +94,10 @@ UI 必须根据 capability 显示真实能力，不得伪装支持。
 
 详见 `ANDROID_SAF_BACKEND.md`。
 
+### 平台反馈
+
+`plugins/feedback/` 是独立于 SAF 文件 I/O 的 Android 触觉插件。UI 经 Runtime `feedback.emit` 发送限定的语义事件，Rust 校验类型，Kotlin 使用系统 `View.performHapticFeedback`；不申请振动权限、不忽略系统设置、不接受任意波形。非 Android 与 Bridge 明确返回不支持，不将可选反馈失败当作工程操作失败。契约见 `FEEDBACK.md`。
+
 ## 9. 数据与兼容
 
 平台级设置、profiles、secrets、device data 和 global instructions 使用平台应用数据目录。项目内部仍保留既有 `.diffusion` / `diffusion-*` 命名时，以兼容历史数据为优先，不因产品改名破坏已有项目。

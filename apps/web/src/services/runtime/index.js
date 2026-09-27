@@ -17,6 +17,8 @@ export function createRuntime(adapter = nativeAvailable() ? new NativeRuntimeAda
     // Transitional escape hatch for tests and migration tooling; components must use the domain APIs below.
     call,
 
+    feedback: { emit: (p) => call("feedback.emit", p) },
+
     workspace: {
       open: (p) => call("workspace.open", p),
       close: () => call("workspace.close", empty()),

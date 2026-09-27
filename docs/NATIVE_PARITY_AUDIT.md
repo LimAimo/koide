@@ -1,10 +1,10 @@
 # Koide Native 能力审计
 
-> 当前版本：`1.0.0-rc.1`（`dev/1.0.0`，候选版准备，尚未发布）。本文记录 Native 主链与 Bridge 兼容链的真实能力和明确限制。
+> 当前版本：`1.0.0-rc.2`（`dev/1.0.0`，候选版准备，尚未发布）。本文记录 Native 主链与 Bridge 兼容链的真实能力和明确限制。
 
 ## 总览
 
-- Runtime API：72 个业务方法；Native dispatch 当前 72 / 72 有路由。
+- Runtime API：73 个业务方法；Native dispatch 当前 73 / 73 有路由。
 - Windows / Android 本地应用默认使用 Rust Native Core。
 - Python Bridge 是可选 Web/LAN 兼容端，不是本地 Native 前置条件。
 - 平台不支持的能力必须返回明确错误或 `capability=false`，不能伪装为空结果。
@@ -41,7 +41,9 @@
 - [x] 编辑事件 after_blob 与 after_rev：Native / Bridge 保存历史修改后版本
 - [x] LocalFS / SAF 共用历史版本核验；旧数据不匹配明确返回 HISTORY_UNAVAILABLE
 - [x] checkpoint.diff 的 text_available 标记，避免把二进制/超限文本解释为空文件
-- [ ] Native Android 语义触觉（haptic）
+- [x] Native Android 语义触觉：独立插件、系统设置、前台判断与节流（具体手感待真机验收）
+- [x] `feedback.emit` 在 Windows / Bridge 明确返回不支持；不振动远端设备
+- [x] Native 握手的 SAF capability 与已实现的 Android 后端一致，移除过期未实现说明
 
 ## Providers
 

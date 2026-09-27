@@ -116,11 +116,13 @@
 .switch.on .switch-knob { transform: translateX(16px); }
 
 /* ---- full-screen pages (settings, time machine, welcome) --------------------------------------------------- */
-.page { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; background: var(--surface); transform: translateX(100%); transition: transform var(--motion-slow) var(--ease-decel); padding-top: env(safe-area-inset-top); }
+.page { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; background: var(--surface); transform: translateX(100%); transition: transform var(--motion-page) var(--ease-decel); padding-top: env(safe-area-inset-top); }
 .page.in { transform: none; }
 .page-head { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 8px; }
 .page-head h1 { flex: 1; font-size: 22px; line-height: 28px; font-weight: 400; }
 .page-body { flex: 1; overflow-y: auto; padding: 0 16px calc(32px + env(safe-area-inset-bottom)); max-width: 720px; width: 100%; margin: 0 auto; overscroll-behavior: contain; }
+.settings-empty { padding: 36px 12px; text-align: center; color: var(--on-surface-variant); }
+.settings-empty .btn { margin-top: 8px; }
 .search-box { position: relative; margin: 0 16px 8px; max-width: 688px; align-self: center; width: calc(100% - 32px); }
 .search-box .text-field { border-radius: var(--r-full); padding-left: 44px; }
 .search-box .icon { position: absolute; left: 14px; top: 12px; color: var(--on-surface-variant); }

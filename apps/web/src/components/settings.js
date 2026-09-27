@@ -4,7 +4,8 @@ import { h, icon, iconButton, clear, toast } from "./dom.js";
 import { pushLayer, openSheet, openDialog, openMenu, confirmDialog } from "./overlays.js";
 import { openReplay } from "./timeline.js";
 import { runtime, state, connectManual, openWorkspace } from "../services/app.js";
-import { settingsStore, saveSettings, exportSettings, importSettings, resetSettings, applyTheme } from "../services/store.js";
+import { settingsStore, saveSettings, exportSettings, importSettings, resetSettings, applyTheme, reducedMotion } from "../services/store.js";
+import { emitFeedback, previewFeedback } from "../services/feedback.js";
 import { listPacks, installPack, KINDS } from "../animations/diffusion/packs.js";
 import { qrSvg } from "../services/qr.js";
 
@@ -84,7 +85,7 @@ function editorSection() {
   const s = settingsStore.get();
   return section("editor", "编辑器", [
     row({ label: "字号", stack: true, ctl: slider({ min: 10, max: 22, step: 1, value: s.fontSize, label: "字号", onInput: (v) => { saveSettings({ fontSize: v }); applyTheme(); }, fmt: (v) => `${v}px` }) }),
-    row({ label: "CodeMirror 6", desc: "Koide 的正式编辑器。桌面与 Android 原生构建会自动打包，加载失败时会直接显示错误而不是静默降级。", keywords: "codemirror cm6 内核 折叠 补全" }),
+    row({ label: "CodeMirror 6", desc: "代码折叠、语言高亮与补全", keywords: "codemirror cm6 内核 折叠 补全" }),
     row({ label: "跟随 AI 编辑", desc: "AI 创建或修改文件时，自动打开对应文件并定位到修改位置。", ctl: switchCtl(s.followAgentEdits !== false, (v) => saveSettings({ followAgentEdits: v }), "跟随 AI 编辑"), keywords: "AI 智能体 自动打开 定位 动画 follow agent edit" }),
     row({ label: "显示隐藏文件", desc: "在文件树里显示 .git、.DS_Store 等默认隐藏项；不会改变搜索范围。", ctl: switchCtl(s.showHiddenFiles, (v) => saveSettings({ showHiddenFiles: v }), "显示隐藏文件"), keywords: "隐藏文件 .git hidden files" }),
     row({ label: "缩进宽度", ctl: selectCtl([["2", "2 个空格"], ["4", "4 个空格"], ["8", "8 个空格"]], String(s.tabWidth), (v) => { saveSettings({ tabWidth: Number(v) }); applyTheme(); }, "缩进宽度") }),
@@ -167,24 +168,28 @@ function editProfile(p, rerender) {
   }
 }
 
-function instructionRows() {
+function instructionRows(draft) {
   const ta = h("textarea", { class: "text-field", rows: "5", placeholder: "例如：永远用中文回答；提交说明用中文；不要改动 vendor/ 目录", "aria-label": "全局指令", style: { fontFamily: "var(--font-code)" } });
   const hint = h("small", null, "");
+  ta.value = draft.value;
+  const capture = () => { draft.edited = true; draft.value = ta.value; };
+  ta.addEventListener("input", capture);
   const online = state.get().conn === "online";
   if (online) {
+    hint.textContent = "正在读取项目指令…";
     runtime.instructions.get().then((r) => {
-      ta.value = r.global;
+      if (!draft.edited) ta.value = draft.value = r.global;
       hint.textContent = r.project_exists ? `已找到项目根目录的 AGENTS.md（${r.project.length} 字），智能体每次任务都会优先阅读。` : "项目根目录还没有 AGENTS.md：新建一个，就能写下这个项目的架构、规范、构建命令和禁止改动的区域。";
-    }).catch(() => {});
-    ta.addEventListener("change", () => runtime.instructions.set({ global: ta.value }).then(() => toast("全局指令已保存")).catch((e) => toast(e.message)));
-  } else ta.disabled = true;
+    }).catch((error) => { hint.textContent = `读取指令失败：${error.message || "请重新打开设置"}`; });
+    ta.addEventListener("change", () => { capture(); runtime.instructions.set({ global: ta.value }).then(() => toast("全局指令已保存")).catch((e) => toast(e.message)); });
+  } else { ta.disabled = true; hint.textContent = "连接运行环境后可编辑指令"; }
   return [
     h("div", { class: "srow stack", dataset: { search: search("全局指令 每次任务 提示 instructions") } }, h("div", { class: "lbl" }, "全局指令", h("small", null, "对所有项目、所有任务都生效，修改后自动保存")), ta),
     h("div", { class: "srow", dataset: { search: search("项目指令 AGENTS.md") } }, h("div", { class: "lbl" }, "项目指令（AGENTS.md）", hint)),
   ];
 }
 
-function agentSection() {
+function agentSection(instructionDraft) {
   const s = settingsStore.get(), lim = s.agent.limits;
   return section("agent", "智能体", [
     row({ label: "默认模式", desc: "聊天：只对话 · 只读：可以查看项目 · 编辑：可以修改文件 · 智能体：还能运行命令", ctl: segmented([["chat", "聊天"], ["read", "只读"], ["edit", "编辑"], ["agent", "智能体"]], s.agent.mode, (v) => saveSettings({ agent: { mode: v } })) }),
@@ -192,7 +197,7 @@ function agentSection() {
     row({ label: "工具调用上限", desc: "单个任务的硬性上限；0 表示不限次数，仍然可以随时手动停止任务", ctl: numberCtl(lim.max_tool_calls, (v) => saveSettings({ agent: { limits: { max_tool_calls: Math.max(0, v) } } }), "工具调用上限，0 表示不限"), keywords: "限制 上限 无限 limit unlimited" }),
     row({ label: "最大修复次数", desc: "构建或测试失败多少次后智能体放弃", ctl: numberCtl(lim.max_repair_attempts, (v) => saveSettings({ agent: { limits: { max_repair_attempts: v } } }), "最大修复次数"), keywords: "限制 循环 limit loop" }),
     row({ label: "最长运行时间（秒）", desc: "0 表示不限时；仍然可以随时手动停止任务", ctl: numberCtl(lim.max_seconds, (v) => saveSettings({ agent: { limits: { max_seconds: Math.max(0, v) } } }), "最长秒数，0 表示不限"), keywords: "限制 超时 无限 limit timeout unlimited" }),
-    ...instructionRows(),
+    ...instructionRows(instructionDraft),
   ]);
 }
 
@@ -249,7 +254,7 @@ function animationSection(rerender) {
   const a = settingsStore.get().anim;
   const packs = listPacks().map((p) => [p.id, p.name]);
   const rows = [
-    row({ label: "效果选择", desc: "自动：由引擎按改动类型挑选 · 手动：为每种改动分别选择效果（「AI 推荐效果」还在计划中）", ctl: segmented([["auto", "引擎自动"], ["manual", "手动"]], a.mode, (v) => { saveSettings({ anim: { mode: v } }); rerender(); }) }),
+    row({ label: "效果选择", desc: "由引擎选择，或为每种代码改动指定效果", ctl: segmented([["auto", "引擎自动"], ["manual", "手动"]], a.mode, (v) => { saveSettings({ anim: { mode: v } }); rerender(); }) }),
   ];
   if (a.mode === "auto") rows.push(row({ label: "动画包", ctl: selectCtl(packs, a.pack, (v) => saveSettings({ anim: { pack: v } }), "动画包"), keywords: "效果 动画 effect dissolve glitch ash minimal" }));
   else for (const k of KINDS) rows.push(row({ label: `${KIND_ZH[k] || k}的效果`, ctl: selectCtl(packs, a.manual[k], (v) => saveSettings({ anim: { manual: { [k]: v } } }), k), keywords: "手动 manual insert delete move transform" }));
@@ -270,12 +275,29 @@ function animationSection(rerender) {
   return section("animation", "动画", rows);
 }
 
+function feedbackSection(rerender) {
+  const preferences = settingsStore.get().feedback || {};
+  const haptics = runtime.kind === "native" && state.get().hello?.capabilities?.haptics === true;
+  const change = (key, value) => { saveSettings({ feedback: { [key]: value } }); rerender(); };
+  const rows = [];
+  if (haptics) rows.push(row({ label: "关键操作触觉", desc: "面板吸附、危险确认、任务完成与恢复成功；遵循系统触觉设置",
+    ctl: switchCtl(preferences.haptics, (value) => change("haptics", value), "关键操作触觉"), keywords: "触感 振动 震动 haptic feedback" }));
+  rows.push(row({ label: "完成提示音", desc: "仅在前台任务完成或恢复成功时播放，默认关闭",
+    ctl: switchCtl(preferences.sound, (value) => change("sound", value), "完成提示音"), keywords: "声音 音效 sound audio feedback" }));
+  const preview = btnRow("体验完成反馈", "play", async () => {
+    const result = await previewFeedback();
+    if (!result.performed && !result.sound) toast("当前未播放反馈，请检查反馈开关、系统触觉和音量设置");
+  }, "试听 触感 预览 preview feedback");
+  preview.disabled = !(preferences.sound || (haptics && preferences.haptics));
+  rows.push(preview);
+  return section("feedback", "声音与触觉", rows);
+}
+
 function bridgeSection(rerender) {
   const st = state.get(), conn = st.conn;
   if (runtime.kind === "native") {
     return section("bridge", "本地运行环境", [
-      row({ label: "Native Core 已就绪", desc: `${st.hello?.platform || ""} · Rust Core ${st.hello?.version || ""} · 不使用 Python、localhost 或 WebSocket`, keywords: "状态 本地环境 native rust status" }),
-      row({ label: "远程设备", desc: "远程访问会作为可选模块重新加入；本机编辑项目不依赖任何连接器。", keywords: "远程 手机 配对 remote device" }),
+      row({ label: "本地运行", desc: `${st.hello?.platform || "本机"} · 项目由本机处理`, keywords: "状态 本地环境 native rust status" }),
     ]);
   }
   const host = h("input", { class: "text-field", placeholder: "192.168.1.20", autocapitalize: "off", inputmode: "url", "aria-label": "主机地址" });
@@ -337,23 +359,39 @@ function workspaceSection(rerender) {
       h("button", { class: "row-btn recent-open", type: "button", onclick: () => openWorkspace(r).then(() => toast("已打开")).catch((e) => toast(e.message)) }, icon("folder", 20), h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label)),
       iconButton("trash", "从最近项目移除", () => runtime.workspace.removeRecent(removeParams).then(() => { toast("已从最近项目移除"); rerender(); }).catch((e) => toast(e.message)))));
   }
-  const trash = h("div", { dataset: { search: "回收站 恢复 已删除 trash restore deleted files" } });
+  const trash = h("div", { dataset: { search: "回收站 恢复 已删除 trash restore deleted files" } }, h("div", { class: "srow muted", role: "status" }, "正在读取回收站…"));
+  let trashBusy = false;
+  const sameWorkspace = () => {
+    const current = state.get().workspace;
+    if (!current || JSON.stringify(current.location || current.roots) !== JSON.stringify(st.workspace?.location || st.workspace?.roots)) throw new Error("工作区已切换，请重新操作");
+  };
+  async function trashAction(operation) {
+    if (trashBusy) return;
+    trashBusy = true;
+    try { sameWorkspace(); await operation(); }
+    catch (error) { toast(error.message || "操作失败，请重试"); }
+    finally { trashBusy = false; }
+  }
   async function loadTrash() {
     try {
       const r = await runtime.trash.list();
       clear(trash);
       trash.appendChild(h("div", { class: "srow" }, h("div", { class: "lbl" }, "Koide 回收站", h("small", null, `共 ${r.items.length} 项。无论是你还是 AI 删除的文件，都会先放到这里。`)),
-        r.items.length ? h("button", { class: "btn text small danger", type: "button", onclick: async () => { if (await confirmDialog({ title: "清空回收站？", message: "此操作无法撤销。", confirmLabel: "清空", danger: true })) { await runtime.trash.empty(); loadTrash(); } } }, "清空") : null));
+        r.items.length ? h("button", { class: "btn text small danger", type: "button", onclick: () => trashAction(async () => { if (await confirmDialog({ title: "清空回收站？", message: "此操作无法撤销。", confirmLabel: "清空", danger: true })) { sameWorkspace(); await runtime.trash.empty(); await loadTrash(); } }) }, "清空") : null));
       for (const it of r.items.slice(0, 30)) trash.appendChild(h("div", { class: "srow" }, h("div", { class: "lbl", style: { overflow: "hidden" } }, it.original.split("/").pop(), h("small", null, it.original)),
-        h("button", { class: "btn text small", type: "button", onclick: async () => { try { await runtime.trash.restore({ id: it.id }); toast("已恢复"); loadTrash(); } catch (e) { toast(e.message); } } }, "恢复"),
-        h("button", { class: "btn text small danger", type: "button", onclick: async () => { await runtime.trash.delete({ id: it.id }); loadTrash(); } }, "删除")));
-    } catch { clear(trash); }
+        h("button", { class: "btn text small", type: "button", onclick: () => trashAction(async () => { await runtime.trash.restore({ id: it.id }); void emitFeedback("restore"); toast("已恢复"); await loadTrash(); }) }, "恢复"),
+        h("button", { class: "btn text small danger", type: "button", onclick: () => trashAction(async () => {
+          if (!(await confirmDialog({ title: "永久删除？", message: it.original, confirmLabel: "永久删除", danger: true }))) return;
+          sameWorkspace(); await runtime.trash.delete({ id: it.id }); await loadTrash();
+        }) }, "永久删除")));
+    } catch (error) {
+      clear(trash);
+      trash.append(h("div", { class: "srow muted", role: "status" }, `回收站读取失败：${error.message || "请重试"}`), btnRow("重新读取回收站", "undo", loadTrash));
+    }
   }
   if (st.workspace) { rows.push(trash); loadTrash(); rows.push(btnRow("关闭项目", "close", async () => { await runtime.workspace.close(); rerender(); }, "离开 leave")); }
   return section("workspace", "工作区", rows);
 }
-
-function gitSection() { return section("git", "Git 与终端", [row({ label: "Git 面板", desc: "点顶部栏的分支图标：查看改动与差异、暂存、提交、切换分支、拉取推送和逐行追溯。提交历史可一键选择软回退或强制回退；强制回退仍经过工作区保护与回收站，不提供强制推送。", keywords: "提交 分支 差异 回退 reset soft hard commit branch diff" })]); }
 
 function privacySection() {
   const s = settingsStore.get();
@@ -373,31 +411,59 @@ function advancedSection(rerender) {
       const ta = h("textarea", { class: "text-field", rows: "8", placeholder: "粘贴导出的设置 JSON", style: { fontFamily: "var(--font-code)" }, spellcheck: "false" });
       openDialog({ title: "导入设置", body: ta, actions: [{ label: "取消" }, { label: "导入", primary: true, onClick: () => { try { importSettings(ta.value); applyTheme(); rerender(); toast("设置已导入"); } catch (e) { toast("设置无效：" + e.message); } } }] });
     }, "恢复 restore"),
-    btnRow("重置所有设置", "undo", async () => { if (await confirmDialog({ title: "重置设置？", message: "界面偏好会恢复默认值；桥接服务里的服务商配置会保留。", confirmLabel: "重置", danger: true })) { resetSettings(); applyTheme(); rerender(); } }, "默认 default"),
+    btnRow("重置所有设置", "undo", async () => { if (await confirmDialog({ title: "重置设置？", message: "界面与反馈偏好会恢复默认值；已保存的模型服务商配置会保留。", confirmLabel: "重置", danger: true })) { resetSettings(); applyTheme(); rerender(); } }, "默认 default"),
     (() => {
       const version = String(state.get().hello?.version || "").trim();
       const label = runtime.kind === "native" ? `Koide${version ? " " + version : ""} Native` : `Koide${version ? " " + version : ""} Web`;
-      return row({ label, desc: runtime.kind === "native" ? "版本号直接读取 Native Core；本地模式由 Tauri + Rust Native Core 提供工作区、Agent、Git 与平台能力，不依赖 Python Bridge。" : "版本号直接读取 Bridge Runtime；Web 兼容模式通过 Python Bridge 提供本地或 LAN 执行能力。" });
+      return row({ label, keywords: "版本 关于 version about" });
     })(),
   ]);
 }
 
 // ---- page -----------------------------------------------------------------------------------------------------------
+let activeSettings = null;
 export function openSettings(jumpTo = null) {
+  if (activeSettings) { activeSettings.navigate(jumpTo); return activeSettings; }
   const body = h("div", { class: "page-body" });
   const q = h("input", { class: "text-field", type: "search", placeholder: "搜索设置", "aria-label": "搜索设置" });
   const page = h("div", { class: "page", role: "dialog", "aria-label": "设置" },
-    h("div", { class: "page-head settings-head" }, iconButton("back", "返回", () => request()), h("div", null, h("h1", null, "设置"), h("small", { class: "muted" }, "Koide · 本机与工作区偏好"))),
+    h("div", { class: "page-head settings-head" }, iconButton("back", "返回", () => request()), h("h1", null, "设置")),
     h("div", { class: "search-box" }, icon("search", 20), q), body);
+  const empty = h("div", { class: "settings-empty", role: "status", hidden: true },
+    h("p", null, "没有匹配的设置"), h("button", { class: "btn text", type: "button", onclick: () => { q.value = ""; filter(); q.focus(); } }, "清除搜索"));
+  let closed = false, jumpTimer;
   document.body.appendChild(page);
-  requestAnimationFrame(() => page.classList.add("in"));
-  let closed = false;
-  const request = pushLayer(() => { if (closed) return; closed = true; unsub(); page.classList.remove("in"); setTimeout(() => page.remove(), 340); });
+  const enter = requestAnimationFrame(() => { if (!closed) page.classList.add("in"); });
+  const request = pushLayer(() => {
+    if (closed) return;
+    closed = true; unsub(); cancelAnimationFrame(enter); clearTimeout(jumpTimer);
+    page.inert = true; page.classList.remove("in");
+    if (activeSettings?.el === page) activeSettings = null;
+    setTimeout(() => page.remove(), reducedMotion() ? 0 : 360);
+  });
 
-  function render() {
+  const instructionDraft = { value: "", edited: false };
+  const builders = {
+    appearance: () => appearance(() => render("appearance")), editor: editorSection,
+    animation: () => animationSection(() => render("animation")), feedback: () => feedbackSection(() => render("feedback")),
+    providers: () => providers(() => render("providers")), agent: () => agentSection(instructionDraft), permissions: permissionsSection,
+    workspace: () => workspaceSection(() => render("workspace")), bridge: () => bridgeSection(() => render("bridge")),
+    privacy: privacySection, advanced: () => advancedSection(render),
+  };
+
+  function render(id = null) {
+    if (closed) return;
     const y = body.scrollTop;
-    clear(body);
-    body.append(h("div", { class: "settings-group-title" }, "界面与编辑"), appearance(render), editorSection(), animationSection(render), h("div", { class: "settings-group-title" }, "AI"), providers(render), agentSection(), permissionsSection(), h("div", { class: "settings-group-title" }, "项目与系统"), workspaceSection(render), gitSection(), bridgeSection(render), privacySection(), advancedSection(render));
+    if (id && builders[id]) {
+      const previous = body.querySelector(`[data-id="${id}"]`);
+      if (previous) { previous.parentNode.insertBefore(builders[id](), previous); previous.remove(); }
+    } else {
+      clear(body);
+      for (const [label, ids] of [["界面与编辑", ["appearance", "editor", "animation", "feedback"]], ["AI", ["providers", "agent", "permissions"]], ["项目与系统", ["workspace", "bridge", "privacy", "advanced"]]]) {
+        body.appendChild(h("div", { class: "settings-group" }, h("div", { class: "settings-group-title" }, label), ids.map((key) => builders[key]())));
+      }
+      body.appendChild(empty);
+    }
     body.scrollTop = y;
     filter();
   }
@@ -412,10 +478,32 @@ export function openSettings(jumpTo = null) {
       }
       sec.hidden = !any;
     }
+    for (const group of body.querySelectorAll(".settings-group")) group.hidden = ![...group.querySelectorAll(".sec")].some((sec) => !sec.hidden);
+    empty.hidden = [...body.querySelectorAll(".sec")].some((sec) => !sec.hidden);
   }
   q.addEventListener("input", filter);
-  const unsub = state.subscribe((() => { let last = ""; return (s) => { const sig = s.conn + s.profiles.map((p) => p.id + p.has_key).join() + (s.workspace?.name || "") + JSON.stringify(s.permissions || {}); if (sig !== last) { last = sig; render(); } }; })());
+  const signature = (s) => JSON.stringify([s.conn, s.profiles, s.workspace, s.permissions, s.hello?.version, s.hello?.capabilities, s.hello?.recent]);
+  const instructionContext = (s) => JSON.stringify([s.conn, s.workspace?.location || s.workspace?.roots]);
+  let last = signature(state.get());
+  let lastContext = instructionContext(state.get());
+  const unsub = state.subscribe((s) => {
+    const next = signature(s);
+    if (next === last) return;
+    last = next;
+    const context = instructionContext(s);
+    if (context !== lastContext) { lastContext = context; render("agent"); }
+    // 运行状态只刷新相关区域；切换连接或项目时保留指令草稿。
+    for (const id of ["providers", "permissions", "workspace", "bridge", "feedback", "advanced"]) render(id);
+  });
+  function navigate(id) {
+    clearTimeout(jumpTimer);
+    if (!id) { q.focus(); return; }
+    q.value = ""; filter();
+    const target = [...body.querySelectorAll(".sec")].find((sec) => sec.dataset.id === id);
+    if (target) jumpTimer = setTimeout(() => { if (!closed) target.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" }); }, reducedMotion() ? 0 : 380);
+  }
   render();
-  if (jumpTo) { const t = body.querySelector(`[data-id="${jumpTo}"]`); if (t) setTimeout(() => t.scrollIntoView({ behavior: "smooth", block: "start" }), 380); }
-  return { close: request };
+  if (jumpTo) navigate(jumpTo);
+  activeSettings = { close: request, el: page, navigate };
+  return activeSettings;
 }

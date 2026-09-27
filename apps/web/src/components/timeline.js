@@ -8,6 +8,7 @@ import { runtime } from "../services/app.js";
 import { reducedMotion } from "../services/store.js";
 import { lineDiff, validationStories } from "../services/history-diff.js";
 import { createHistoryDiff, diffStats } from "./history-diff.js";
+import { emitFeedback } from "../services/feedback.js";
 
 const STATUS = { done: "已完成", incomplete: "可能未完成", stopped: "已停止", error: "失败", running: "进行中" };
 const EVENT_LABEL = {
@@ -47,7 +48,7 @@ export function openReplay({ path, before, after }) {
 
 export function openTimeMachine(taskId = null) {
   const body = h("div");
-  let generation = 0, closed = false;
+  let generation = 0, closed = false, restoring = false;
   const sheet = openSheet({ title: "时光机", tall: true, body, onClose: () => { closed = true; generation++; } });
   const message = (label) => { clear(body); body.appendChild(h("p", { class: "muted", role: "status" }, label)); };
   function failed(error, retry) {
@@ -56,6 +57,7 @@ export function openTimeMachine(taskId = null) {
   }
 
   async function showTasks() {
+    if (closed) return;
     const current = ++generation;
     message("正在读取任务…");
     let tasks = [];
@@ -71,6 +73,7 @@ export function openTimeMachine(taskId = null) {
   }
 
   async function showTask(id) {
+    if (closed) return;
     const current = ++generation;
     message("正在读取时间线…");
     let m;
@@ -174,21 +177,29 @@ export function openTimeMachine(taskId = null) {
     } catch (e) { if (active) { clear(content); content.appendChild(h("p", { class: "muted", role: "status" }, e.message)); } }
   }
 
-  async function revertStep(id, ev) {
-    try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq }); toast("已恢复到这一步之前"); showTask(id); }
+  async function restoreOnce(operation) {
+    if (closed || restoring) return;
+    restoring = true; body.setAttribute("aria-busy", "true");
+    try { await operation(); }
+    finally { restoring = false; body.removeAttribute("aria-busy"); }
+  }
+  function revertStep(id, ev) { return restoreOnce(async () => {
+    try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq }); void emitFeedback("restore"); toast("已恢复到这一步之前"); showTask(id); }
     catch (e) {
       if (e.code === "CONFLICT" && await confirmDialog({ title: "后续修改依赖这个版本", message: "恢复到这一步之前，会同时移除同一文件在它之后的修改。其他文件不受影响。", confirmLabel: "继续恢复", danger: true })) {
-        try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq, force: true }); toast("已恢复到这一步之前"); showTask(id); } catch (e2) { toast(e2.message); }
+        if (closed) return;
+        try { await runtime.checkpoint.revertEvent({ task_id: id, seq: ev.seq, force: true }); void emitFeedback("restore"); toast("已恢复到这一步之前"); showTask(id); } catch (e2) { toast(e2.message); }
       } else if (e.code !== "CONFLICT") toast(e.message);
     }
-  }
-  async function revertFile(id, path) {
-    try { await runtime.checkpoint.revertFile({ task_id: id, path }); toast(`已恢复 ${path.split("/").pop()}`); showTask(id); } catch (e) { toast(e.message); }
-  }
-  async function revertTask(id) {
+  }); }
+  function revertFile(id, path) { return restoreOnce(async () => {
+    try { await runtime.checkpoint.revertFile({ task_id: id, path }); void emitFeedback("restore"); toast(`已恢复 ${path.split("/").pop()}`); showTask(id); } catch (e) { toast(e.message); }
+  }); }
+  function revertTask(id) { return restoreOnce(async () => {
     if (!(await confirmDialog({ title: "恢复工作区？", message: "这个任务改动过的所有文件都会恢复成任务开始前的样子；它新建的文件会被移到回收站。", confirmLabel: "恢复", danger: true }))) return;
-    try { const r = await runtime.checkpoint.revertTask({ task_id: id }); toast(`已恢复 ${r.reverted.length} 个文件`); showTask(id); } catch (e) { toast(e.message); }
-  }
+    if (closed) return;
+    try { const r = await runtime.checkpoint.revertTask({ task_id: id }); if (r.reverted.length) void emitFeedback("restore"); toast(`已恢复 ${r.reverted.length} 个文件`); showTask(id); } catch (e) { toast(e.message); }
+  }); }
 
   taskId ? showTask(taskId) : showTasks();
   return sheet;

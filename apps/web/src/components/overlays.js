@@ -4,6 +4,7 @@
 import { h, icon, clear, toast } from "./dom.js";
 import { reducedMotion } from "../services/store.js";
 import { velocityTracker } from "../services/motion.js";
+import { emitFeedback } from "../services/feedback.js";
 
 const stack = [];
 let pendingBack = false;
@@ -131,6 +132,7 @@ export function openDialog({ title, body, actions = [], onClose } = {}) {
     onclick: async () => {
       if (closed || busy) return;
       busy = true; buttons.forEach((button) => { button.disabled = true; });
+      if (a.danger) void emitFeedback("confirm");
       try {
         const result = a.onClick ? await a.onClick() : undefined;
         if (result !== false) request();

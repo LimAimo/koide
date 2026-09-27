@@ -39,7 +39,7 @@ from .security.permissions import MODES, TOOL_SETTINGS, PermissionEngine
 from .security.policy import HardPolicy
 from .tools.builtin import build_registry
 
-VERSION = "1.0.0-rc.1"
+VERSION = "1.0.0-rc.2"
 
 
 class Connection:
@@ -224,6 +224,7 @@ class BridgeApp:
         return {
             "version": VERSION, "platform": platform.platform(), "python": platform.python_version(),
             "lan": self.lan, "workspace": self.workspace.info() if self.workspace else None,
+            "capabilities": {"haptics": False},
             "permissions": {**self.permissions.config(), "modes": list(MODES), "tool_settings_options": list(TOOL_SETTINGS)},
             "profiles": self.profiles.list_public(),
             "presets": {k: {**v, "not_yet": False} for k, v in PRESETS.items()} | {k: {"not_yet": True} for k in NOT_YET},
@@ -233,6 +234,12 @@ class BridgeApp:
             "tools": [t.describe() for t in self.tools.all()], "recent": self.settings.get("recent", []),
             "agent_modes": list(MODE_CLASSES), "approval_profile": self.settings.get("approval_profile"),
         }
+
+    async def rpc_feedback_emit(self, p, conn):
+        if p.get("kind") not in ("snap", "confirm", "complete", "restore"):
+            raise WorkspaceError("BAD_REQUEST", "不支持的触觉类型")
+        # 远端 Bridge 不可代替当前手机提供触觉，也不模拟执行成功。
+        return {"supported": False, "performed": False, "reason": "unsupported"}
 
     # ---- workspace ------------------------------------------------------------------------------------
     async def rpc_workspace_open(self, p, conn):

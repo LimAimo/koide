@@ -4,7 +4,7 @@
 import { h, icon, toast, debounce } from "./dom.js";
 import { openMenu, openDialog, confirmDialog, promptDialog } from "./overlays.js";
 import { runtime, events, state } from "../services/app.js";
-import { settingsStore } from "../services/store.js";
+import { settingsStore, reducedMotion } from "../services/store.js";
 import { importFiles, exportPath } from "./transfer.js";
 
 const extHue = (name) => {
@@ -20,18 +20,27 @@ export function createFileTree({ onOpen, onNavigate }) {
   const el = h("div", { class: "tree", role: "tree", "aria-label": "项目文件" });
   const expanded = new Set();
   const cache = new Map();           // dir path -> nodes
+  const requests = new Map();
+  let generation = 0;
   let selectedPath = null;           // 创建目标跟随最近点选的文件/文件夹
   let lastActive = null;
   const inner = h("div");
-  el.appendChild(inner);
+  const status = h("div", { class: "tree-empty", role: "status", hidden: true });
+  el.append(status, inner);
 
   async function load(dir) {
-    const res = await runtime.files.tree({ path: dir, depth: 1, show_hidden: !!settingsStore.get().showHiddenFiles });
-    // Native Core 的 fs.tree 直接返回节点数组；旧 Bridge 返回 { nodes: [...] }。
-    // 在 Native 模式误读 res.nodes 会让所有已有工作区看起来都是空目录。
-    const nodes = Array.isArray(res) ? res : (Array.isArray(res?.nodes) ? res.nodes : []);
-    cache.set(dir, nodes);
-    return nodes;
+    const current = generation, request = (requests.get(dir) || 0) + 1;
+    requests.set(dir, request);
+    const fresh = () => current === generation && requests.get(dir) === request && state.get().workspace;
+    try {
+      const res = await runtime.files.tree({ path: dir, depth: 1, show_hidden: !!settingsStore.get().showHiddenFiles });
+      if (!fresh()) return null;
+      // Native 返回数组，Bridge 返回 { nodes }；无效响应不能冒充空目录。
+      const nodes = Array.isArray(res) ? res : res?.nodes;
+      if (!Array.isArray(nodes)) throw new Error("目录响应无效，请重试");
+      cache.set(dir, nodes);
+      return nodes;
+    } catch (error) { if (fresh()) throw error; return null; }
   }
 
   function makeNode(n, depth) {
@@ -66,8 +75,11 @@ export function createFileTree({ onOpen, onNavigate }) {
     }
     const cancel = () => { clearTimeout(timer); timer = null; };
     row.addEventListener("pointerdown", (e) => {
+      cancel();
+      if (e.isPrimary === false || (e.button != null && e.button !== 0)) return;
       long = false; sx = e.clientX; sy = e.clientY;
-      timer = setTimeout(() => { long = true; timer = null; navigator.vibrate && navigator.vibrate(12); menuFor(n); }, 450);
+      const current = generation;
+      timer = setTimeout(() => { timer = null; if (current !== generation || !el.contains(row)) return; long = true; menuFor(n); }, 450);
     });
     row.addEventListener("pointermove", (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
     row.addEventListener("pointerup", cancel);
@@ -90,10 +102,11 @@ export function createFileTree({ onOpen, onNavigate }) {
     const keep = new Set();
     for (const n of nodes) {
       let node = existing.get(n.path);
+      if (node && node.dataset.type !== n.type) { node.remove(); node = null; }
       if (!node || node.classList.contains("exit")) {
         node = makeNode(n, depth);
         node.classList.add("enter");
-        setTimeout(() => node.classList.remove("enter"), 320);
+        setTimeout(() => node.classList.remove("enter"), reducedMotion() ? 0 : 320);
       }
       keep.add(n.path);
       const ref = prev ? prev.nextSibling : container.firstChild;
@@ -107,8 +120,9 @@ export function createFileTree({ onOpen, onNavigate }) {
     }
     for (const [p, node] of existing) {
       if (keep.has(p) || node.classList.contains("exit")) continue;
+      node.inert = true;
       node.classList.add("exit");
-      setTimeout(() => node.remove(), 230);
+      setTimeout(() => node.remove(), reducedMotion() ? 0 : 240);
     }
     if (container === inner && !nodes.length) {
       if (!container.querySelector(".tree-empty")) container.appendChild(h("div", { class: "tree-empty" }, "这个文件夹是空的。"));
@@ -124,26 +138,46 @@ export function createFileTree({ onOpen, onNavigate }) {
       expanded.delete(path);
       node.classList.remove("open");
       node.querySelector(".row").setAttribute("aria-expanded", "false");
+      node.querySelector(".row").removeAttribute("aria-busy");
       return;
     }
+    const current = generation;
     expanded.add(path);
-    try { await load(path); } catch (e) { toast(e.message); expanded.delete(path); return; }
+    node.querySelector(".row").setAttribute("aria-busy", "true");
+    let nodes;
+    const pending = load(path), request = requests.get(path);
+    try { nodes = await pending; }
+    catch (e) { toast(e.message); expanded.delete(path); }
+    finally { if (current === generation && request === requests.get(path)) node.querySelector(".row").removeAttribute("aria-busy"); }
+    if (!nodes || current !== generation || !expanded.has(path)) return;
     const depth = Number(node.querySelector(".row").style.getPropertyValue("--depth")) + 1;
-    reconcile(node.querySelector(".inner"), cache.get(path), depth);
-    requestAnimationFrame(() => { node.classList.add("open"); node.querySelector(".row").setAttribute("aria-expanded", "true"); });
+    reconcile(node.querySelector(".inner"), nodes, depth);
+    requestAnimationFrame(() => { if (current === generation && expanded.has(path) && el.contains(node)) { node.classList.add("open"); node.querySelector(".row").setAttribute("aria-expanded", "true"); } });
+    paint();
   }
 
   async function refresh(dir = null) {
     if (!state.get().workspace) return;
+    const current = generation;
+    if (!cache.has(".")) { status.hidden = false; status.setAttribute("role", "status"); status.textContent = "正在读取文件…"; }
     try {
-      const dirs = dir === null ? [".", ...expanded] : [dir];
-      for (const d of dirs) { if (d === "." || expanded.has(d)) await load(d); }
+      const dirs = dir === null || !cache.has(".") ? [".", ...expanded] : [dir];
+      for (const d of dirs) { if ((d === "." || expanded.has(d)) && !(await load(d))) return; }
+      if (current !== generation || !state.get().workspace) return;
+      status.hidden = true;
       reconcile(inner, cache.get(".") || [], 0);
-    } catch (e) { /* workspace may have closed */ }
+      paint();
+    } catch (error) {
+      if (current !== generation || !state.get().workspace) return;
+      status.hidden = false; status.setAttribute("role", "alert");
+      status.textContent = `无法读取文件列表：${error.message || "请重试"}`;
+      status.appendChild(h("button", { class: "btn text small", type: "button", onclick: () => refresh() }, "重试"));
+    }
   }
 
   async function reset() {
-    expanded.clear(); cache.clear();
+    generation++; requests.clear(); expanded.clear(); cache.clear();
+    selectedPath = null; lastActive = null; status.hidden = true;
     while (inner.firstChild) inner.removeChild(inner.firstChild);
     await refresh(".");
   }
@@ -153,14 +187,18 @@ export function createFileTree({ onOpen, onNavigate }) {
 
   async function revealPath({ path, scroll = false } = {}) {
     if (!path || !state.get().workspace) return;
+    const current = generation;
     const parts = path.split("/").filter(Boolean);
     const dirs = [];
     for (let i = 1; i < parts.length; i++) dirs.push(parts.slice(0, i).join("/"));
     try {
-      await load(".");
-      for (const dir of dirs) { expanded.add(dir); await load(dir); }
+      if (!(await load("."))) return;
+      for (const dir of dirs) { expanded.add(dir); if (!(await load(dir))) return; }
+      if (current !== generation) return;
+      status.hidden = true;
       reconcile(inner, cache.get(".") || [], 0);
-      if (scroll) requestAnimationFrame(() => nodeFor(path)?.scrollIntoView?.({ block: "nearest" }));
+      paint();
+      if (scroll) requestAnimationFrame(() => { if (current === generation) nodeFor(path)?.scrollIntoView?.({ block: "nearest" }); });
     } catch { /* workspace may have changed while the agent was working */ }
   }
   events.on("tree:reveal", (d) => revealPath(d));

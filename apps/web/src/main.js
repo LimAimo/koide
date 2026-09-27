@@ -19,6 +19,7 @@ import { runtime, state, events, openFile, initConnection, connectManual, goHome
 import { pairFromLocation } from "./services/pairing.js";
 import { settingsStore, saveSettings, applyTheme } from "./services/store.js";
 import { loadServedPacks } from "./animations/diffusion/packs.js";
+import { initFeedback } from "./services/feedback.js";
 
 // Native shells should behave like apps, not zoomable web pages.
 if (runtime.kind === "native") {
@@ -30,6 +31,7 @@ if (runtime.kind === "native") {
 
 function boot() {
   applyTheme();
+  initFeedback();
   settingsStore.subscribe(applyTheme);
   matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme());
   matchMedia("(prefers-reduced-motion: reduce)").addEventListener?.("change", () => applyTheme());

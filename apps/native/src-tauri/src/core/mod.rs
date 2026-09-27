@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
+use koide_feedback::FeedbackExt;
 use agent::{AgentLimits, AgentState};
 use conversation::ConversationStore;
 use devices::DeviceStore;
@@ -115,6 +116,13 @@ impl NativeCore {
     ) -> Result<Value, RuntimeError> {
         match method {
             "hello" => Ok(self.hello()),
+            "feedback.emit" => {
+                let kind = req_str(&params, "kind")?;
+                if !matches!(kind, "snap" | "confirm" | "complete" | "restore") {
+                    return Err(RuntimeError::new("BAD_REQUEST", "不支持的触觉类型"));
+                }
+                app.feedback().emit(kind).map_err(|error| RuntimeError::new("FEEDBACK_UNAVAILABLE", error))
+            }
             "profiles.list" => Ok(json!({"profiles": self.profiles.list_public()})),
             "profiles.save" => {
                 let profile = params.get("profile").ok_or_else(|| RuntimeError::new("BAD_PROFILE", "缺少 profile"))?;
@@ -602,6 +610,7 @@ impl NativeCore {
             "platform": std::env::consts::OS,
             "native": true,
             "lan": false,
+            "capabilities": {"haptics": cfg!(target_os = "android")},
             "workspace": self.workspace.as_ref().map(Workspace::info),
             "permissions": permissions,
             "profiles": self.profiles.list_public(),
@@ -615,11 +624,11 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "parity-audit",
-                "runtime_dispatch": "72/72",
+                "runtime_dispatch": "73/73",
                 "python_bridge_removal_allowed": false,
                 "capabilities": {
                     "workspace_path_backend": true,
-                    "workspace_android_saf": false,
+                    "workspace_android_saf": cfg!(target_os = "android"),
                     "filesystem": true,
                     "external_watcher": true,
                     "export_zip": true,
@@ -639,7 +648,6 @@ impl NativeCore {
                     "device_store": true
                 },
                 "blockers_before_python_removal": [
-                    "Android SAF 原地 WorkspaceBackend 尚未实现",
                     "Native Remote Runtime server 尚未实现；devices.pair_code 当前明确返回 LAN_OFF",
                     "Android 交互式 PTY 尚未实现",
                     "Native-only parity/smoke gate 尚需最终通过"

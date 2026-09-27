@@ -1,6 +1,6 @@
 # Koide Native 构建说明
 
-当前应用版本：`1.0.0-rc.1`（候选版准备，尚未发布）。开发分支保持 `dev/1.0.0`。
+当前应用版本：`1.0.0-rc.2`（候选版准备，尚未发布）。开发分支保持 `dev/1.0.0`。
 
 ## 工具链
 
@@ -43,7 +43,7 @@ pnpm --filter @diffusion/native exec tauri icon koide-icon.svg
 pnpm --filter @diffusion/native exec tauri android build --debug --apk --target aarch64
 ```
 
-Android 的 `versionName` 来自 `tauri.conf.json`，当前 `versionCode` 为 `10001`，高于此前 1.0 开发包的 `10000`。后续 RC 与正式版都必须继续递增安装版本码，不能在去掉 `-rc.1` 时降回 `10000`。CI 会使用 `apksigner verify` 检查 APK 签名。
+Android 的 `versionName` 来自 `tauri.conf.json`，当前 `versionCode` 为 `10002`，高于 RC.1 的 `10001` 与此前开发包的 `10000`。后续 RC 与正式版都必须继续递增安装版本码，不能在去掉 `-rc.2` 时降回 `10000`。CI 会使用 `apksigner verify` 检查 APK 签名。
 
 当前自动构建使用调试签名以保证产物可安装；应用商店或公开生产分发应另外配置正式签名密钥。
 
@@ -76,14 +76,14 @@ Linux 上运行 Tauri Core 测试需要 GTK/WebKit 开发库。
 
 | 来源 | 当前值 / 用途 |
 |---|---|
-| 根目录、Native、Web、CodeMirror 的 `package.json` | `1.0.0-rc.1` |
-| `apps/native/src-tauri/tauri.conf.json` | `1.0.0-rc.1`；用于安装包与 CI 产物文件名 |
-| Native / SAF 的 `Cargo.toml` 与 `Cargo.lock` 自有包条目 | `1.0.0-rc.1`；第三方依赖版本不随应用更改 |
+| 根目录、Native、Web、CodeMirror 的 `package.json` | `1.0.0-rc.2` |
+| `apps/native/src-tauri/tauri.conf.json` | `1.0.0-rc.2`；用于安装包与 CI 产物文件名 |
+| Native / SAF / Feedback 的 `Cargo.toml` 与 `Cargo.lock` 自有包条目 | `1.0.0-rc.2`；第三方依赖版本不随应用更改 |
 | Native Core `hello.version` | 编译时读取 `CARGO_PKG_VERSION`，不再维护重复常量 |
 | CodeMirror `version` 导出 | 构建时读取自己的 `package.json`，不再维护重复常量 |
-| `bridge/app.py` 的 `VERSION` | `1.0.0-rc.1`；用于 Bridge 握手、HTTP 信息与启动提示 |
-| `pyproject.toml` | `1.0.0rc1`，对应 Python 包版本格式 |
-| Android `bundle.android.versionCode` | `10001`；每次安装包版本迭代递增 |
+| `bridge/app.py` 的 `VERSION` | `1.0.0-rc.2`；用于 Bridge 握手、HTTP 信息与启动提示 |
+| `pyproject.toml` | `1.0.0rc2`，对应 Python 包版本格式 |
+| Android `bundle.android.versionCode` | `10002`；每次安装包版本迭代递增 |
 
 版本更新时同步上述文件及 README、CHANGELOG、STATUS、能力审计和本页；保持历史 CHANGELOG 与历史分支引用原样。设置页继续读取 Runtime 的 `hello.version`，不另写界面版本常量。
 
