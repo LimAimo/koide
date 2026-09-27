@@ -374,7 +374,11 @@ function advancedSection(rerender) {
       openDialog({ title: "导入设置", body: ta, actions: [{ label: "取消" }, { label: "导入", primary: true, onClick: () => { try { importSettings(ta.value); applyTheme(); rerender(); toast("设置已导入"); } catch (e) { toast("设置无效：" + e.message); } } }] });
     }, "恢复 restore"),
     btnRow("重置所有设置", "undo", async () => { if (await confirmDialog({ title: "重置设置？", message: "界面偏好会恢复默认值；桥接服务里的服务商配置会保留。", confirmLabel: "重置", danger: true })) { resetSettings(); applyTheme(); rerender(); } }, "默认 default"),
-    row({ label: runtime.kind === "native" ? "Koide 0.9.0 Native" : "Koide 0.9.0 Web", desc: runtime.kind === "native" ? "本地模式由 Tauri + Rust Native Core 直接提供工作区、Agent、Git 与平台能力，不依赖 Python Bridge。" : "Web 兼容模式通过 Python Bridge 提供本地或 LAN 执行能力。" }),
+    (() => {
+      const version = String(state.get().hello?.version || "").trim();
+      const label = runtime.kind === "native" ? `Koide${version ? " " + version : ""} Native` : `Koide${version ? " " + version : ""} Web`;
+      return row({ label, desc: runtime.kind === "native" ? "版本号直接读取 Native Core；本地模式由 Tauri + Rust Native Core 提供工作区、Agent、Git 与平台能力，不依赖 Python Bridge。" : "版本号直接读取 Bridge Runtime；Web 兼容模式通过 Python Bridge 提供本地或 LAN 执行能力。" });
+    })(),
   ]);
 }
 
