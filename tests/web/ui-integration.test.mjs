@@ -220,8 +220,10 @@ test("Koide 1.0：项目记忆可编辑，并会进入后续 Agent 上下文", a
 
   const done = new Promise((r) => bridge.on("agent.done", r));
   await appMod.startAgent("memory check");
-  assert.ok(["done", "incomplete"].includes((await done).status));
-  await until(() => $(body(), ".msg.assistant").some((x) => /MEMORY_OK/.test(text(x))), "memory reaches agent context");
+  const result = await done;
+  assert.ok(["done", "incomplete"].includes(result.status));
+  assert.match(result.summary || "", /MEMORY_OK/, "项目记忆必须进入模型 system context");
+  await until(() => $$(body(), ".msg.assistant").some((x) => /MEMORY_OK/.test(text(x))), "memory response rendered");
 });
 
 test("manual mode: approval card appears inline and Allow once lets the agent continue", async () => {
