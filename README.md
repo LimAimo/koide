@@ -14,6 +14,7 @@ AI 修改代码时，Koide 不只是瞬间替换文本：保留下来的代码�
 - **Git 与终端**：Windows 本地工作区支持 Git 主流程和交互式 PTY；Android 普通本地工作区支持一次性 shell 命令。
 - **Android SAF**：可以原地打开用户授权目录，保留 revision、冲突检测、Checkpoint、Trash 与 Agent 编辑语义。
 - **移动端界面**：AI 抽屉支持半屏、自由拖动和向上 fling 全屏；状态栏安全区、触控和移动布局均单独适配。
+- **统一 Motion System**：导航、浮层、按钮按压、AI 面板、工作现场和 Time Machine 共用一套响应节奏，并尊重 reduced-motion；代码 Diffusion 动画保持独立。
 - **工作现场与项目记忆**：实时显示 Agent 真正发生的探索、修改与验证阶段；项目可维护显式的 `.koide/PROJECT_MEMORY.md` 长期上下文，并保护外部修改冲突。
 - **可追踪 Time Machine**：探索、文件修改和验证节点会关联真实 Tool Call；验证失败后的修复与重新通过会形成可读故事线，并支持查看改动、单步/单文件/整任务恢复。
 - **安全与恢复**：HardPolicy、权限模式、逐工具规则、审批模型、版本冲突检测、时光机和回收站共同工作。
