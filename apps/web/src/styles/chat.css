@@ -10,7 +10,7 @@
 .chat-empty { margin: auto; text-align: center; color: var(--on-surface-variant); padding: 16px; max-width: 320px; }
 .chat-empty h3 { font-size: 16px; font-weight: 500; color: var(--on-surface); margin-bottom: 6px; }
 .suggest { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
-.msg { max-width: 100%; animation: msg-in .3s var(--ease-decel); }
+.msg { max-width: 100%; animation: msg-in var(--motion-slow) var(--ease-decel); }
 @keyframes msg-in { from { opacity: 0; transform: translateY(8px); } }
 .msg.user { align-self: flex-end; max-width: 88%; padding: 10px 14px; border-radius: 18px 18px 4px 18px; background: var(--primary-container); color: var(--on-primary-container); white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.assistant { overflow-wrap: anywhere; line-height: 22px; }
@@ -30,20 +30,20 @@
 
 .tool {
   border: 1px solid var(--outline-variant); border-radius: var(--r-md); background: var(--surface); overflow: hidden;
-  transition: border-color .25s, background .25s;
+  transition: border-color var(--motion-medium), background var(--motion-medium);
 }
 .tool-head { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; width: 100%; text-align: left; }
 .tool-head .ico { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; }
 .tool-head .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-head .s { font-size: 12px; color: var(--on-surface-variant); flex: none; }
-.tool-head .chev { transition: transform .22s var(--ease-emph); color: var(--on-surface-variant); }
+.tool-head .chev { transition: transform var(--motion-fast) var(--ease-emph); color: var(--on-surface-variant); }
 .tool.open .tool-head .chev { transform: rotate(90deg); }
 .tool[data-state="done"] .state-ico { color: var(--ok); }
 .tool[data-state="error"], .tool[data-state="denied"] { border-color: color-mix(in oklab, var(--error) 50%, transparent); }
 .tool[data-state="error"] .state-ico, .tool[data-state="denied"] .state-ico { color: var(--error); }
 .tool[data-state="waiting"] { border-color: var(--warn); }
 .tool[data-state="running"], .tool[data-state="pending"] { border-color: color-mix(in oklab, var(--primary) 55%, transparent); }
-.tool-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .24s var(--ease-emph); }
+.tool-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--motion-medium) var(--ease-emph); }
 .tool.open .tool-body { grid-template-rows: 1fr; }
 .tool-body > div { overflow: hidden; min-height: 0; }
 .tool-body .in { padding: 4px 12px 12px; display: grid; gap: 8px; font-size: 12.5px; }
@@ -52,7 +52,7 @@
 .tool-body .v, .tool-body pre { font-family: var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .tool-body pre { max-height: 200px; overflow: auto; padding: 8px; border-radius: var(--r-sm); background: var(--surface-2); }
 
-.approval { border: 1px solid var(--warn); border-radius: var(--r-lg); padding: 14px; background: color-mix(in oklab, var(--warn) 10%, var(--surface)); display: grid; gap: 10px; animation: msg-in .3s var(--ease-decel); }
+.approval { border: 1px solid var(--warn); border-radius: var(--r-lg); padding: 14px; background: color-mix(in oklab, var(--warn) 10%, var(--surface)); display: grid; gap: 10px; animation: msg-in var(--motion-slow) var(--ease-decel); }
 .approval h4 { margin: 0; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .approval .why { color: var(--on-surface-variant); font-size: 13px; }
 .approval .cmd { font-family: var(--font-code); font-size: 12.5px; padding: 8px 10px; border-radius: var(--r-sm); background: var(--surface-2); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 120px; overflow: auto; }
@@ -78,12 +78,12 @@
 .composer-card textarea {
   flex: 1; min-height: 56px; max-height: 160px; padding: 4px 6px; border: none; background: transparent;
   resize: none; overflow-y: auto; line-height: 22px; font: inherit; color: var(--on-surface);
-  outline: none; box-shadow: none; -webkit-appearance: none; appearance: none; transition: height .18s var(--ease-emph);
+  outline: none; box-shadow: none; -webkit-appearance: none; appearance: none; transition: height var(--motion-fast) var(--ease-emph);
 }
 .composer-actions { display: flex; justify-content: flex-end; }
-.send { position: relative; width: 44px; height: 44px; flex: none; border-radius: 50%; background: var(--primary); color: var(--on-primary); display: grid; place-items: center; overflow: hidden; transition: background .25s, border-radius .3s var(--ease-emph), transform .12s; }
-.send:active { transform: scale(.92); }
-.send .ic { position: absolute; transition: transform .3s var(--ease-emph), opacity .2s; }
+.send { position: relative; width: 44px; height: 44px; flex: none; border-radius: 50%; background: var(--primary); color: var(--on-primary); display: grid; place-items: center; overflow: hidden; transition: background var(--motion-medium), border-radius var(--motion-medium) var(--ease-emph), transform var(--motion-instant); }
+.send:active { transform: scale(var(--motion-press)); }
+.send .ic { position: absolute; transition: transform var(--motion-medium) var(--ease-emph), opacity var(--motion-fast); }
 .send .ic.stop { opacity: 0; transform: rotate(-90deg) scale(.4); }
 .send.running { background: var(--error); color: var(--on-error); border-radius: 14px; }
 .send.running .ic.go { opacity: 0; transform: rotate(90deg) scale(.4); }
@@ -95,7 +95,7 @@
   background: var(--surface-2); border: 1px solid var(--outline-variant); border-radius: var(--r-lg);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .22); padding: 6px; display: grid; gap: 2px; z-index: 20;
   opacity: 0; transform: translateY(8px) scale(.98); transform-origin: bottom left;
-  transition: opacity .16s var(--ease-decel), transform .16s var(--ease-decel);
+  transition: opacity var(--motion-fast) var(--ease-decel), transform var(--motion-fast) var(--ease-decel);
 }
 .popover.in { opacity: 1; transform: none; }
 .popover-list { display: grid; gap: 2px; max-height: 40vh; overflow-y: auto; }
@@ -105,13 +105,13 @@
 .popover-item .pill.warn { margin-left: auto; font-size: 11px; color: var(--warn, #b45309); }
 .popover-divider { height: 1px; background: var(--outline-variant); margin: 4px 2px; }
 .popover-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; font-size: 13px; }
-.switch { flex: none; width: 40px; height: 24px; border-radius: var(--r-full); background: var(--outline-variant); position: relative; transition: background .18s; border: none; padding: 0; }
-.switch .switch-knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .18s var(--ease-emph); }
+.switch { flex: none; width: 40px; height: 24px; border-radius: var(--r-full); background: var(--outline-variant); position: relative; transition: background var(--motion-fast); border: none; padding: 0; }
+.switch .switch-knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform var(--motion-fast) var(--ease-emph); }
 .switch.on { background: var(--primary); }
 .switch.on .switch-knob { transform: translateX(16px); }
 
 /* ---- full-screen pages (settings, time machine, welcome) --------------------------------------------------- */
-.page { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; background: var(--surface); transform: translateX(100%); transition: transform .34s var(--ease-decel); padding-top: env(safe-area-inset-top); }
+.page { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; background: var(--surface); transform: translateX(100%); transition: transform var(--motion-slow) var(--ease-decel); padding-top: env(safe-area-inset-top); }
 .page.in { transform: none; }
 .page-head { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 8px; }
 .page-head h1 { flex: 1; font-size: 22px; line-height: 28px; font-weight: 400; }
@@ -306,7 +306,7 @@ pre.diff { margin: 0; font-family: var(--font-code); font-size: 12.5px; line-hei
   width: calc((100% - 4px) / var(--n, 4));
   border-radius: var(--r-full); background: var(--primary);
   transform: translateX(calc(var(--i, 0) * 100%));
-  transition: transform .3s var(--ease-emph);
+  transition: transform var(--motion-medium) var(--ease-emph);
 }
 .ai-close { display: inline-flex !important; }
 .tool[data-state="preparing"] { border-color: color-mix(in oklab, var(--primary) 36%, var(--outline-variant)); }
@@ -334,7 +334,7 @@ pre.diff { margin: 0; font-family: var(--font-code); font-size: 12.5px; line-hei
 #app.mode-port .appbar .spacer { min-width: 0; }
 
 /* ---- Ask-user tool -------------------------------------------------------------------------------- */
-.question-card { border: 1px solid var(--primary); border-radius: var(--r-lg); padding: 14px; background: var(--surface); display: grid; gap: 10px; animation: msg-in .3s var(--ease-decel); }
+.question-card { border: 1px solid var(--primary); border-radius: var(--r-lg); padding: 14px; background: var(--surface); display: grid; gap: 10px; animation: msg-in var(--motion-slow) var(--ease-decel); }
 .question-card h4 { margin: 0; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .question-card .question-text { line-height: 1.55; white-space: pre-wrap; }
 .question-card .btns { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -376,11 +376,11 @@ pre.diff { margin: 0; font-family: var(--font-code); font-size: 12.5px; line-hei
   backdrop-filter: blur(22px) saturate(1.18);
   border: 1px solid color-mix(in srgb, var(--outline-variant) 64%, transparent);
   border-radius: 28px !important;
-  transition: border-radius 360ms var(--ease-emph), padding 360ms var(--ease-emph), min-height 360ms var(--ease-emph), background 240ms;
+  transition: border-radius var(--motion-page) var(--ease-emph), padding var(--motion-page) var(--ease-emph), min-height var(--motion-page) var(--ease-emph), background var(--motion-medium);
 }
 .composer:not(.compact) .composer-card { min-height: 132px; padding: 14px; }
 .composer.compact .composer-card { min-height: 52px; padding: 7px 8px 7px 14px; border-radius: 26px !important; }
-.composer-card textarea { transition: height 220ms var(--ease-emph); }
+.composer-card textarea { transition: height var(--motion-medium) var(--ease-emph); }
 .composer.compact .composer-card textarea { min-height: 28px; }
 .composer-actions { display: flex; align-items: center; width: 100%; }
 .composer-spacer { flex: 1; }
