@@ -11,6 +11,8 @@ import { openGitPanel } from "./components/git-panel.js";
 import { importFiles, exportPath } from "./components/transfer.js";
 import { openSettings } from "./components/settings.js";
 import { openTimeMachine } from "./components/timeline.js";
+import { openLiveWorkspace } from "./components/live-workspace.js";
+import { openProjectMemory } from "./components/project-memory.js";
 import { setupLayout } from "./components/layout.js";
 import { hasLayers, openMenu, confirmDialog } from "./components/overlays.js";
 import { runtime, state, events, openFile, initConnection, connectManual, goHome, refreshGit, restoreConversation } from "./services/app.js";
@@ -47,6 +49,7 @@ function boot() {
           { label: "打开其他文件夹", icon: "folder", onClick: () => openFolderPicker() },
           { label: "导入文件到项目根目录…", icon: "upload", onClick: () => importFiles(".") },
           { label: "导出整个项目为 zip", icon: "download", onClick: () => exportPath(".") },
+          { label: "项目记忆", icon: "file", onClick: () => openProjectMemory() },
           { label: st.showHiddenFiles ? "隐藏隐藏文件" : "显示隐藏文件（含 .git）", icon: "file", onClick: () => saveSettings({ showHiddenFiles: !st.showHiddenFiles }) },
           { label: "从最近项目移除", icon: "trash", danger: true, onClick: async () => {
             const ws = state.get().workspace;
@@ -98,8 +101,9 @@ function boot() {
     if (layout?.mode === "wide") saveSettings({ terminalVisible: !settingsStore.get().terminalVisible });
     else openTerminal();
   });
+  const live = () => openLiveWorkspace({ onOpenTimeline: (id) => openTimeMachine(id), onOpenMemory: () => openProjectMemory() });
   const bar = h("header", { class: "appbar" },
-    homeBtn, iconButton("menu", "文件", () => layout.openDrawer(), "menu-btn"), title, createCapsule(), h("div", { class: "spacer" }),
+    homeBtn, iconButton("menu", "文件", () => layout.openDrawer(), "menu-btn"), title, createCapsule(live), h("div", { class: "spacer" }),
     filesBtn, aiBtn, gitBtn, tmBtn, termBtn, iconButton("tune", "设置", () => openSettings()));
   app.append(bar, work, scrim);
   document.body.appendChild(app);
