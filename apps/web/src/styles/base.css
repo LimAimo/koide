@@ -209,11 +209,18 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   .welcome-actions > .btn { width: 100%; white-space: normal; min-height: 48px; }
 }
 
-/* 顶部 surface 使用渐进式玻璃层，而不是一条不透明色块。 */
-.appbar, .settings-head, .sheet-heading {
+/* 顶部 surface 使用渐进式玻璃层。Sheet 标题本身不单独铺色：
+   Sheet 使用 --surface-1，而普通主题的 --surface 与 --surface-1 不同；
+   旧实现把标题区混入 --surface，视觉上就会出现一整块灰/黑矩形。OLED 两者都是纯黑，所以之前看不出来。 */
+.appbar, .settings-head {
   background: color-mix(in srgb, var(--surface) 72%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(1.15);
   backdrop-filter: blur(18px) saturate(1.15);
+}
+.sheet-heading {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 .appbar::after, .settings-head::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: -18px; height: 18px;
