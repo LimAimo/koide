@@ -28,7 +28,7 @@ use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use watcher::WorkspaceWatcher;
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "0.9.0";
+pub const VERSION: &str = "1.0.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
