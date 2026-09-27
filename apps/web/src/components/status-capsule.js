@@ -8,10 +8,12 @@ const LABEL = {
   working: "处理中", waiting_approval: "等待你批准", stopped: "已停止", error: "出错了",
 };
 
-export function createCapsule() {
+export function createCapsule(onClick = null) {
   const glyph = h("span", { class: "glyph" });
   const txt = h("span", { class: "txt" });
-  const el = h("div", { class: "capsule", role: "status", "aria-live": "polite" }, glyph, txt);
+  const el = onClick
+    ? h("button", { class: "capsule capsule-button", type: "button", "aria-label": "打开工作现场", title: "工作现场", onclick: onClick }, glyph, txt)
+    : h("div", { class: "capsule", role: "status", "aria-live": "polite" }, glyph, txt);
   let last = "";
 
   function render() {
