@@ -42,6 +42,7 @@ class Ctx:
     """Who is acting. Agent tasks carry a task_id so their edits are checkpointed."""
     actor: str = "user"            # user | agent | system
     task_id: str | None = None
+    call_id: str | None = None
 
 
 @dataclass
@@ -341,7 +342,8 @@ class Workspace:
             self.checkpoints.add_event(
                 ctx.task_id, "edit", f"{verb} {rel}", path=rel, kind=kind,
                 before_blob=self.checkpoints.blob_for_event_before(before),
-                existed_before=before is not None, after_rev=revision_of(after), **extra)
+                existed_before=before is not None, after_rev=revision_of(after),
+                call_id=ctx.call_id, **extra)
 
     def _commit_bytes(self, p: Path, data: bytes, ctx: Ctx, base_revision: str | None) -> dict:
         with self._lock:
