@@ -14,6 +14,7 @@ const STATE = {
   editing: "正在修改", working: "处理中", waiting_approval: "等待批准", done: "已完成", stopped: "已停止", error: "失败", idle: "空闲",
 };
 const ACT_STATE = { preparing: "准备", pending: "等待", waiting: "等待", running: "进行中", done: "完成", error: "失败", denied: "已拒绝" };
+const STAGE_STATE = { active: "当前", done: "已完成", pending: "待处理", skipped: "未经过", error: "失败", stopped: "已停止", incomplete: "可能未完成" };
 
 function ago(ts) {
   if (!ts) return "";
@@ -50,6 +51,23 @@ export function openLiveWorkspace({ onOpenTimeline, onOpenMemory } = {}) {
           h("h3", null, goal || "现在很安静"),
           h("p", { class: "muted" }, running && s.agent.detail ? s.agent.detail : (live.finishedAt ? "最近一次任务 " + ago(live.finishedAt) + "结束" : "开始一个 Agent 任务后，这里会显示它正在做什么。")))),
     );
+
+    const stages = live.stages || [];
+    if (stages.length) {
+      body.append(
+        h("section", { class: "live-task-flow", "aria-label": "任务脉络" },
+          h("div", { class: "live-section-title" }, "任务脉络"),
+          h("p", { class: "live-task-note muted" }, "根据 Agent 实际发生的动作整理；没有发生的阶段不会假装完成。"),
+          h("div", { class: "live-stage-list" }, stages.map((stage) =>
+            h("div", {
+              class: "live-stage " + stage.state,
+              title: STAGE_STATE[stage.state] || stage.state,
+              "aria-current": stage.state === "active" ? "step" : null,
+            },
+              h("span", { class: "live-stage-mark" }),
+              h("span", { class: "live-stage-label" }, stage.label),
+              h("small", null, STAGE_STATE[stage.state] || stage.state))))));
+    }
 
     const activities = [...(live.activities || [])].reverse();
     body.append(h("div", { class: "live-section-title" }, "实时活动"));

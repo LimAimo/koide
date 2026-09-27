@@ -202,8 +202,14 @@ test("Koide 1.0：状态胶囊可以打开工作现场并显示最近工具活�
   assert.ok((appMod.state.get().live.activities || []).length > 0, "live workspace has recorded tool activity");
   $$(body(), ".capsule")[0].click();
   const sheet = await until(() => $$(body(), ".sheet").find((x) => /工作现场/.test(text(x))), "live workspace sheet");
-  assert.ok($$(sheet, ".live-activity").length > 0);
+  assert.ok($(sheet, ".live-activity").length > 0);
   assert.match(text(sheet), /读取文件|修改文件|处理|运行命令/);
+  const stages = $(sheet, ".live-stage");
+  assert.equal(stages.length, 5);
+  assert.match(stages.map(text).join("|"), /理解目标.*探索项目.*执行修改.*验证结果.*完成/);
+  assert.ok(stages.find((x) => /执行修改/.test(text(x))).classList.contains("done"));
+  assert.ok(stages.find((x) => /验证结果/.test(text(x))).classList.contains("skipped"));
+  assert.ok(stages.find((x) => /^完成/.test(text(x))).classList.contains("done"));
   $$(sheet, ".sheet-close")[0].click();
 });
 

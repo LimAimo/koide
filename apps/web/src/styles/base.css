@@ -303,3 +303,28 @@ input, textarea, [contenteditable="true"], .cm-editor, .cm-content, .ce, .ce-inp
   min-height: min(58dvh, 560px); resize: none !important; font-family: var(--font-code);
   line-height: 1.6; background: var(--surface); 
 }
+
+
+/* ---- Koide 1.0：基于真实 Agent 动作的任务脉络 -------------------------------------------------- */
+.live-task-flow { display: grid; gap: 8px; }
+.live-task-note { margin: -2px 2px 2px; font-size: 12px; line-height: 1.45; }
+.live-stage-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.live-stage {
+  min-width: 0; min-height: 66px; padding: 9px 8px; border: 1px solid var(--outline-variant);
+  border-radius: var(--r-md); display: grid; grid-template-rows: auto 1fr auto; gap: 4px;
+  background: color-mix(in srgb, var(--surface-2) 62%, transparent);
+}
+.live-stage-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--outline); }
+.live-stage-label { font-size: 12px; line-height: 1.25; font-weight: 600; overflow-wrap: anywhere; }
+.live-stage small { font-size: 10px; line-height: 1.2; color: var(--on-surface-variant); }
+.live-stage.active { border-color: color-mix(in srgb, var(--primary) 45%, var(--outline-variant)); background: color-mix(in srgb, var(--primary) 10%, var(--surface-2)); }
+.live-stage.active .live-stage-mark { background: var(--primary); animation: pulse 1.1s ease-in-out infinite; }
+.live-stage.done .live-stage-mark { background: var(--ok); }
+.live-stage.skipped { opacity: .58; }
+.live-stage.error { border-color: color-mix(in srgb, var(--error) 45%, var(--outline-variant)); }
+.live-stage.error .live-stage-mark { background: var(--error); }
+.live-stage.stopped .live-stage-mark, .live-stage.incomplete .live-stage-mark { background: var(--warn); }
+@media (max-width: 520px) {
+  .live-stage-list { grid-template-columns: repeat(5, minmax(54px, 1fr)); overflow-x: auto; padding-bottom: 2px; }
+  .live-stage { min-width: 58px; }
+}

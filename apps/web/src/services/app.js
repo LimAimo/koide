@@ -21,11 +21,21 @@ export const bridge = {
   close: (silent) => runtime.close(silent),
 };
 
+const TASK_STAGE_DEFS = [
+  ["understand", "理解目标"],
+  ["explore", "探索项目"],
+  ["change", "执行修改"],
+  ["verify", "验证结果"],
+  ["complete", "完成"],
+];
+const freshTaskStages = () => TASK_STAGE_DEFS.map(([id, label], i) => ({ id, label, state: i === 0 ? "active" : "pending" }));
+const emptyLive = () => ({ goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [], stages: [] });
+
 export const state = createStore({
   conn: "offline", hello: null, workspace: null,
   tabs: [], active: null,
   agent: { running: false, state: "idle", detail: "", taskId: null },
-  live: { goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [] },
+  live: emptyLive(),
   editing: {},             // path -> true while the agent is writing that file
   approvals: [],
   profiles: [], permissions: null,
@@ -36,6 +46,31 @@ export const state = createStore({
 const setAgent = (patch) => state.set((s) => ({ agent: { ...s.agent, ...patch } }));
 const setLive = (patch) => state.set((s) => ({ live: { ...s.live, ...patch } }));
 const LIVE_LIMIT = 40;
+function advanceLiveStage(id) {
+  state.set((s) => {
+    const stages = (s.live.stages?.length ? s.live.stages : freshTaskStages()).map((x) => ({ ...x }));
+    const target = stages.findIndex((x) => x.id === id);
+    const current = stages.reduce((n, x, i) => (x.state === "active" || x.state === "done" ? Math.max(n, i) : n), 0);
+    if (target < 0 || target <= current) return {};
+    for (let i = 0; i < target; i++) if (["pending", "active"].includes(stages[i].state)) stages[i].state = "done";
+    if (!["done", "error", "stopped"].includes(stages[target].state)) stages[target].state = "active";
+    return { live: { ...s.live, stages } };
+  });
+}
+function finishLiveStages(status) {
+  state.set((s) => {
+    const stages = (s.live.stages?.length ? s.live.stages : freshTaskStages()).map((x) => ({ ...x }));
+    const failed = status === "error", stopped = status === "stopped", incomplete = status === "incomplete";
+    for (const stage of stages) {
+      if (stage.id === "complete") {
+        stage.state = failed ? "error" : stopped ? "stopped" : incomplete ? "incomplete" : "done";
+      } else if (stage.state === "active") {
+        stage.state = failed ? "error" : stopped ? "stopped" : "done";
+      } else if (stage.state === "pending") stage.state = "skipped";
+    }
+    return { live: { ...s.live, stages } };
+  });
+}
 function upsertLiveActivity(callId, patch) {
   state.set((s) => {
     const now = Date.now();
@@ -76,7 +111,7 @@ export async function connectManual(target) {
 export async function openWorkspace(location) {
   const params = typeof location === "string" ? { path: location } : { location };
   const ws = await runtime.workspace.open(params);
-  state.set({ workspace: ws, tabs: [], active: null, editing: {}, conversationId: null, live: { goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [] } });
+  state.set({ workspace: ws, tabs: [], active: null, editing: {}, conversationId: null, live: emptyLive() });
   if (ws?.capabilities?.git === false) state.set({ git: { is_repo: false, files: {} } });
   else refreshGit();
   return ws;
@@ -279,21 +314,29 @@ const WRITERS = new Set(["fs_patch", "fs_write", "fs_create", "fs_delete", "fs_r
 
 runtime.on("agent.started", (d) => {
   setAgent({ running: true, taskId: d.task_id, state: "thinking", detail: "" });
-  setLive({ startedAt: Date.now(), finishedAt: null, status: "running", activities: [] });
+  const stages = state.get().live.stages?.length ? state.get().live.stages : freshTaskStages();
+  setLive({ startedAt: Date.now(), finishedAt: null, status: "running", activities: [], stages });
 });
 runtime.on("agent.status", (d) => {
   setAgent({ state: d.state, detail: d.detail || "", running: !["idle", "stopped", "error"].includes(d.state), taskId: d.task_id });
-  setLive({ status: d.state || "working" });
+  if (!(d.state === "idle" && state.get().live.finishedAt)) setLive({ status: d.state || "working" });
 });
 runtime.on("agent.done", (d = {}) => {
   setAgent({ running: false });
-  setLive({ status: d.status || "done", finishedAt: Date.now() });
+  const status = d.status || "done";
+  finishLiveStages(status);
+  setLive({ status, finishedAt: Date.now() });
   state.set({ editing: {} });
 });
 runtime.on("agent.tool", (d) => {
   if (d.args) callPaths.set(d.call_id, d.args.path || d.args.from || d.args.to);
   const p = callPaths.get(d.call_id) || "";
   upsertLiveActivity(d.call_id, { tool: d.tool, state: d.state, path: p, detail: d.detail || "" });
+  if (["preparing", "running", "done"].includes(d.state)) {
+    if (["fs_read", "fs_list", "fs_search", "fs_glob", "fs_multi_read", "web_fetch"].includes(d.tool)) advanceLiveStage("explore");
+    else if (WRITERS.has(d.tool)) advanceLiveStage("change");
+    else if (["shell_run", "terminal_read"].includes(d.tool)) advanceLiveStage("verify");
+  }
   if (!WRITERS.has(d.tool)) return;
   if (!p) return;
   if (d.state === "running") state.set((s) => ({ editing: { ...s.editing, [p]: true } }));
@@ -305,7 +348,7 @@ runtime.on("approval.resolved", (a) => state.set((s) => ({ approvals: s.approval
 /** 返回开始页：关闭当前项目（同时停止正在运行的智能体和终端），清空标签页。 */
 export async function goHome() {
   if (state.get().workspace && runtime.status === "online") await runtime.workspace.close().catch(() => {});
-  state.set({ workspace: null, tabs: [], active: null, editing: {}, conversationId: null, git: { is_repo: false, files: {} }, live: { goal: "", startedAt: null, finishedAt: null, status: "idle", activities: [] } });
+  state.set({ workspace: null, tabs: [], active: null, editing: {}, conversationId: null, git: { is_repo: false, files: {} }, live: emptyLive() });
   events.emit("conversation:load", null);
 }
 
@@ -321,9 +364,13 @@ export function moveTab(path, dir) {
 
 export async function startAgent(goal) {
   const s = settingsStore.get();
-  setLive({ goal, startedAt: Date.now(), finishedAt: null, status: "starting", activities: [] });
+  setLive({ goal, startedAt: Date.now(), finishedAt: null, status: "starting", activities: [], stages: freshTaskStages() });
   const profile = s.agent.profile || state.get().profiles[0]?.id;
-  if (!profile) throw new Error("请先在「设置」里添加一个模型服务商");
+  if (!profile) {
+    finishLiveStages("error");
+    setLive({ status: "error", finishedAt: Date.now() });
+    throw new Error("请先在「设置」里添加一个模型服务商");
+  }
   const t = activeTab();
   const goalText = t ? `${goal}\n\n(The user currently has "${t.path}" open in the editor.)` : goal;
   try {
@@ -331,6 +378,7 @@ export async function startAgent(goal) {
     if (r.conversation_id && r.conversation_id !== state.get().conversationId) setConversation(r.conversation_id);
     return r;
   } catch (e) {
+    finishLiveStages("error");
     setLive({ status: "error", finishedAt: Date.now() });
     throw e;
   }
