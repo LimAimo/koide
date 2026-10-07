@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from ..providers.media import user_content, validate_attachments
 
 
 class ConversationStore:
@@ -76,8 +77,8 @@ class ConversationStore:
         if last_compact is not None:
             msgs.append({"role": "assistant", "content": f"[更早对话的摘要]\n{entries[last_compact]['text']}"})
             entries = entries[last_compact + 1:]
-        msgs += [{"role": e["role"], "content": e["text"]} for e in entries
-                if e.get("role") in ("user", "assistant") and e.get("text")]
+        msgs += [{"role": e["role"], "content": user_content(e.get("text", ""), validate_attachments(e.get("attachments")))} for e in entries
+                if e.get("role") in ("user", "assistant") and (e.get("text") or e.get("attachments"))]
         return msgs[-limit:] if limit else msgs
 
     #: A dedicated compaction prompt — written to be thorough and structured (bullet points, not prose) so

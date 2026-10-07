@@ -30,7 +30,8 @@ class SseProvider(OpenAICompatible):
             except ValueError as e:
                 args, err = None, f"工具参数不是有效的 JSON：{e}"
             emit({"type": "tool_call_complete", "index": idx, "id": cid, "name": c["name"],
-                  "arguments": args if not err else None, "error": err})
+                  "arguments": args if not err else None, "error": err,
+                  "extra_tc": c.get("extra_tc"), "extra_fn": c.get("extra_fn")})
         state["calls"].clear()
         emit({"type": "finish", "reason": reason})
 

@@ -2,13 +2,13 @@
 // 只通过「编辑器适配器接口」使用编辑器，所以内置编辑器和 CodeMirror 6 可以随时互换；分屏时两个窗格各有一个编辑器实例。
 
 import { h, icon, iconButton, toast } from "./dom.js";
-import { openMenu, openSheet } from "./overlays.js";
+import { openMenu, openSheet, promptDialog } from "./overlays.js";
 import { createCodingToolbar } from "./coding-toolbar.js";
 import { renderMarkdown } from "./markdown.js";
 import { loadCM6 } from "../services/editor-factory.js";
 import { settingsStore, reducedMotion } from "../services/store.js";
 import {
-  state, events, tabOf, activeTab, activate, closeTab, closeOthers, closeRight, togglePin, moveTab, updateText, saveTab, resolveConflict,
+  state, events, getWorkspaceEpoch, tabOf, activeTab, activate, closeTab, closeOthers, closeRight, togglePin, moveTab, updateText, saveTab, resolveConflict,
 } from "../services/app.js";
 
 const base = (p) => p.split("/").pop();
@@ -64,6 +64,44 @@ export function createEditorPane() {
   const splitBtn = iconButton("split", "分屏", () => toggleSplit(), "tabs-more");
   const mdBtn = h("button", { class: "btn small text md-toggle", type: "button", hidden: true, onclick: () => { mdPreviewMode = !mdPreviewMode; paintContent(); } }, "预览");
   const tabs = h("div", { class: "tabs" }, strip, mdBtn, splitBtn, findBtn, saveBtn, more);
+  tabs.append(iconButton("branch", "语言服务", () => openMenu("代码导航与检查", [
+    { label: "检查 JS / TS 问题", onClick: () => language("diagnostics") },
+    { label: "跳转到定义", onClick: () => language("definition") },
+    { label: "查找符号引用", onClick: () => language("references") },
+    { label: "重命名当前符号", onClick: () => language("rename") },
+  ])));
+  async function language(operation) {
+    const epoch = getWorkspaceEpoch(), path = focused === splitEditor ? splitPath : shownPath, position = fe().getCaretOffset?.() || 0;
+    const guard = () => { if (epoch !== getWorkspaceEpoch()) throw new Error("项目已切换，语言操作已取消"); };
+    try {
+      const { languageRequest } = await import("../services/language.js");
+      guard();
+      const new_name = operation === "rename" ? await promptDialog({ title: "重命名符号", label: "新名称" }) : undefined;
+      if (operation === "rename" && !new_name) return;
+      guard();
+      const result = await languageRequest(operation, { path, position, new_name });
+      guard();
+      if (operation === "diagnostics") { events.emit("studio:open", "issues"); toast(`分析完成：${result.issues.length} 项问题`); }
+      else if (operation === "rename") toast(`已重命名，修改 ${result.files.length} 个文件；可从时光机恢复`);
+      else {
+        const list = h("div", null);
+        for (const x of result.locations) list.append(h("button", { class: "btn tonal", type: "button", onclick: async () => { try { guard(); const { openFile } = await import("../services/app.js"); guard(); await openFile(x.path); guard(); events.emit("editor:reveal", x); } catch (e) { toast(e.message); } } }, `${x.path}:${x.line}`));
+        if (!result.locations.length) list.append(h("p", null, "当前符号没有项目内结果"));
+        openSheet({ title: operation === "definition" ? "符号定义" : "符号引用", body: list });
+      }
+    } catch (e) { toast(e.message); }
+  }
+  events.on("studio:language", language);
+  events.on("studio:attach-selection", async () => {
+    const epoch = getWorkspaceEpoch(), path = focused === splitEditor ? splitPath : shownPath;
+    const text = fe().getSelectionText();
+    if (!text) return toast("先在编辑器里选中一段内容");
+    const { studioState } = await import("../services/studio.js");
+    if (epoch !== getWorkspaceEpoch()) return toast("项目已切换，旧选区已取消");
+    studioState.set((s) => ({ selections: [...s.selections.slice(-7), { path, text }] }));
+    toast("选区已加入本轮上下文");
+  });
+  events.on("editor:reveal", ({ path, offset }) => { if (path === shownPath) editor.revealOffset(offset); });
   const banner = h("div", { class: "banner", role: "alert", hidden: true });
   const empty = h("div", { class: "editor-empty" }, h("div", null, h("h2", null, "还没有打开文件"), h("p", null, "从左侧文件树里选一个文件，或者让 AI 改点什么，看着代码自己重新排列。")));
   const binary = h("div", { class: "editor-empty", hidden: true }, h("div", null, h("h2", null, "二进制文件"), h("p", null, "这个文件无法以文本形式显示。")));

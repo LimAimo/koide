@@ -10,6 +10,61 @@ import { spawn, execFileSync } from "node:child_process";
 import { installFakeDom, anims, $$ } from "./fake-dom.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
+const PYTHON = process.env.KOIDE_TEST_PYTHON || "python3";
+const bridgeProcesses = new Set();
+function spawnBridge(port, dataName, extra = []) {
+  const child = spawn(PYTHON, ["-u", path.join(ROOT, "bridge/main.py"), "--port", String(port), ...extra, "--data-dir", path.join(tmp, dataName)], { stdio: ["ignore", "pipe", "pipe"] });
+  bridgeProcesses.add(child);
+  child.closed = new Promise((resolve) => child.once("close", resolve));
+  child.startupLog = "";
+  child.stdout.on("data", (data) => { child.startupLog = (child.startupLog + data.toString()).slice(-8000); });
+  child.stderr.on("data", (data) => { child.startupLog = (child.startupLog + data.toString()).slice(-8000); });
+  child.on("error", (error) => { child.startupLog += error.message; });
+  return child;
+}
+async function waitForBridge(child, port, label) {
+  try { await until(async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/info`);
+    await response.arrayBuffer();
+    return response.ok;
+  }, label); }
+  catch (error) { throw new Error(`${error.message}\n解释器：${PYTHON}，退出码：${child.exitCode}\n${child.startupLog}`); }
+}
+async function bounded(promise, label, ms = 5000) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`清理超时：${label}`)), ms);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+async function closeBridge(client) {
+  const socket = client?.ws;
+  const closed = socket && socket.readyState !== WebSocket.CLOSED
+    ? new Promise((resolve) => socket.addEventListener("close", resolve, { once: true })) : null;
+  client?.close();
+  if (closed) await bounded(closed, "桥接 WebSocket 关闭");
+}
+async function stopBridge(child) {
+  if (!child) return;
+  let stopError;
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
+    if (process.platform === "win32") {
+      // Windows Store Python 的启动器可能还有真实解释器子进程；只关闭本测试启动的 PID 树。
+      try { execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "pipe", timeout: 5000 }); }
+      catch (error) { stopError = error; }
+    } else child.kill("SIGINT");
+  }
+  try { await bounded(child.closed, `桥接子进程 ${child.pid} 及输出管道关闭`); }
+  catch (error) { throw stopError || error; }
+  bridgeProcesses.delete(child);
+}
+async function closeMockLlm(server) {
+  if (!server) return;
+  const closed = new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  server.closeAllConnections();
+  await bounded(closed, "模型 HTTP 服务关闭");
+}
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, what, ms = 8000) {
@@ -63,8 +118,8 @@ before(async () => {
   fs.writeFileSync(path.join(proj, "src", "app.py"), "def add(a, b):\n    return a - b\n");
   fs.writeFileSync(path.join(proj, "README.md"), "# demo\n");
   const port = await freePort();
-  proc = spawn("python3", [path.join(ROOT, "bridge/main.py"), "--port", String(port), "--data-dir", path.join(tmp, "data")], { stdio: "ignore" });
-  await until(async () => (await fetch(`http://127.0.0.1:${port}/api/info`)).ok, "bridge to start");
+  proc = spawnBridge(port, "data");
+  await waitForBridge(proc, port, "bridge to start");
   llm = await startMockLlm();
 
   dom = installFakeDom({ width: 400, height: 800 });
@@ -78,10 +133,18 @@ before(async () => {
 });
 
 after(async () => {
-  bridge.close();
-  proc.kill();
-  llm.close();
-  setTimeout(() => process.exit(0), 100).unref();
+  const errors = [];
+  const clean = async (action) => { try { await action(); } catch (error) { errors.push(error); } };
+  if (appMod?.state.get().workspace && bridge?.status === "online") await clean(() => appMod.goHome());
+  await clean(() => closeBridge(bridge));
+  for (const child of [...bridgeProcesses]) await clean(() => stopBridge(child));
+  await clean(() => closeMockLlm(llm));
+  if (tmp) await clean(() => {
+    assert.equal(path.dirname(tmp), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(tmp).startsWith("dfx-ui-"));
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  if (errors.length) throw new AggregateError(errors, "集成测试资源清理失败");
 });
 
 const body = () => globalThis.document.body;
@@ -358,7 +421,7 @@ test("Git 面板：文件树角标、查看改动、全部暂存、提交", asyn
   await until(() => $$(body(), ".fgroup h4").length === 0 || !$$(body(), ".fgroup h4").some((x) => /已暂存/.test(text(x))), "提交后暂存区清空");
 });
 
-test("终端：真实 PTY，输入命令能看到输出和颜色", async () => {
+test("终端：真实 PTY，输入命令能看到输出和颜色", { skip: process.platform === "win32" ? "Python Bridge 在 Windows 明确不提供 PTY；原生 Windows PTY 由 Rust Native Core 提供" : false }, async () => {
   const { openTerminal } = await import("../../apps/web/src/components/terminal.js");
   openTerminal();
   await until(() => $$(body(), ".ttab").length >= 1, "终端标签页");
@@ -368,6 +431,16 @@ test("终端：真实 PTY，输入命令能看到输出和颜色", async () => {
   await until(() => text($$(body(), ".term-screen")[0]).includes("term_ok_42"), "终端输出");
   await until(() => $$(body(), ".term-screen .tf1").some((s) => /red_text/.test(text(s))), "红色文字被渲染成带颜色的片段");
   await bridge.rpc("terminal.close", { id: (await bridge.rpc("terminal.list")).sessions[0].id });
+});
+
+test("Windows Bridge：明确报告 NO_PTY，并切换到真实一次性命令终端", { skip: process.platform !== "win32" }, async () => {
+  await assert.rejects(bridge.rpc("terminal.open", {}), (error) => error.code === "NO_PTY");
+  const { openTerminal } = await import("../../apps/web/src/components/terminal.js");
+  openTerminal();
+  const input = await until(() => $$(body(), '.term-in .text-field').find((el) => el.getAttribute("aria-label") === "命令"), "一次性命令终端");
+  input.value = "Write-Output ('term_ok_' + (6*7))";
+  input.dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
+  await until(() => $$(body(), ".term-out").some((el) => text(el).includes("term_ok_42") && text(el).includes("[退出码 0]")), "真实 Windows 命令输出和成功退出码");
 });
 
 test("对话历史：开始新对话，再从历史里还原", async () => {
@@ -439,12 +512,13 @@ test("缩略图：可以开关，并画出可见范围", async () => {
 
 test("扫码配对：带 #pair=配对码 的链接能自动换取设备令牌，且配对码只能用一次", async () => {
   const port2 = await freePort();
-  const p2 = spawn("python3", [path.join(ROOT, "bridge/main.py"), "--port", String(port2), "--lan", "--data-dir", path.join(tmp, "data2")], { stdio: "ignore" });
+  const p2 = spawnBridge(port2, "data2", ["--lan"]);
+  let b2;
   try {
-    await until(async () => (await fetch(`http://127.0.0.1:${port2}/api/info`)).ok, "局域网模式的桥接服务");
+    await waitForBridge(p2, port2, "局域网模式的桥接服务");
     const { Bridge } = await import("../../apps/web/src/services/bridge.js");
     const { pairFromLocation } = await import("../../apps/web/src/services/pairing.js");
-    const b2 = new Bridge();
+    b2 = new Bridge();
     await b2.connect({ host: "127.0.0.1", port: port2 }, { timeout: 4000 });
     const r = await b2.rpc("devices.pair_code");
     assert.match(r.code, /^\d{6}$/);
@@ -458,8 +532,10 @@ test("扫码配对：带 #pair=配对码 的链接能自动换取设备令牌，
     assert.equal(devices.length, 1);
     assert.equal(devices[0].name, "手机或平板");
     await assert.rejects(pairFromLocation(loc, async () => {}), /配对码无效/);
-    b2.close();
-  } finally { p2.kill(); }
+  } finally {
+    try { await closeBridge(b2); }
+    finally { await stopBridge(p2); }
+  }
 });
 
 test("返回首页：关闭项目、清空标签页，回到开始页面，之后还能再打开项目", async () => {

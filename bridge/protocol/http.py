@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ipaddress
 import mimetypes
 import urllib.parse
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ mimetypes.add_type("text/javascript", ".mjs")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 MAX_BODY = 64 * 1024 * 1024
+PREVIEW_FRAME_SOURCES = "http://127.0.0.1:* http://localhost:*"
 
 STATUS_TEXT = {
     101: "Switching Protocols", 200: "OK", 204: "No Content", 400: "Bad Request",
@@ -26,9 +28,25 @@ SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self'; "
-        "worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'"
+        "worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; "
+        f"frame-src {PREVIEW_FRAME_SOURCES}"
     ),
 }
+
+
+def preview_csp(host: str | None = None) -> str:
+    """LAN preview may use another port on the exact private address serving the IDE."""
+    policy = SECURITY_HEADERS["Content-Security-Policy"]
+    if not host:
+        return policy
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return policy
+    if address.is_private and not address.is_unspecified and not address.is_multicast and not address.is_loopback and "%" not in str(address):
+        authority = f"[{address}]" if address.version == 6 else str(address)
+        return policy + f" http://{authority}:*"
+    return policy
 
 
 @dataclass
@@ -87,7 +105,7 @@ async def write_json(writer, status: int, obj) -> None:
                          {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"})
 
 
-async def serve_static(writer, web_dir: Path, url_path: str) -> None:
+async def serve_static(writer, web_dir: Path, url_path: str, csp_host: str | None = None) -> None:
     rel = url_path.lstrip("/") or "index.html"
     target = (web_dir / rel).resolve()
     root = web_dir.resolve()
@@ -101,4 +119,4 @@ async def serve_static(writer, web_dir: Path, url_path: str) -> None:
     if ctype.startswith("text/") or ctype.endswith("json") or ctype.endswith("javascript"):
         ctype += "; charset=utf-8"
     await write_response(writer, 200, target.read_bytes(),
-                         {"Content-Type": ctype, "Cache-Control": "no-cache"})
+                         {"Content-Type": ctype, "Cache-Control": "no-cache", "Content-Security-Policy": preview_csp(csp_host)})

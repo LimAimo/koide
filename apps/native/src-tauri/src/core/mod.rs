@@ -13,6 +13,8 @@ mod terminal;
 mod trash;
 mod watcher;
 mod workspace;
+mod studio;
+mod preview;
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -28,7 +30,7 @@ use provider::{chat_complete, list_models, presets, test_profile, ProfileStore};
 use watcher::WorkspaceWatcher;
 use workspace::{browse_location, Workspace};
 
-pub const VERSION: &str = "0.9.0";
+pub const VERSION: &str = "0.10.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeError {
@@ -67,6 +69,7 @@ pub struct NativeCore {
     terminal: TerminalManager,
     agent: AgentState,
     watcher: Option<WorkspaceWatcher>,
+    preview: preview::PreviewManager,
 }
 
 impl NativeCore {
@@ -78,6 +81,7 @@ impl NativeCore {
             terminal: TerminalManager::new(),
             agent: AgentState::new(),
             watcher: None,
+            preview: preview::PreviewManager::new(data_dir.clone()),
             data_dir,
             workspace: None,
             conversations: None,
@@ -86,6 +90,11 @@ impl NativeCore {
 
     fn emit(app: &AppHandle, event: &str, data: Value) {
         let _ = app.emit("diffusion://event", RuntimeEvent { event, data });
+    }
+
+    pub fn stop_handle(&self) -> std::sync::Arc<dyn Fn() -> Result<Value, RuntimeError> + Send + Sync> {
+        let agent = self.agent.clone();
+        std::sync::Arc::new(move || Ok(json!({"stopped":agent.stop()})))
     }
 
     fn ws(&self) -> Result<&Workspace, RuntimeError> {
@@ -113,8 +122,42 @@ impl NativeCore {
         method: &str,
         params: Value,
     ) -> Result<Value, RuntimeError> {
+        if params.get("workspace_key").is_some() {
+            let current = self.workspace.as_ref().map(Workspace::storage_key);
+            check_workspace_key(current.as_deref(), &params)?;
+        }
         match method {
             "hello" => Ok(self.hello()),
+            "studio.read" => studio::read(self.ws()?),
+            "studio.revision" => studio::revision(self.ws()?),
+            "studio.write" => {
+                let data = params.get("data").ok_or_else(||RuntimeError::new("BAD_REQUEST","缺少工作台数据"))?;
+                let (result, events) = studio::write(self.ws()?,data,params.get("base_revision").and_then(Value::as_str))?;
+                for event in events { Self::emit(app,"fs.changed",event); }
+                Ok(result)
+            },
+            "studio.apply_edits" => {
+                if self.agent.is_running() {return Err(RuntimeError::new("AGENT_BUSY","先停止 AI 任务再重命名符号"));}
+                let files = params.get("files").and_then(Value::as_array).ok_or_else(||RuntimeError::new("BAD_EDIT","files 必须是数组"))?;
+                let (result, events) = self.ws()?.apply_text_edits(files,params.get("label").and_then(Value::as_str).unwrap_or("语言服务重命名"))?;
+                for event in events { Self::emit(app,"fs.changed",event); }
+                Ok(result)
+            },
+            "launch.inspect" => studio::inspect_launch(self.ws()?),
+            "experiments.list" => studio::experiments_list(self.ws()?),
+            "experiments.create" => {
+                let (result, events) = studio::experiments_create_from(self.ws()?,req_str(&params,"name")?,params.get("baseline_id").and_then(Value::as_str))?;
+                for event in events { Self::emit(app,"fs.changed",event); } Ok(result)
+            },
+            "experiments.diff" => studio::experiments_diff(self.ws()?,req_str(&params,"id")?),
+            "experiments.apply" => {
+                if self.agent.is_running() {return Err(RuntimeError::new("AGENT_BUSY","先停止 AI 任务再应用方案"));}
+                let (result, events) = studio::experiments_apply(self.ws()?,req_str(&params,"id")?)?;
+                for event in events { Self::emit(app,"fs.changed",event); } Ok(result)
+            },
+            "preview.open" => { self.ws()?; self.preview.open(req_str(&params,"url")?) },
+            "preview.close" => self.preview.close(req_str(&params,"id")?),
+            "preview.capture" => self.preview.capture(req_str(&params,"id")?,params.get("width").and_then(Value::as_u64).unwrap_or(1280),params.get("height").and_then(Value::as_u64).unwrap_or(800)),
             "profiles.list" => Ok(json!({"profiles": self.profiles.list_public()})),
             "profiles.save" => {
                 let profile = params.get("profile").ok_or_else(|| RuntimeError::new("BAD_PROFILE", "缺少 profile"))?;
@@ -201,17 +244,39 @@ impl NativeCore {
                 let checkpoints = workspace.checkpoint_handle();
                 let project_instructions = workspace.project_instructions();
                 let system_context = instructions::agent_context_with_project(&self.data_dir, Some(&project_instructions));
+                if let Some(raw) = params.get("limits") {
+                    if !raw.is_object() {
+                        return Err(RuntimeError::new("BAD_BUDGET", "任务限制必须是对象"));
+                    }
+                    for field in ["max_tool_calls", "max_seconds", "max_repair_attempts", "max_tokens", "max_repeated_failures"] {
+                        if raw.get(field).is_some_and(|v| v.as_u64().is_none()) {
+                            return Err(RuntimeError::new("BAD_BUDGET", "任务次数和 Token 上限必须是非负整数"));
+                        }
+                    }
+                    if raw.get("max_cost_usd").is_some_and(|v| v.as_f64().map_or(true, |n| !n.is_finite() || n < 0.0)) {
+                        return Err(RuntimeError::new("BAD_BUDGET", "费用上限必须是非负有限数值"));
+                    }
+                }
                 let limits = AgentLimits::from_params(
                     params.get("limits"),
                     params.get("web_search").and_then(Value::as_bool).unwrap_or(false),
                 );
+                let attachments = match params.get("attachments") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(images)) => images.clone(),
+                    _ => return Err(RuntimeError::new("BAD_ATTACHMENT", "参考图附件必须是数组")),
+                };
+                let attachments = crate::core::agent::validate_start(&profile, &attachments, &limits)?;
+                if let Some(id) = conversation_id.as_deref() {
+                    crate::core::provider::ensure_vision(&profile, &store.messages(id)?)?;
+                }
                 let checkpoint_task = checkpoints.start_task(&goal, mode)?;
                 let task_id = checkpoint_task
                     .get("id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "新建任务缺少 id"))?
                     .to_owned();
-                self.agent.start(
+                self.agent.start_with_attachments(
                     app.clone(),
                     store,
                     profile,
@@ -227,6 +292,7 @@ impl NativeCore {
                     checkpoints,
                     self.terminal.clone(),
                     limits,
+                    attachments,
                 )
             }
             "agent.stop" => Ok(json!({"stopped": self.agent.stop()})),
@@ -266,6 +332,7 @@ impl NativeCore {
                 Ok(result)
             },
             "workspace.open" => {
+                if self.agent.is_running() { return Err(RuntimeError::new("AGENT_BUSY", "先停止当前 AI 任务，再切换项目")); }
                 let mut location = params.get("location").cloned().or_else(|| {
                     params.get("path").and_then(Value::as_str).map(|path| Value::String(path.to_owned()))
                 }).ok_or_else(|| RuntimeError::new("BAD_WORKSPACE", "缺少工作区位置"))?;
@@ -275,6 +342,8 @@ impl NativeCore {
                     location = Workspace::pick_saf(app)?;
                 }
                 let ws = Workspace::open_location(app, &location, &self.data_dir)?;
+                self.preview.close_all();
+                self.terminal.close_all();
                 if let Some(watcher) = self.watcher.take() { watcher.stop(); }
                 let info = ws.info();
                 let canonical_location = ws.location();
@@ -291,6 +360,7 @@ impl NativeCore {
                 Ok(info)
             }
             "workspace.close" => {
+                self.preview.close_all();
                 let _ = self.agent.stop();
                 self.terminal.close_all();
                 if let Some(watcher) = self.watcher.take() { watcher.stop(); }
@@ -474,12 +544,22 @@ impl NativeCore {
                 }
                 Ok(batch.result)
             }
-            "terminal.run" => self.terminal.run(
-                app,
-                &self.local_workspace_root("终端")?,
-                req_str(&params, "command")?,
-                params.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(600.0),
-            ),
+            "terminal.run" => {
+                let command = req_str(&params, "command")?;
+                if let Some(verdict) = policy::check_command(command) {
+                    if verdict.action == policy::CommandPolicyAction::Deny {
+                        return Err(RuntimeError::new("POLICY_DENIED", verdict.reason));
+                    }
+                }
+                let raw_cwd = match params.get("cwd") {
+                    None | Some(Value::Null) => ".",
+                    Some(Value::String(path)) => path.as_str(),
+                    _ => return Err(RuntimeError::new("BAD_PATH", "命令工作目录必须是路径字符串")),
+                };
+                let cwd = self.ws()?.terminal_directory(raw_cwd)?;
+                self.terminal.run(app, &cwd, command,
+                    params.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(600.0))
+            },
             "terminal.kill" => self.terminal.kill(req_str(&params, "id")?),
             "terminal.open" => self.terminal.open(
                 app,
@@ -615,11 +695,12 @@ impl NativeCore {
             "approval_profile": self.settings.approval_profile(),
             "native_migration": {
                 "phase": "parity-audit",
-                "runtime_dispatch": "72/72",
+                "runtime_dispatch": "84/84",
+                "implemented": ["conversation.compact","studio.read","preview.open"],
                 "python_bridge_removal_allowed": false,
                 "capabilities": {
                     "workspace_path_backend": true,
-                    "workspace_android_saf": false,
+                    "workspace_android_saf": true,
                     "filesystem": true,
                     "external_watcher": true,
                     "export_zip": true,
@@ -639,7 +720,6 @@ impl NativeCore {
                     "device_store": true
                 },
                 "blockers_before_python_removal": [
-                    "Android SAF 原地 WorkspaceBackend 尚未实现",
                     "Native Remote Runtime server 尚未实现；devices.pair_code 当前明确返回 LAN_OFF",
                     "Android 交互式 PTY 尚未实现",
                     "Native-only parity/smoke gate 尚需最终通过"
@@ -655,4 +735,28 @@ fn req_str<'a>(v: &'a Value, key: &str) -> Result<&'a str, RuntimeError> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| RuntimeError::new("BAD_REQUEST", format!("缺少字符串参数：{key}")))
+}
+
+fn check_workspace_key(current: Option<&str>, params: &Value) -> Result<(), RuntimeError> {
+    let Some(value) = params.get("workspace_key") else { return Ok(()); };
+    let requested = value.as_str().filter(|key| !key.is_empty())
+        .ok_or_else(|| RuntimeError::new("BAD_REQUEST", "workspace_key 必须是非空字符串"))?;
+    if current != Some(requested) {
+        return Err(RuntimeError::new("WORKSPACE_CHANGED", "项目已经切换，请刷新后重试"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod workspace_dispatch_tests {
+    use super::*;
+    #[test]
+    fn queued_request_cannot_target_another_or_closed_workspace() {
+        let queued = json!({"workspace_key":"project-a","base_revision":"absent"});
+        assert!(check_workspace_key(Some("project-a"), &queued).is_ok());
+        assert_eq!(check_workspace_key(Some("project-b"), &queued).unwrap_err().code, "WORKSPACE_CHANGED");
+        assert_eq!(check_workspace_key(None, &queued).unwrap_err().code, "WORKSPACE_CHANGED");
+        assert!(check_workspace_key(None, &json!({})).is_ok());
+        assert_eq!(check_workspace_key(None, &json!({"workspace_key":false})).unwrap_err().code, "BAD_REQUEST");
+    }
 }

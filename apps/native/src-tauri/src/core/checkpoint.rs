@@ -85,7 +85,7 @@ impl CheckpointStore {
         let id = format!(
             "{}-{}",
             unix_seconds(),
-            unique_id("").chars().take(8).collect::<String>()
+            unique_id("")
         );
         let task = json!({
             "id": id,

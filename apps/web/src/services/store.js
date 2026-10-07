@@ -37,7 +37,7 @@ export const DEFAULT_SETTINGS = {
     reduced: "system",        // system | on | off
     playFor: { ai: true, undo: true },
   },
-  agent: { mode: "agent", profile: null, reasoning: "auto", webSearch: false, limits: { max_tool_calls: 0, max_seconds: 0, max_repair_attempts: 8 } },
+  agent: { mode: "agent", profile: null, reasoning: "auto", webSearch: false, limits: { max_tool_calls: 0, max_seconds: 0, max_repair_attempts: 8, max_tokens: 0, max_cost_usd: 0, max_repeated_failures: 3 } },
   bridge: { remembered: [] },
   toolbar: ["Tab", "⇤", "←", "→", "{ }", "( )", "[ ]", ";", ":", '"', "'", "/"],
   devMode: false,

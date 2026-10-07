@@ -17,6 +17,7 @@ Runtime API（平台无关）
     │                                      ├─ providers/agent
     │                                      ├─ git
     │                                      ├─ terminal/process
+    │                                      ├─ studio/experiments/preview
     │                                      └─ settings/conversations
     │
     └── BridgeRuntimeAdapter ── WebSocket ── Python Bridge（可选兼容模式）
@@ -66,6 +67,8 @@ Workspace backend 当前包含 LocalFS 与 Android SAF。SAF URI 从不伪装成
 - PermissionEngine 支持 restricted / manual / ai / autonomous；
 - 支持逐工具 deny / ask / session / always / ai_review 与 allow/deny 规则；
 - UI 不能通过更低级 IPC 绕过 Workspace、HardPolicy 或 Checkpoint。
+- 工作台修改采用全量 revision / 路径 / HardPolicy 预检；可选 `workspace_key` 拒绝切换项目后到达的旧请求。
+- 项目预览位于独立 token 保护的 HTTP 代理和 opaque iframe；预览脚本不能访问 IDE IPC。应用自身 CSP 阻止未经授权的内联脚本。
 
 ## 6. Providers / Agent
 
@@ -73,7 +76,9 @@ Workspace backend 当前包含 LocalFS 与 Android SAF。SAF URI 从不伪装成
 - API Key 保存在 Native Core 数据目录，不回传明文；
 - OpenAI-compatible、Anthropic、Gemini Native 都有原生调用路径；
 - Tool Call、Reasoning、ask_user、审批、停止和会话历史通过 Runtime Event 暴露；
-- Provider 停止为协作式检查；同步网络读取被服务端阻塞时可能延迟。
+- 响应头、流数据、AI 审批与网页读取采用异步可取消网络请求，约每 80ms 检查停止标志；`agent.stop` 通过已有 AgentState 句柄直接设置停止信号，不等待普通 Core dispatch 锁；
+- 图片和用量按 Provider 结构化协议处理，未知用量保持未知，预算与重复失败保护阻止后续调用；
+- 同步文件系统和平台操作仍在安全边界完成后返回，不承诺任意操作瞬时中断。
 
 ## 7. Git / Terminal
 
@@ -100,4 +105,4 @@ UI 必须根据 capability 显示真实能力，不得伪装支持。
 
 ## 10. 测试门槛
 
-行为变化至少覆盖对应的 Web/Rust/Bridge 单测或集成测试；文件破坏性操作必须额外覆盖越界、revision conflict 和恢复路径。主 CI 同时构建 Windows 与 Android。
+行为变化至少覆盖对应的 Web/Rust/Bridge 单测或集成测试；文件破坏性操作必须额外覆盖越界、revision conflict 和恢复路径。主 CI 同时构建 Windows 与 Android，并运行桌面/手机真实浏览器回归。

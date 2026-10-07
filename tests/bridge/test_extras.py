@@ -2,6 +2,8 @@
 import asyncio
 import io
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -10,6 +12,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from bridge.security.permissions import PermissionEngine
@@ -26,6 +29,51 @@ def http_get(url):
 
 
 class Extras(E2EBase):
+    async def test_terminal_exit_follows_all_output_and_carries_real_status(self):
+        command = ("Write-Output ('x' * 30000); Write-Output 'terminal_tail'; exit 7" if os.name == "nt"
+                   else "printf '%30000s\\n' x; printf 'terminal_tail\\n'; exit 7")
+        run = await self.c.rpc("terminal.run", {"command": command})
+        end = await self.c.wait_event("terminal.exit", lambda event: event["id"] == run["id"])
+        self.assertEqual(end["exit_code"], 7)
+        self.assertFalse(end["timed_out"])
+        self.assertFalse(end["cancelled"])
+        ordered = [event for event in self.c.events if event["data"].get("id") == run["id"]]
+        self.assertEqual(ordered[-1]["event"], "terminal.exit")
+        output = "".join(event["data"]["data"] for event in ordered if event["event"] == "terminal.output")
+        self.assertIn("terminal_tail", output)
+        self.assertGreaterEqual(len(output), 30000)
+
+    async def test_terminal_cwd_is_sandboxed_and_start_failure_always_exits(self):
+        (self.proj / "nested").mkdir()
+        code = "import os; print(os.getcwd())"
+        command = ("& '" + sys.executable.replace("'", "''") + "' -c \"" + code + "\"" if os.name == "nt"
+                   else shlex.quote(sys.executable) + " -c " + shlex.quote(code))
+        run = await self.c.rpc("terminal.run", {"command": command, "cwd": "nested"})
+        end = await self.c.wait_event("terminal.exit", lambda event: event["id"] == run["id"])
+        self.assertEqual(end["exit_code"], 0)
+        output = "".join(event["data"] for event in self.c.named("terminal.output") if event["id"] == run["id"])
+        self.assertIn(str(self.proj / "nested"), output)
+        err = await self.c.rpc("terminal.run", {"command": command, "cwd": "../"}, expect_error=True)
+        self.assertEqual(err["code"], "OUTSIDE_WORKSPACE")
+        with patch("bridge.app.run_shell", side_effect=OSError("测试启动失败")):
+            run = await self.c.rpc("terminal.run", {"command": "echo startup"})
+            end = await self.c.wait_event("terminal.exit", lambda event: event["id"] == run["id"])
+            self.assertEqual(end["error"]["code"], "PROCESS_START_FAILED")
+            self.assertEqual(end["exit_code"], -1)
+            self.assertNotIn(run["id"], self.app._terminals)
+
+    async def test_terminal_timeout_and_stop_are_distinct(self):
+        command = "Start-Sleep -Seconds 3" if os.name == "nt" else "sleep 3"
+        run = await self.c.rpc("terminal.run", {"command": command, "timeout_seconds": .2})
+        end = await self.c.wait_event("terminal.exit", lambda event: event["id"] == run["id"])
+        self.assertTrue(end["timed_out"])
+        self.assertFalse(end["cancelled"])
+        run = await self.c.rpc("terminal.run", {"command": command})
+        await self.c.rpc("terminal.kill", {"id": run["id"]})
+        end = await self.c.wait_event("terminal.exit", lambda event: event["id"] == run["id"])
+        self.assertTrue(end["cancelled"])
+        self.assertFalse(end["timed_out"])
+
     @unittest.skipUnless(HAVE_PTY, "需要 PTY")
     async def test_pty_terminal(self):
         r = await self.c.rpc("terminal.open", {"cols": 100, "rows": 30})
@@ -61,8 +109,8 @@ class Extras(E2EBase):
 
     async def test_export_zip_is_single_use_and_skips_junk(self):
         (self.proj / "node_modules").mkdir()
-        (self.proj / "node_modules" / "x.js").write_text("junk")
-        (self.proj / "src" / "b.txt").write_text("你好")
+        (self.proj / "node_modules" / "x.js").write_text("junk", encoding="utf-8", newline="")
+        (self.proj / "src" / "b.txt").write_text("你好", encoding="utf-8", newline="")
         r = await self.c.rpc("fs.export", {"path": "."})
         self.assertTrue(r["name"].endswith(".zip"))
         status, body = await asyncio.to_thread(http_get, f"http://127.0.0.1:{self.port}{r['url']}")
@@ -115,7 +163,7 @@ class Extras(E2EBase):
         self.assertEqual(forced.source, "hard_policy")
         self.assertIn("shell_run", (await self.c.rpc("permissions.set", {}))["tool_rules"])
         await self.c.rpc("instructions.set", {"global": "永远用中文回答"})
-        (self.proj / "AGENTS.md").write_text("# 项目规则\n")
+        (self.proj / "AGENTS.md").write_text("# 项目规则\n", encoding="utf-8", newline="")
         r = await self.c.rpc("instructions.get")
         self.assertEqual(r["global"], "永远用中文回答")
         self.assertTrue(r["project_exists"])
@@ -161,21 +209,21 @@ class Extras(E2EBase):
         await self.c.wait_event("git.changed")
         first = (await self.c.rpc("git.commit", {"message": "初始提交"}))["hash"]
         self.assertEqual((await self.c.rpc("git.log"))["commits"][0]["subject"], "初始提交")
-        (self.proj / "src" / "app.py").write_text("第二版\n")
+        (self.proj / "src" / "app.py").write_text("第二版\n", encoding="utf-8", newline="")
         await self.c.rpc("git.stage", {"paths": ["src/app.py"]})
         await self.c.rpc("git.commit", {"message": "第二版"})
         await self.c.rpc("git.reset", {"hash": first, "mode": "soft"})
-        self.assertEqual((self.proj / "src" / "app.py").read_text(), "第二版\n")
+        self.assertEqual((self.proj / "src" / "app.py").read_text(encoding="utf-8"), "第二版\n")
         e = await self.c.rpc("git.reset", {"hash": first, "mode": "hard"}, expect_error=True)
         self.assertEqual(e["code"], "NEEDS_CONFIRM")
         await self.c.rpc("git.reset", {"hash": first, "mode": "hard", "confirm": True})
-        self.assertIn("return a - b", (self.proj / "src" / "app.py").read_text())
-        (self.proj / "src" / "app.py").write_text("改坏了\n")
+        self.assertIn("return a - b", (self.proj / "src" / "app.py").read_text(encoding="utf-8"))
+        (self.proj / "src" / "app.py").write_text("改坏了\n", encoding="utf-8", newline="")
         e = await self.c.rpc("git.discard", {"path": "src/app.py"}, expect_error=True)
         self.assertEqual(e["code"], "NEEDS_CONFIRM")                        # 丢弃必须明确确认
         await self.c.rpc("git.discard", {"path": "src/app.py", "confirm": True})
         self.assertNotEqual((self.proj / "src" / "app.py").read_text(), "改坏了\n")
-        (self.proj / "new.txt").write_text("x")
+        (self.proj / "new.txt").write_text("x", encoding="utf-8", newline="")
         await self.c.rpc("git.discard", {"path": "new.txt", "confirm": True})
         self.assertFalse((self.proj / "new.txt").exists())
         trash_items = (await self.c.rpc("trash.list"))["items"]

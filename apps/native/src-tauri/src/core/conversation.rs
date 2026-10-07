@@ -1,4 +1,5 @@
 use crate::core::id::unique_id;
+use crate::core::provider::{user_content, validate_attachments};
 use crate::core::RuntimeError;
 use serde_json::{json, Value};
 use std::fs;
@@ -12,8 +13,7 @@ pub struct ConversationStore {
 
 impl ConversationStore {
     pub fn new(base: PathBuf) -> Result<Self, RuntimeError> {
-        fs::create_dir_all(&base)
-            .map_err(|e| io_err("CONVERSATION_IO", "无法创建会话目录", e))?;
+        fs::create_dir_all(&base).map_err(|e| io_err("CONVERSATION_IO", "无法创建会话目录", e))?;
         Ok(Self { base })
     }
 
@@ -35,18 +35,17 @@ impl ConversationStore {
             .and_then(Value::as_str)
             .ok_or_else(|| RuntimeError::new("BAD_CONVERSATION", "会话缺少 id"))?;
         let target = self.path(id)?;
-        let temp = self.base.join(format!(".{}.tmp", unique_id("conversation-")));
+        let temp = self
+            .base
+            .join(format!(".{}.tmp", unique_id("conversation-")));
         let bytes = serde_json::to_vec_pretty(conversation)
             .map_err(|e| io_err("CONVERSATION_IO", "无法序列化会话", e))?;
-        fs::write(&temp, bytes)
-            .map_err(|e| io_err("CONVERSATION_IO", "无法写入会话", e))?;
+        fs::write(&temp, bytes).map_err(|e| io_err("CONVERSATION_IO", "无法写入会话", e))?;
         #[cfg(windows)]
         if target.exists() {
-            fs::remove_file(&target)
-                .map_err(|e| io_err("CONVERSATION_IO", "无法替换旧会话", e))?;
+            fs::remove_file(&target).map_err(|e| io_err("CONVERSATION_IO", "无法替换旧会话", e))?;
         }
-        fs::rename(&temp, &target)
-            .map_err(|e| io_err("CONVERSATION_IO", "无法保存会话", e))
+        fs::rename(&temp, &target).map_err(|e| io_err("CONVERSATION_IO", "无法保存会话", e))
     }
 
     pub fn create(&self, title: &str) -> Result<Value, RuntimeError> {
@@ -67,8 +66,7 @@ impl ConversationStore {
         let path = self.path(id)?;
         let text = fs::read_to_string(&path)
             .map_err(|_| RuntimeError::new("NO_CONVERSATION", "找不到这个会话"))?;
-        serde_json::from_str(&text)
-            .map_err(|e| io_err("CONVERSATION_IO", "会话文件损坏", e))
+        serde_json::from_str(&text).map_err(|e| io_err("CONVERSATION_IO", "会话文件损坏", e))
     }
 
     pub fn append(&self, id: &str, entries: Vec<Value>) -> Result<(), RuntimeError> {
@@ -97,10 +95,19 @@ impl ConversationStore {
             if path.extension().and_then(|x| x.to_str()) != Some("json") {
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&path) else { continue };
-            let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
-            let Some(id) = value.get("id").and_then(Value::as_str) else { continue };
-            let title = value.get("title").and_then(Value::as_str).unwrap_or("新对话");
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let Some(id) = value.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let title = value
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("新对话");
             let updated = value.get("updated").and_then(Value::as_f64).unwrap_or(0.0);
             let count = value
                 .get("entries")
@@ -152,13 +159,23 @@ impl ConversationStore {
         };
 
         for entry in &entries[start..] {
-            let Some(role) = entry.get("role").and_then(Value::as_str) else { continue };
+            let Some(role) = entry.get("role").and_then(Value::as_str) else {
+                continue;
+            };
             if !matches!(role, "user" | "assistant") {
                 continue;
             }
-            let Some(text) = entry.get("text").and_then(Value::as_str) else { continue };
-            if !text.is_empty() {
-                messages.push(json!({"role": role, "content": text}));
+            let Some(text) = entry.get("text").and_then(Value::as_str) else {
+                continue;
+            };
+            let raw = entry
+                .get("attachments")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let attachments = validate_attachments(&raw)?;
+            if !text.is_empty() || !attachments.is_empty() {
+                messages.push(json!({"role": role, "content": user_content(text,&attachments)}));
             }
         }
         Ok(messages)
@@ -182,9 +199,29 @@ mod tests {
 
     #[test]
     fn rejects_path_like_ids() {
-        let store = ConversationStore { base: PathBuf::from(".") };
+        let store = ConversationStore {
+            base: PathBuf::from("."),
+        };
         assert!(store.path("../oops").is_err());
         assert!(store.path("a/b").is_err());
         assert!(store.path("a\\b").is_err());
+    }
+
+    #[test]
+    fn history_preserves_valid_reference_images_as_structured_content() {
+        let base = std::env::temp_dir().join(unique_id("koide-conversation-test-"));
+        let store = ConversationStore::new(base.clone()).unwrap();
+        let conv = store.create("参考图").unwrap();
+        let id = conv["id"].as_str().unwrap();
+        // PNG magic signature followed by arbitrary fixture bytes is sufficient for attachment validation.
+        use base64::Engine;
+        let url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture")
+        );
+        store.append(id,vec![json!({"role":"user","text":"参考","attachments":[{"name":"参考.png","data_url":url}]})]).unwrap();
+        let messages = store.messages(id).unwrap();
+        assert_eq!(messages[0]["content"][1]["image_url"]["url"], url);
+        fs::remove_dir_all(base).unwrap();
     }
 }

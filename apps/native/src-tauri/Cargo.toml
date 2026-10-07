@@ -1,6 +1,6 @@
 [package]
 name = "diffusion-native"
-version = "0.9.0"
+version = "0.10.0"
 description = "Koide native shell and Rust core"
 authors = ["Koide contributors"]
 edition = "2021"
@@ -22,6 +22,9 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+base64 = "0.22"
+getrandom = "0.2"
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

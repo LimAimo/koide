@@ -9,6 +9,7 @@ import json
 import urllib.request
 
 from .sse_base import SseProvider
+from .media import converted_content, ensure_vision, normalize_usage
 
 API_VERSION = "2023-06-01"
 
@@ -30,7 +31,7 @@ def convert_messages(messages: list) -> tuple[str, list]:
             pending.append({"type": "tool_result", "tool_use_id": m["tool_call_id"], "content": str(m.get("content") or "")})
         elif role == "user":
             flush()
-            out.append({"role": "user", "content": str(m.get("content") or "")})
+            out.append({"role": "user", "content": converted_content(m.get("content"))})
         elif role == "assistant":
             flush()
             blocks = []
@@ -65,6 +66,7 @@ class AnthropicProvider(SseProvider):
         return sorted(dict.fromkeys(str(x.get("id")) for x in (payload.get("data") or []) if isinstance(x, dict) and x.get("id")), key=str.lower)
 
     def _request(self, profile, api_key, messages, tools):
+        ensure_vision(profile, messages)
         system, msgs = convert_messages(messages)
         sampling = profile.get("sampling") or {}
         body = {"model": profile["model"], "max_tokens": int(sampling.get("max_tokens") or 8192), "stream": True, "messages": msgs}
@@ -108,6 +110,10 @@ class AnthropicProvider(SseProvider):
         return urllib.request.Request(url, json.dumps(body).encode("utf-8"), headers, method="POST")
 
     def handle(self, chunk, emit, state):
+        raw = chunk.get("usage") or (chunk.get("message") or {}).get("usage")
+        if isinstance(raw, dict):
+            state.setdefault("usage", {}).update(raw)
+            emit({"type": "usage", "usage": normalize_usage("anthropic", state["usage"])})
         t = chunk.get("type")
         idx = chunk.get("index", 0)
         calls = state["calls"]

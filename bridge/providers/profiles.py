@@ -10,7 +10,7 @@ from pathlib import Path
 from .openai_compat import PRESETS
 
 _ID = re.compile(r"^[A-Za-z0-9._-]{1,48}$")
-_FIELDS = ("id", "name", "kind", "endpoint", "model", "headers", "tool_calling", "sampling", "extra_body")
+_FIELDS = ("id", "name", "kind", "endpoint", "model", "headers", "tool_calling", "sampling", "extra_body", "vision", "pricing")
 
 
 def _atomic_json(path: Path, obj, mode: int | None = None) -> None:

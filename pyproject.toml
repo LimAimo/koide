@@ -1,6 +1,6 @@
 [project]
 name = "diffusion-ide"
-version = "0.9.0"
+version = "0.10.0"
 description = "Koide: a local-first AI IDE with an optional Python Bridge for Web/LAN compatibility."
 requires-python = ">=3.10"
 dependencies = []          # standard library only, so it installs anywhere including Termux

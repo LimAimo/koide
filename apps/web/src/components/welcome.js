@@ -64,16 +64,17 @@ export function createWelcome({ onOpenSettings }) {
 
   function render() {
     const s = state.get();
+    const native = runtime.kind === "native";
     clear(inner);
     inner.append(h("div", null, h("h1", null, "Koide ", h("b", null, "IDE")), h("p", { class: "lead" }, "AI 工作时，看着你的代码自己重新组织。所有数据都留在你的设备上。")));
 
     if (s.conn !== "online") {
       inner.append(card("连接本地环境",
-        h("p", { class: "muted" }, s.conn === "connecting" ? "正在查找桥接服务…" : "当前是网页模式：可以使用草稿本，但打开项目、终端和智能体需要 Python 桥接服务。"),
-        h("div", { class: "code" }, "安卓（Termux）：bash start.sh\nWindows：       start.bat\n任意系统：      python bridge/main.py"),
+        h("p", { class: "muted" }, native ? (s.conn === "connecting" ? "正在连接本地环境…" : "本地环境尚未连接。请重试，或重新启动 Koide。") : (s.conn === "connecting" ? "正在查找桥接服务…" : "当前是网页模式：可以使用草稿本，但打开项目、终端和智能体需要 Python 桥接服务。")),
+        h("div", { class: "code" }, native ? "本地应用直接运行，无需启动桥接服务。" : "安卓（Termux）：bash start.sh\nWindows：       start.bat\n任意系统：      python bridge/main.py"),
         h("div", { class: "welcome-actions" },
-          h("button", { class: "btn tonal", type: "button", onclick: () => initConnection().then((t) => toast(t ? "已连接" : "没有找到桥接服务")) }, "重试"),
-          h("button", { class: "btn outlined", type: "button", onclick: () => onOpenSettings("bridge") }, "手动连接…"))));
+          h("button", { class: "btn tonal", type: "button", onclick: () => initConnection().then((t) => toast(t ? "已连接" : native ? "本地环境连接失败" : "没有找到桥接服务")).catch((e) => toast(e.message)) }, "重试"),
+          native ? null : h("button", { class: "btn outlined", type: "button", onclick: () => onOpenSettings("bridge") }, "手动连接…"))));
     } else {
       const recent = s.hello?.recent || [];
       const recentLabel = (entry) => typeof entry === "string" ? entry : (entry?.name || entry?.path || "Android 项目");
@@ -94,7 +95,7 @@ export function createWelcome({ onOpenSettings }) {
 
     inner.append(card("模型服务商",
       s.profiles.length ? h("p", { class: "muted" }, `已有 ${s.profiles.length} 个配置可用。你的密钥只保存在${runtime.kind === "native" ? "这台设备的 Native Core" : "桥接服务"}里。`) : h("p", { class: "muted" }, s.conn === "online" ? "添加一个服务商（OpenAI、DeepSeek、Kimi、OpenRouter、Ollama，或任意兼容 OpenAI 的接口）即可开始。"
-        : "连接桥接服务之后才能配置服务商。"),
+        : native ? "连接本地环境后才能配置服务商。" : "连接桥接服务之后才能配置服务商。"),
       h("button", { class: "btn tonal", type: "button", disabled: s.conn !== "online", onclick: () => onOpenSettings("providers") }, s.profiles.length ? "管理服务商" : "设置服务商")));
 
     inner.append(card("只想先看看？",

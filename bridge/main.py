@@ -67,14 +67,17 @@ async def amain(args) -> None:
         for ip in lan_ips():
             print(f"  局域网   : http://{ip}:{args.port}    配对码 {code}（5 分钟内有效）")
             print(f"  一键配对 : http://{ip}:{args.port}/#pair={code}   （手机上打开这个链接即可自动配对）")
-        print("  局域网模式已开启：只有完成配对的设备才能连接，可在「设置 › Python 桥接」中随时撤销。")
+        print("  局域网模式已开启：只有完成配对的设备才能连接，可在「设置 - Python 桥接」中随时撤销。")
     else:
         print("  当前仅本机可访问（127.0.0.1）。想让手机连接这台电脑，请加上 --lan 参数。")
     print("  按 Ctrl+C 停止服务。\n")
     if args.open:
         open_browser(url)
-    async with server:
-        await server.serve_forever()
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        await app.shutdown()
 
 
 def main() -> None:

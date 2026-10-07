@@ -45,6 +45,14 @@ jobs:
         run: pnpm build:cm6
       - name: Run Web and UI regression tests
         run: node --test tests/web/*.test.mjs
+      - name: Setup Python for browser integration
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install browser regression runtime
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run desktop and mobile browser regression
+        run: pnpm test:browser
 
   bridge-compat:
     name: Bridge compatibility

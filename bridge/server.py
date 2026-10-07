@@ -86,7 +86,7 @@ async def handle_client(app: BridgeApp, reader: asyncio.StreamReader, writer: as
         if req.method in ("GET", "HEAD") and req.path.startswith("/animation-packs/"):
             return await serve_static(writer, app.packs_dir, req.path[len("/animation-packs/"):])
         if req.method in ("GET", "HEAD"):
-            return await serve_static(writer, app.web_dir, req.path)
+            return await serve_static(writer, app.web_dir, req.path, _host_only(req.headers.get("host", "")) if app.lan else None)
         await write_response(writer, 405, b"method not allowed")
     except (ConnectionError, asyncio.IncompleteReadError):
         pass

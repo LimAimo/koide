@@ -16,6 +16,8 @@
   <link rel="stylesheet" href="./src/styles/layout.css">
   <link rel="stylesheet" href="./src/styles/editor.css">
   <link rel="stylesheet" href="./src/styles/chat.css">
+  <link rel="stylesheet" href="./src/styles/studio.css">
+  <link rel="stylesheet" href="./src/styles/ambience.css">
   <style>
     html,body{margin:0;background:#f8f9ff}
     @media(prefers-color-scheme:dark){html,body{background:#111318}}
@@ -28,72 +30,6 @@
     <pre id="boot-error"></pre>
     <button id="boot-copy" type="button">复制诊断信息</button>
   </div>
-  <script>
-    (() => {
-      let diagnostic = "";
-      const show = (value, meta = {}) => {
-        const box = document.getElementById("boot-fallback");
-        const out = document.getElementById("boot-error");
-        if (!box || !out) return;
-        const detail = String(value && (value.stack || value.message) || value || "未知启动错误");
-        const where = meta.filename ? `${meta.filename}:${meta.lineno || "?"}:${meta.colno || "?"}` : "";
-        diagnostic = ["Koide 启动失败", where, detail, `URL: ${location.href}`, `UA: ${navigator.userAgent}`].filter(Boolean).join("\n");
-        out.textContent = diagnostic;
-        box.hidden = false;
-      };
-      window.__KOIDE_BOOT_OK__ = false;
-      window.__KOIDE_SHOW_BOOT_ERROR__ = show;
-      window.addEventListener("error", (event) => show(event.error || event.message, event));
-      window.addEventListener("unhandledrejection", (event) => show(event.reason));
-      setTimeout(() => { if (!window.__KOIDE_BOOT_OK__) show("主界面未在 8 秒内完成启动。上方会显示捕获到的启动错误；如果没有其他信息，请复制诊断信息反馈。"); }, 8000);
-      document.getElementById("boot-copy")?.addEventListener("click", async () => {\n        try { await navigator.clipboard.writeText(diagnostic); }\n        catch { const out = document.getElementById("boot-error"); out?.focus?.(); }\n      });\n    })();
-  </script>
-  <script>
-    (async () => {
-      const start = () => {
-        const script = document.createElement("script");
-        script.type = "module";
-        script.src = "./src/main.js";
-        document.body.appendChild(script);
-      };
-
-      if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) {
-        start();
-        return;
-      }
-
-      try {
-        const cacheKeys = "caches" in window ? await caches.keys() : [];
-        const hadLegacyCache = cacheKeys.some((key) => key.startsWith("dfx-shell-"));
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        const ours = registrations.filter((registration) => {
-          const worker = registration.active || registration.waiting || registration.installing;
-          try { return worker && new URL(worker.scriptURL).pathname.endsWith("/sw.js"); }
-          catch { return false; }
-        });
-
-        if (hadLegacyCache || ours.length || navigator.serviceWorker.controller) {
-          await Promise.all(ours.map((registration) => registration.unregister()));
-          await Promise.all(cacheKeys.filter((key) => key.startsWith("dfx-shell-")).map((key) => caches.delete(key)));
-
-          // A worker that controlled this document keeps controlling it until navigation.
-          // Reload exactly once after cleanup, then load the module graph from the real files.
-          if (navigator.serviceWorker.controller && !sessionStorage.getItem("koide-sw-cleaned")) {
-            sessionStorage.setItem("koide-sw-cleaned", "1");
-            location.reload();
-            return;
-          }
-        }
-        sessionStorage.removeItem("koide-sw-cleaned");
-      } catch (error) {
-        // Service worker cleanup is best-effort. Startup must not depend on the API being available.
-        console.warn("Koide legacy worker cleanup failed", error);
-      }
-
-      start();
-    })().catch((error) => {
-      window.__KOIDE_SHOW_BOOT_ERROR__?.(error);
-    });
-  </script>
+  <script type="module" src="./src/bootstrap.js"></script>
 </body>
 </html>

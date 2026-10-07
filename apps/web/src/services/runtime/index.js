@@ -62,6 +62,10 @@ export function createRuntime(adapter = nativeAvailable() ? new NativeRuntimeAda
       list: () => call("terminal.list", empty()), history: (p) => call("terminal.history", p),
     },
     ports: { list: () => call("ports.list", empty()) },
+    studio: { read: () => call("studio.read", empty()), write: (p) => call("studio.write", p), revision: (p = {}) => call("studio.revision", p, 60000), applyEdits: (p) => call("studio.apply_edits", p) },
+    launch: { inspect: (p = {}) => call("launch.inspect", p, 60000) },
+    preview: { open: (p) => call("preview.open", p), close: (p) => call("preview.close", p), capture: (p) => call("preview.capture", p, 20000) },
+    experiments: { list: (p = {}) => call("experiments.list", p), create: (p) => call("experiments.create", p, 120000), diff: (p) => call("experiments.diff", p, 60000), apply: (p) => call("experiments.apply", p, 120000) },
     conversations: {
       list: () => call("conv.list", empty()), get: (p) => call("conv.get", p), delete: (p) => call("conv.delete", p), compact: (p) => call("conversation.compact", p),
     },

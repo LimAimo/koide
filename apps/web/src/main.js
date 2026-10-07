@@ -17,6 +17,9 @@ import { runtime, state, events, openFile, initConnection, connectManual, goHome
 import { pairFromLocation } from "./services/pairing.js";
 import { settingsStore, saveSettings, applyTheme } from "./services/store.js";
 import { loadServedPacks } from "./animations/diffusion/packs.js";
+import { createWorkbench } from "./components/workbench.js";
+import { createAmbience } from "./components/ambience.js";
+import { projectStore, studioState, getProjectEpoch, assertProjectEpoch } from "./services/studio.js";
 
 // Native shells should behave like apps, not zoomable web pages.
 if (runtime.kind === "native") {
@@ -36,7 +39,7 @@ function boot() {
   let layout;
 
   // ---- files ---------------------------------------------------------------------------------------------------
-  const tree = createFileTree({ onOpen: (p, o) => openFile(p, o).catch((e) => toast(e.message)), onNavigate: () => layout && layout.closeDrawer() });
+  const tree = createFileTree({ onOpen: (p, o) => { events.emit("editor:reveal", { path: p, offset: 0 }); return openFile(p, o).catch((e) => toast(e.message)); }, onNavigate: () => layout && layout.closeDrawer() });
   const filesName = h("span", { class: "name" }, "文件");
   const files = h("aside", { class: "files", "aria-label": "文件" },
     h("div", { class: "files-head" }, filesName,
@@ -73,7 +76,26 @@ function boot() {
   const r2 = h("div", { class: "resizer r2", role: "separator", tabindex: "0", "aria-label": "调整 AI 面板宽度" });
   const welcome = createWelcome({ onOpenSettings: (sec) => openSettings(sec) });
   const terminalDock = createTerminalDock({ onClose: () => saveSettings({ terminalVisible: false }) });
-  const center = h("div", { class: "center-stack" }, editorPane.el, terminalDock.el);
+  const workbench = createWorkbench({ onClose: () => center.classList.remove("studio-workbench-open"), onOpenTimeline: (id) => openTimeMachine(id) });
+  const center = h("div", { class: "center-stack" }, editorPane.el, workbench.el, terminalDock.el);
+  const showWorkbench = (tab) => { center.classList.add("studio-workbench-open"); workbench.show(tab); };
+  events.on("studio:open", showWorkbench);
+  const ambience = createAmbience({ app, projectStore, state, events, runtime,
+    onFocus: (on) => app.classList.toggle("studio-focus", on),
+    onTaskPanel: () => showWorkbench("control"),
+    onOpenCheckpoint: (id) => openTimeMachine(id),
+    getPreview: async () => {
+      const epoch = getProjectEpoch();
+      const p = studioState.get().preview; if (!p) return null;
+      const { data_url } = await runtime.preview.capture({ id: p.id, width: 640, height: 400, workspace_key: studioState.get().workspaceKey || undefined });
+      assertProjectEpoch(epoch);
+      const image = new Image(); image.src = data_url; await image.decode();
+      assertProjectEpoch(epoch);
+      const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 400;
+      canvas.getContext("2d").drawImage(image, 0, 0, 640, 400);
+      return canvas.toDataURL("image/jpeg", 0.65);
+    },
+  });
   const work = h("div", { class: "work" }, files, r1, center, r2, chat.el, welcome);
   welcome.style.cssText = "position:absolute;inset:0;z-index:15;background:var(--surface)";
 
@@ -98,11 +120,15 @@ function boot() {
     if (layout?.mode === "wide") saveSettings({ terminalVisible: !settingsStore.get().terminalVisible });
     else openTerminal();
   });
+  const workbenchBtn = iconButton("play", "创作工作台", () => showWorkbench("task"));
   const bar = h("header", { class: "appbar" },
     homeBtn, iconButton("menu", "文件", () => layout.openDrawer(), "menu-btn"), title, createCapsule(), h("div", { class: "spacer" }),
-    filesBtn, aiBtn, gitBtn, tmBtn, termBtn, iconButton("tune", "设置", () => openSettings()));
+    filesBtn, aiBtn, gitBtn, tmBtn, termBtn, workbenchBtn, ambience.button, iconButton("tune", "设置", () => openSettings()));
   app.append(bar, work, scrim);
   document.body.appendChild(app);
+  app.append(ambience.el);
+  events.on("studio:show-chat", () => { saveSettings({ aiVisible: true }); layout?.expandSheet(0.5); });
+  events.on("editor:reveal", () => { workbench.hide(); center.classList.remove("studio-workbench-open"); });
   window.__KOIDE_BOOT_OK__ = true;
   document.getElementById("boot-fallback")?.remove();
 
@@ -115,10 +141,11 @@ function boot() {
   state.subscribe((s) => {
     const ws = s.workspace;
     title.textContent = ws ? ws.name : "Koide";
-    filesName.textContent = ws ? ws.name : "Files";
+    filesName.textContent = ws ? ws.name : "文件";
     app.classList.toggle("no-ws", !ws);
     homeBtn.hidden = !ws && !s.tabs.length;                          // 项目里或草稿本里都能一键回到首页
     aiBtn.hidden = tmBtn.hidden = termBtn.hidden = gitBtn.hidden = !ws;   // 首页还没有项目，这些按钮没有意义，直接隐藏而不是灰掉
+    workbenchBtn.hidden = !ws;
     const canGit = ws?.capabilities?.git !== false;
     const canTerminal = ws?.capabilities?.terminal_cwd !== false;
     gitBtn.disabled = !!ws && !canGit;

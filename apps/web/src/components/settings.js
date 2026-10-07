@@ -57,8 +57,8 @@ function slider({ min, max, step, value, onInput, fmt = (v) => v, label }) {
   paint();
   return h("div", { style: { display: "flex", alignItems: "center", gap: "10px", width: "100%" } }, input, out);
 }
-function numberCtl(value, onChange, label) {
-  const i = h("input", { class: "text-field", type: "number", inputmode: "numeric", "aria-label": label });
+function numberCtl(value, onChange, label, { step = 1 } = {}) {
+  const i = h("input", { class: "text-field", type: "number", min: 0, step, inputmode: step === 1 ? "numeric" : "decimal", "aria-label": label });
   i.value = value;
   i.addEventListener("change", () => onChange(Number(i.value)));
   return i;
@@ -116,6 +116,9 @@ function editProfile(p, rerender) {
   };
   if (!p) { const k = f.kind.value; f.endpoint.value = presets[k]?.endpoint || ""; f.model.value = presets[k]?.model || ""; }
   const tools = switchCtl(p?.tool_calling ?? true, () => {}, "工具调用");
+  const vision = switchCtl(p?.vision ?? false, () => {}, "模型支持图片输入");
+  const inputPrice = h("input", { class: "text-field", type: "number", min: "0", step: "0.01", value: p?.pricing?.input_per_million ?? "", "aria-label": "每百万输入 Token 美元价格" });
+  const outputPrice = h("input", { class: "text-field", type: "number", min: "0", step: "0.01", value: p?.pricing?.output_per_million ?? "", "aria-label": "每百万输出 Token 美元价格" });
   const modelPick = h("button", { class: "btn tonal model-fetch", type: "button", onclick: async () => {
     let headers = {};
     if (f.headers.value.trim()) {
@@ -142,6 +145,9 @@ function editProfile(p, rerender) {
     field("名称", f.name), field("服务商类型", f.kind), field("接口地址", f.endpoint), field("模型 ID", modelCtl), field("API 密钥", f.key),
     h("p", { class: "muted", style: { fontSize: "12px" } }, runtime.kind === "native" ? "密钥只保存在本机 Native Core 的数据目录中，这个页面拿不回来。" : "密钥只保存在运行桥接服务的那台电脑上，这个页面拿不回来。"),
     field("自定义请求头（JSON，可选）", f.headers), h("div", { class: "srow", style: { padding: "0" } }, h("div", { class: "lbl" }, "工具调用"), tools),
+    h("div", { class: "srow", style: { padding: "0" } }, h("div", { class: "lbl" }, "模型支持图片输入"), vision),
+    field("每百万输入 Token 的美元单价（可选）", inputPrice), field("每百万输出 Token 的美元单价（可选）", outputPrice),
+    h("p", { class: "muted" }, "图片能力需要与你选择的模型一致。费用按填写的单价估算，缺少单价或实际用量时显示未知。"),
     h("p", { class: "muted", style: { fontSize: "12px" } }, "Anthropic 和 Gemini 都有原生适配器。其他模型请选「自定义 OpenAI 兼容接口」，填上接口地址即可。"));
   const sheet = openSheet({
     title: p ? "编辑服务商" : "新建服务商", tall: true, body,
@@ -159,7 +165,9 @@ function editProfile(p, rerender) {
     let headers = {};
     if (f.headers.value.trim()) { try { headers = JSON.parse(f.headers.value); } catch { throw new Error("请求头必须是有效的 JSON"); } }
     const id = p?.id || slug(f.name.value);
-    const profile = { id, name: f.name.value.trim(), kind: f.kind.value, endpoint: f.endpoint.value.trim(), model: f.model.value.trim(), headers, tool_calling: tools.querySelector("input").checked };
+    const pricing = inputPrice.value !== "" && outputPrice.value !== "" ? { input_per_million: Number(inputPrice.value), output_per_million: Number(outputPrice.value) } : undefined;
+    if (pricing && (!Number.isFinite(pricing.input_per_million) || !Number.isFinite(pricing.output_per_million) || pricing.input_per_million < 0 || pricing.output_per_million < 0)) throw new Error("价格必须是非负数");
+    const profile = { id, name: f.name.value.trim(), kind: f.kind.value, endpoint: f.endpoint.value.trim(), model: f.model.value.trim(), headers, tool_calling: tools.querySelector("input").checked, vision: vision.querySelector("input").checked, pricing };
     const saved = await runtime.profiles.save({ profile, api_key: f.key.value ? f.key.value : undefined });
     if (!settingsStore.get().agent.profile) saveSettings({ agent: { profile: saved.id } });
     f.key.value = "";
@@ -192,6 +200,9 @@ function agentSection() {
     row({ label: "工具调用上限", desc: "单个任务的硬性上限；0 表示不限次数，仍然可以随时手动停止任务", ctl: numberCtl(lim.max_tool_calls, (v) => saveSettings({ agent: { limits: { max_tool_calls: Math.max(0, v) } } }), "工具调用上限，0 表示不限"), keywords: "限制 上限 无限 limit unlimited" }),
     row({ label: "最大修复次数", desc: "构建或测试失败多少次后智能体放弃", ctl: numberCtl(lim.max_repair_attempts, (v) => saveSettings({ agent: { limits: { max_repair_attempts: v } } }), "最大修复次数"), keywords: "限制 循环 limit loop" }),
     row({ label: "最长运行时间（秒）", desc: "0 表示不限时；仍然可以随时手动停止任务", ctl: numberCtl(lim.max_seconds, (v) => saveSettings({ agent: { limits: { max_seconds: Math.max(0, v) } } }), "最长秒数，0 表示不限"), keywords: "限制 超时 无限 limit timeout unlimited" }),
+    row({ label: "任务 Token 预算", desc: "按 Provider 返回的实际用量累计；0 不设上限。达到预算后停止后续请求，单次请求可能超过预算。", ctl: numberCtl(lim.max_tokens || 0, (v) => saveSettings({ agent: { limits: { max_tokens: Math.max(0, v) } } }), "任务 Token 预算"), keywords: "token 用量 预算" }),
+    row({ label: "任务费用预算（美元）", desc: "需要填写模型单价；按配置估算，0 不设上限。", ctl: numberCtl(lim.max_cost_usd || 0, (v) => saveSettings({ agent: { limits: { max_cost_usd: Math.max(0, v) } } }), "费用预算", { step: 0.001 }), keywords: "费用 budget 预算" }),
+    row({ label: "重复失败上限", desc: "相同命令或工具重复失败时暂停，避免无限重试；0 不设此限制。", ctl: numberCtl(lim.max_repeated_failures ?? 3, (v) => saveSettings({ agent: { limits: { max_repeated_failures: Math.max(0, v) } } }), "重复失败上限"), keywords: "循环 卡住 失败" }),
     ...instructionRows(),
   ]);
 }

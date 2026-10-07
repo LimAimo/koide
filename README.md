@@ -1,6 +1,6 @@
 # Koide
 
-> **0.9.0 · 正式版**  
+> **0.10.0 · 创作工作台**
 > Koide 是一个本地优先、面向桌面与 Android 的 AI IDE。正常本地使用由 **Tauri 2 + Rust Native Core** 驱动，不需要 Python、localhost 或 WebSocket；Python Bridge 仅保留为浏览器/LAN 兼容模式。
 
 AI 修改代码时，Koide 不只是瞬间替换文本：保留下来的代码会移动到新位置，被删除的内容会消散，新增内容会在新位置成形。智能体可以读代码、搜索、修改文件、运行命令与测试；每一步都有权限边界、检查点和可恢复路径。
@@ -15,6 +15,11 @@ AI 修改代码时，Koide 不只是瞬间替换文本：保留下来的代码�
 - **Android SAF**：可以原地打开用户授权目录，保留 revision、冲突检测、Checkpoint、Trash 与 Agent 编辑语义。
 - **移动端界面**：AI 抽屉支持半屏、自由拖动和向上 fling 全屏；状态栏安全区、触控和移动布局均单独适配。
 - **安全与恢复**：HardPolicy、权限模式、逐工具规则、审批模型、版本冲突检测、时光机和回收站共同工作。
+- **创作工作台**：目标与验收卡、真实命令证据、运行环境检查、隔离预览、问题修复、项目记忆、风格卡、同基线 A/B 方案与手机指挥台。
+- **视觉上下文与语言服务**：截图、参考图和圈选标注可发送给支持视觉的模型；JS / TS 提供真实语义诊断、定义、引用与可恢复重命名。
+- **项目创作房间**：雨夜书房、深海实验室、霓虹车库、夜行列车；环境混音、操作声音、锦鲤与工作灯、心流模式、开工收工、成果明信片和里程碑瓶中世界。
+
+完整操作与平台边界见 [创作工作台使用说明](docs/WORKBENCH.md)。
 
 ## 快速开始
 
@@ -103,7 +108,8 @@ Runtime API
 - **Android SAF**：文件编辑、搜索、Checkpoint、Trash 与 Agent 编辑可用；由于 SAF URI 不是普通 cwd，Git 与 Terminal cwd 会明确标记为不可用。
 - **Android 交互式 PTY**：当前仍未提供；一次性 shell 命令可用。
 - **Native Remote Runtime**：本机 Rust Core 暂未提供 LAN server / 一次性配对码。需要跨设备访问时继续使用可选 Python Bridge。
-- **Provider 停止**：流式请求会检查停止状态，但同步网络读取期间的中止不是所有服务商都能做到瞬时返回。
+- **停止与预算**：Native 响应头、流数据、审批与网页读取可取消；同步平台操作在安全边界结束后返回。费用按配置单价估算，单次请求可能超过预算。
+- **工作台边界**：隔离方案与运行向导当前限 LocalFS，语言服务为 JS / TS；截图需已安装 Edge / Chrome，隔离预览不支持 WebSocket / HMR / 表单提交。
 - CI 的 Android APK 使用可安装的调试签名；正式商店签名需要单独配置发行密钥。
 
 这些限制不会阻止 Koide 作为本地 Native IDE 使用；当前能力矩阵见 `docs/STATUS.md` 与 `docs/NATIVE_PARITY_AUDIT.md`。
@@ -111,13 +117,12 @@ Runtime API
 ## 开发与测试
 
 ```bash
-pnpm build:cm6
-node --test tests/web/*.test.mjs
-python3 -m unittest discover -s tests/bridge -v
+pnpm test
+pnpm test:browser
 cd apps/native/src-tauri && cargo test --lib
 ```
 
-CI 会额外验证 Runtime API / Native dispatch 对齐，并构建 Windows x64 与 Android ARM64 成品。
+`pnpm test` 会先构建正式编辑器和语言 Worker，再运行全部 Web / Bridge 测试与 Runtime 路由对齐检查。真实浏览器测试使用临时项目；Windows 默认使用已安装的 Edge，其他平台先运行 `pnpm exec playwright install --with-deps chromium`。CI 还会构建 Windows x64 与 Android ARM64 成品。
 
 ## 目录结构
 

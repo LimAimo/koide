@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import platform
 import re
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from ..filesystem.workspace import Ctx, WorkspaceError
 from ..providers.openai_compat import ProviderError, get_provider
+from ..providers.media import UsageMeter, configured_prices, ensure_vision, normalize_usage, user_content, validate_attachments
 from ..tools.builtin import ToolContext
 from ..tools.registry import validate
 from .approval import make_reviewer
@@ -136,13 +138,18 @@ def _tool_progress(name: str, raw: str, tool=None) -> tuple[str, str]:
 
 
 class AgentRun:
-    def __init__(self, app, goal: str, mode: str, profile_id: str, limits: dict | None = None, conversation_id: str | None = None, reasoning: str = "auto", web_search: bool = False):
+    def __init__(self, app, goal: str, mode: str, profile_id: str, limits: dict | None = None, conversation_id: str | None = None, reasoning: str = "auto", web_search: bool = False, attachments: list[dict] | None = None):
         self.app, self.goal, self.mode, self.profile_id = app, goal, mode, profile_id
+        self.workspace = getattr(app, "workspace", None)
         self.conversation_id = conversation_id
         self.reasoning = reasoning if reasoning in ("auto", "on", "off") else "auto"
         self.web_search = bool(web_search)
         self.transcript: list[dict] = []
         self.limits = {"max_tool_calls": 0, "max_seconds": 0, "max_repair_attempts": 8, **(limits or {})}
+        for field in ("max_tokens", "max_cost_usd", "max_repeated_failures"):
+            value = self.limits.get(field, 0)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError("任务预算必须是非负有限数值")
         self.cancel = asyncio.Event()
         self.task_id: str | None = None
         self.read_revisions: dict[str, str] = {}
@@ -150,6 +157,9 @@ class AgentRun:
         self.failed_runs = 0
         self.started = 0.0
         self.last_text = ""
+        self.attachments = validate_attachments(attachments)
+        self.usage = UsageMeter()
+        self.repeated_failures: dict[str, int] = {}
 
     # ------------------------------------------------------------------------------------------
     def stop(self) -> None:
@@ -162,7 +172,7 @@ class AgentRun:
         self._emit("agent.status", state=state, detail=detail)
 
     def _system_prompt(self) -> str:
-        ws = self.app.workspace
+        ws = self.workspace
         scopes = {
             "chat": "只能对话和向你提问，不能读写文件、不能跑命令",
             "read": "可以读文件、列目录、搜索/查找文件、向你提问，但不能修改任何文件、不能跑命令",
@@ -175,14 +185,29 @@ class AgentRun:
         glob = self.app.data_dir / "global_instructions.md"
         if glob.is_file():
             text += "\n# Global instructions\n" + glob.read_text("utf-8", "replace")[:6000]
-        agents = ws.primary / "AGENTS.md"
-        if agents.is_file():
-            text += "\n# Project instructions (AGENTS.md)\n" + agents.read_text("utf-8", "replace")[:8000]
+        try:
+            agents = ws.resolve("AGENTS.md", "read")
+            if not ws.policy.check_path(agents, "read"):
+                instructions = ws.read("AGENTS.md")
+                if not instructions.get("binary"):
+                    text += "\n# Project instructions (AGENTS.md)\n" + instructions.get("content", "")[:8000]
+        except WorkspaceError:
+            pass
         return text
 
+    def _check_workspace(self) -> None:
+        if self.workspace is None or self.app.workspace is not self.workspace:
+            self.cancel.set()
+            raise Stopped()
+
     def _check_limits(self) -> None:
+        self._check_workspace()
         if self.cancel.is_set():
             raise Stopped()
+        try:
+            self.usage.check(self.limits)
+        except ValueError as error:
+            raise LimitReached(str(error)) from error
         max_calls = float(self.limits.get("max_tool_calls") or 0)
         if max_calls > 0 and self.tool_calls >= max_calls:
             raise LimitReached(f"已停止：工具调用次数达到上限（{self.limits['max_tool_calls']} 次）")
@@ -195,14 +220,17 @@ class AgentRun:
     # ------------------------------------------------------------------------------------------
     async def run(self) -> None:
         app = self.app
-        ws = app.workspace
+        ws = self.workspace
         status, summary = "done", ""
         self.started = time.monotonic()
-        task = ws.checkpoints.start_task(self.goal, self.mode)
-        self.task_id = task["id"]
-        self._emit("agent.started", goal=self.goal, mode=self.mode)
         try:
+            self._check_workspace()
+            task = ws.checkpoints.start_task(self.goal, self.mode)
+            self.task_id = task["id"]
+            self._emit("agent.started", goal=self.goal, mode=self.mode)
             profile, key = app.profiles.get(self.profile_id)
+            if float(self.limits.get("max_cost_usd") or 0) > 0 and configured_prices(profile) is None:
+                raise ProviderError("请先配置模型的输入和输出单价，再启用费用预算")
             profile = {**profile, "_reasoning_mode": self.reasoning, "_web_search": self.web_search}
             provider = get_provider(profile["kind"])
             tools = app.tools.for_classes(MODE_CLASSES[self.mode])
@@ -219,9 +247,10 @@ class AgentRun:
                     history = ws.conversations.as_messages(ws.conversations.get(self.conversation_id))
                 except KeyError:
                     history = []
-            self.transcript.append({"role": "user", "text": self.goal, "ts": time.time()})
+            self.transcript.append({"role": "user", "text": self.goal, "attachments": self.attachments, "ts": time.time()})
             messages = [{"role": "system", "content": self._system_prompt()}, *history,
-                        {"role": "user", "content": self.goal}]
+                        {"role": "user", "content": user_content(self.goal, self.attachments)}]
+            ensure_vision(profile, messages)
             while True:
                 self._check_limits()
                 self._status("thinking")
@@ -244,7 +273,9 @@ class AgentRun:
                     summary = text
                     break
                 for call in calls:
+                    self._check_limits()
                     result = await self._execute(call, by_id, reviewer)
+                    self._track_failure(call, result)
                     messages.append({"role": "tool", "tool_call_id": call["id"],
                                      "content": _clip(json.dumps(result, ensure_ascii=False))})
                     self._check_limits()
@@ -264,17 +295,19 @@ class AgentRun:
         except Exception as e:  # never let a bug take the Bridge down
             status, summary = "error", f"{type(e).__name__}: {e}"
         finally:
-            if self.conversation_id and getattr(ws, "conversations", None):
+            if self.task_id and self.conversation_id and getattr(ws, "conversations", None):
                 try:
                     ws.conversations.append(self.conversation_id, self.transcript + [{"role": "note", "text": {"done": "任务完成", "incomplete": "任务可能未完成", "stopped": "任务已停止", "error": "任务失败"}[status], "task_id": self.task_id, "status": status, "ts": time.time()}])
                 except KeyError:
                     pass
-            ws.checkpoints.finish_task(self.task_id, status, summary)
+            if self.task_id:
+                ws.checkpoints.finish_task(self.task_id, status, summary)
             self._emit("agent.done", status=status, summary=summary)
             self._status({"done": "idle", "incomplete": "idle", "stopped": "stopped", "error": "error"}[status], summary if status in ("error", "incomplete") else "")
 
     async def _model_turn(self, provider, profile, key, messages, specs, by_id):
         text, calls, preparing = [], [], {}
+        usage = normalize_usage(profile["kind"], None)
         async for ev in provider.stream_chat(profile, key, messages, specs, self.cancel):
             t = ev["type"]
             if t == "text":
@@ -313,12 +346,29 @@ class AgentRun:
                 calls.append(ev)
             elif t == "error":
                 raise ProviderError(ev["message"])
+            elif t == "usage":
+                usage = ev["usage"]
+        self._emit("agent.usage", usage=self.usage.record(profile, usage))
         self._emit("agent.turn_end")
         return "".join(text), calls
 
+    def _track_failure(self, call: dict, result: dict) -> None:
+        signature = json.dumps([call["name"], call.get("arguments")], sort_keys=True, ensure_ascii=False)
+        failed = bool(result.get("error")) or (call["name"] == "shell_run" and
+                 (result.get("exit_code") != 0 or result.get("timed_out")))
+        if not failed:
+            self.repeated_failures.pop(signature, None)
+            return
+        self.repeated_failures[signature] = self.repeated_failures.get(signature, 0) + 1
+        limit = max(1, min(32, int(self.limits.get("max_repeated_failures") or 3)))
+        if self.repeated_failures[signature] >= limit:
+            self._emit("agent.warning", code="REPEATED_FAILURE", message="同一操作反复失败，已停止以避免继续消耗")
+            raise LimitReached("同一操作反复失败，已停止以避免继续消耗")
+
     # ------------------------------------------------------------------------------------------
     async def _execute(self, call: dict, by_id: dict, reviewer) -> dict:
-        app, ws = self.app, self.app.workspace
+        self._check_workspace()
+        app, ws = self.app, self.workspace
         name, cid = call["name"], call["id"]
         tool = by_id.get(name)
 
@@ -349,7 +399,17 @@ class AgentRun:
         card("pending", title=title, args=args, activity=tool.activity)
         self.tool_calls += 1
 
-        decision = await app.permissions.evaluate(tool, args, ws, reviewer, {"task": self.goal})
+        evaluation = asyncio.ensure_future(app.permissions.evaluate(tool, args, ws, reviewer, {"task": self.goal}))
+        cancel_wait = asyncio.ensure_future(self.cancel.wait())
+        try:
+            done, _ = await asyncio.wait({evaluation, cancel_wait}, return_when=asyncio.FIRST_COMPLETED)
+            if cancel_wait in done or self.cancel.is_set():
+                evaluation.cancel()
+                await asyncio.gather(evaluation, return_exceptions=True)
+                raise Stopped()
+            decision = evaluation.result()
+        finally:
+            cancel_wait.cancel()
         if decision.action == "deny":
             card("denied", title=title, detail=decision.reason)
             return {"error": {"code": "DENIED", "message": decision.reason}}
@@ -364,6 +424,9 @@ class AgentRun:
                 app.permissions.grant_session(tool.id)
 
         self._status(tool.activity, title)
+        self._check_workspace()
+        if self.cancel.is_set():
+            raise Stopped()
         card("running", title=title)
         async def ask_question(payload: dict) -> list[str]:
             qs = payload.get("questions") or []
@@ -421,7 +484,8 @@ class AgentRun:
             summary = "已回答" if len(pairs) <= 1 else f"已回答 {len(pairs)} 个问题"
             text = "\n".join(f'对"{p["question"]}"的回答：{p["answer"]}' for p in pairs) or "已回答"
             self.transcript.append({"role": "user", "text": text, "ts": time.time()})
-        card("done", title=title, summary=summary, activity=tool.activity)
+        card("error" if name == "shell_run" and not ok else "done", title=title, summary=summary,
+             activity=tool.activity, result=result if name == "shell_run" else None)
         self.transcript.append({"role": "tool", "text": title, "tool": name, "args": args,
                                 "state": "done", "summary": summary, "ts": time.time()})
         return result

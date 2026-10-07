@@ -2,10 +2,12 @@ use crate::core::checkpoint::CheckpointStore;
 use crate::core::conversation::ConversationStore;
 use crate::core::id::unique_id;
 use crate::core::policy::{
-    check_command, check_read_path, check_write_path, ensure_public_http_url,
-    CommandPolicyAction,
+    check_command, check_read_path, check_write_path, ensure_public_http_url, CommandPolicyAction,
 };
-use crate::core::provider::{anthropic_stream_turn, chat_complete, gemini_stream_turn, openai_stream_turn, ProfileStore, StreamEvent, ToolCall};
+use crate::core::provider::{
+    anthropic_stream_turn, cancellable, ensure_vision, gemini_stream_turn, openai_stream_turn,
+    user_content, validate_attachments, ProfileStore, StreamEvent, ToolCall,
+};
 use crate::core::settings::{wildcard_match, PermissionAction, SettingsStore};
 use crate::core::terminal::{run_capture, TerminalManager};
 use crate::core::workspace::Workspace;
@@ -14,7 +16,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -38,6 +39,9 @@ pub struct AgentLimits {
     pub max_seconds: u64,
     pub max_repair_attempts: usize,
     pub web_search: bool,
+    pub max_tokens: u64,
+    pub max_cost_usd: f64,
+    pub max_repeated_failures: usize,
 }
 
 impl AgentLimits {
@@ -57,7 +61,120 @@ impl AgentLimits {
             .and_then(Value::as_u64)
             .unwrap_or(8)
             .clamp(1, 32) as usize;
-        Self { max_tool_calls, max_seconds, max_repair_attempts, web_search }
+        let max_tokens = limits
+            .and_then(|v| v.get("max_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(10_000_000);
+        let max_cost_usd = limits
+            .and_then(|v| v.get("max_cost_usd"))
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .unwrap_or(0.0);
+        let max_repeated_failures = limits
+            .and_then(|v| v.get("max_repeated_failures"))
+            .and_then(Value::as_u64)
+            .unwrap_or(3)
+            .clamp(1, 32) as usize;
+        Self {
+            max_tool_calls,
+            max_seconds,
+            max_repair_attempts,
+            web_search,
+            max_tokens,
+            max_cost_usd,
+            max_repeated_failures,
+        }
+    }
+}
+
+#[derive(Default)]
+struct UsageMeter {
+    input: u64,
+    output: u64,
+    total: u64,
+    cost: f64,
+    turns: u64,
+    unknown: bool,
+    cost_unknown: bool,
+}
+
+fn configured_prices(profile: &Value) -> Option<(f64, f64)> {
+    let input = profile.pointer("/pricing/input_per_million")?.as_f64()?;
+    let output = profile.pointer("/pricing/output_per_million")?.as_f64()?;
+    if input.is_finite() && output.is_finite() && input >= 0.0 && output >= 0.0 {
+        Some((input, output))
+    } else {
+        None
+    }
+}
+
+pub fn validate_start(
+    profile: &Value,
+    attachments: &[Value],
+    limits: &AgentLimits,
+) -> Result<Vec<Value>, RuntimeError> {
+    let attachments = validate_attachments(attachments)?;
+    ensure_vision(profile, &[json!({"content":user_content("",&attachments)})])?;
+    if limits.max_cost_usd > 0.0 && configured_prices(profile).is_none() {
+        return Err(RuntimeError::new(
+            "BAD_BUDGET",
+            "请先配置模型的输入和输出单价，再启用费用预算",
+        ));
+    }
+    Ok(attachments)
+}
+
+impl UsageMeter {
+    fn record(&mut self, profile: &Value, usage: &Value) -> Value {
+        self.turns += 1;
+        if usage["source"] != "provider" {
+            self.unknown = true;
+            self.cost_unknown = true;
+        } else {
+            let input = usage["input_tokens"].as_u64().unwrap_or(0);
+            let output = usage["output_tokens"].as_u64().unwrap_or(0);
+            self.input = self.input.saturating_add(input);
+            self.output = self.output.saturating_add(output);
+            self.total = self.total.saturating_add(
+                usage["total_tokens"]
+                    .as_u64()
+                    .unwrap_or(input.saturating_add(output)),
+            );
+            if let Some((a, b)) = configured_prices(profile) {
+                self.cost += (input as f64 * a + output as f64 * b) / 1_000_000.0;
+            } else {
+                self.cost_unknown = true;
+            }
+        }
+        json!({"turn":usage,"input_tokens":if self.unknown{Value::Null}else{json!(self.input)},"output_tokens":if self.unknown{Value::Null}else{json!(self.output)},"known_input_tokens":self.input,"known_output_tokens":self.output,"total_tokens":if self.unknown {Value::Null}else{json!(self.total)},"known_tokens":self.total,"source":if self.unknown{"unknown"}else{"provider"},"cost_usd":if self.cost_unknown{Value::Null}else{json!(self.cost)},"cost_source":if self.cost_unknown{"unknown"}else{"configured_estimate"},"turns":self.turns})
+    }
+    fn check(&self, limits: &AgentLimits) -> Result<(), RuntimeError> {
+        if (limits.max_tokens > 0 || limits.max_cost_usd > 0.0) && self.unknown {
+            return Err(RuntimeError::new(
+                "BUDGET_USAGE_UNKNOWN",
+                "服务商未返回实际用量，已停止后续请求以保护预算",
+            ));
+        }
+        if limits.max_tokens > 0 && self.total >= limits.max_tokens {
+            return Err(RuntimeError::new(
+                "BUDGET_REACHED",
+                "已达到 Token 预算，已停止后续请求与工具",
+            ));
+        }
+        if limits.max_cost_usd > 0.0 && self.cost_unknown {
+            return Err(RuntimeError::new(
+                "BUDGET_USAGE_UNKNOWN",
+                "无法计算本次费用，已停止后续请求以保护预算",
+            ));
+        }
+        if limits.max_cost_usd > 0.0 && self.cost >= limits.max_cost_usd {
+            return Err(RuntimeError::new(
+                "BUDGET_REACHED",
+                "已达到按配置单价估算的费用预算，已停止后续请求与工具",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -122,7 +239,6 @@ impl AgentState {
             .unwrap_or_default()
     }
 
-
     pub fn pending_questions(&self) -> Vec<Value> {
         self.questions
             .lock()
@@ -175,7 +291,12 @@ impl AgentState {
             .ok_or_else(|| RuntimeError::new("NO_APPROVAL", "这个审批已经不存在或已经处理"))?;
         let decision = ApprovalDecision {
             allow,
-            scope: if scope == "session" { "session" } else { "once" }.to_owned(),
+            scope: if scope == "session" {
+                "session"
+            } else {
+                "once"
+            }
+            .to_owned(),
         };
         pending
             .tx
@@ -207,6 +328,53 @@ impl AgentState {
         terminal: TerminalManager,
         limits: AgentLimits,
     ) -> Result<Value, RuntimeError> {
+        self.start_with_attachments(
+            app,
+            store,
+            profile,
+            api_key,
+            goal,
+            conversation_id,
+            reasoning,
+            mode,
+            system_context,
+            workspace,
+            data_dir,
+            task_id,
+            checkpoints,
+            terminal,
+            limits,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_attachments(
+        &self,
+        app: AppHandle,
+        store: ConversationStore,
+        profile: Value,
+        api_key: Option<String>,
+        goal: String,
+        conversation_id: Option<String>,
+        reasoning: String,
+        mode: String,
+        system_context: String,
+        workspace: Workspace,
+        data_dir: PathBuf,
+        task_id: String,
+        checkpoints: CheckpointStore,
+        terminal: TerminalManager,
+        limits: AgentLimits,
+        attachments: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let attachments = match validate_start(&profile, &attachments, &limits) {
+            Ok(images) => images,
+            Err(error) => {
+                let _ = checkpoints.finish_task(&task_id, "error", &error.message);
+                return Err(error);
+            }
+        };
         if !matches!(mode.as_str(), "chat" | "read" | "edit" | "agent") {
             return Err(RuntimeError::new(
                 "MIGRATION_PENDING",
@@ -218,7 +386,9 @@ impl AgentState {
             return Err(RuntimeError::new("AGENT_BUSY", "已有一个 AI 任务正在运行"));
         }
         self.cancel.store(false, Ordering::SeqCst);
-        if let Ok(mut grants) = self.session_grants.lock() { grants.clear(); }
+        if let Ok(mut grants) = self.session_grants.lock() {
+            grants.clear();
+        }
         if let Ok(mut slot) = self.task_id.lock() {
             *slot = Some(task_id.clone());
         }
@@ -238,7 +408,8 @@ impl AgentState {
             };
 
             let mut messages = store.messages(&conversation)?;
-            messages.push(json!({"role":"user","content":goal.clone()}));
+            messages.push(json!({"role":"user","content":user_content(&goal,&attachments)}));
+            ensure_vision(&profile, &messages)?;
             let scope = match mode.as_str() {
                 "chat" => "You are Koide in CHAT mode. Converse naturally and ask the user when needed. You cannot inspect or modify project files and cannot execute commands.",
                 "read" => "You are Koide in READ-ONLY mode. Inspect the project with the provided tools before making factual claims about its code. You may list, read and search files, but cannot modify files, execute commands, access paths outside the workspace, or read secrets blocked by HardPolicy.",
@@ -341,6 +512,7 @@ impl AgentState {
                     api_key.as_deref(),
                     &messages,
                     &reasoning,
+                    &limits,
                 )
             };
 
@@ -350,31 +522,43 @@ impl AgentState {
                         let _ = store.append(
                             &conversation,
                             vec![
-                                json!({"role":"user","text":goal.clone(),"ts":now_secs()}),
+                                json!({"role":"user","text":goal.clone(),"attachments":attachments,"ts":now_secs()}),
                                 json!({"role":"note","text":"任务已停止","task_id":task_id.clone(),"status":"stopped","ts":now_secs()})
                             ],
                         );
                         finish("stopped", "已由你停止".into());
                         return;
                     }
-                    let mut entries = vec![json!({"role":"user","text":goal,"ts":now_secs()})];
+                    let mut entries = vec![
+                        json!({"role":"user","text":goal,"attachments":attachments,"ts":now_secs()}),
+                    ];
                     if !answer.trim().is_empty() {
-                        entries.push(json!({"role":"assistant","text":answer.clone(),"ts":now_secs()}));
+                        entries.push(
+                            json!({"role":"assistant","text":answer.clone(),"ts":now_secs()}),
+                        );
                     }
                     entries.push(json!({"role":"note","text":"任务完成","task_id":task_id.clone(),"status":"done","ts":now_secs()}));
                     let _ = store.append(&conversation, entries);
                     finish("done", answer);
                 }
                 Err(error) => {
-                    if error.code == "STOPPED" {
+                    if matches!(
+                        error.code.as_str(),
+                        "STOPPED"
+                            | "BUDGET_REACHED"
+                            | "BUDGET_USAGE_UNKNOWN"
+                            | "LIMIT_REACHED"
+                            | "REPEATED_FAILURE"
+                            | "REPAIR_LIMIT"
+                    ) {
                         let _ = store.append(
                             &conversation,
                             vec![
-                                json!({"role":"user","text":goal,"ts":now_secs()}),
+                                json!({"role":"user","text":goal,"attachments":attachments,"ts":now_secs()}),
                                 json!({"role":"note","text":"任务已停止","task_id":task_id.clone(),"status":"stopped","ts":now_secs()})
                             ],
                         );
-                        finish("stopped", "已由你停止".into());
+                        finish("stopped", error.message);
                         return;
                     }
                     emit(
@@ -386,7 +570,7 @@ impl AgentState {
                     let _ = store.append(
                         &conversation,
                         vec![
-                            json!({"role":"user","text":goal,"ts":now_secs()}),
+                            json!({"role":"user","text":goal,"attachments":attachments,"ts":now_secs()}),
                             json!({"role":"note","text":"任务失败","task_id":task_id.clone(),"status":"error","ts":now_secs()})
                         ],
                     );
@@ -407,15 +591,36 @@ fn run_chat_mode(
     api_key: Option<&str>,
     messages: &[Value],
     reasoning: &str,
+    limits: &AgentLimits,
 ) -> Result<String, RuntimeError> {
     ensure_not_cancelled(cancel)?;
-    let answer = chat_complete(profile, api_key, messages, reasoning)?;
+    let mut stream = |event| match event {
+        StreamEvent::Text(delta) => emit(
+            app,
+            "agent.message",
+            json!({"task_id":task_id,"delta":delta}),
+        ),
+        StreamEvent::Reasoning(delta) => emit(
+            app,
+            "agent.reasoning",
+            json!({"task_id":task_id,"delta":delta}),
+        ),
+    };
+    let turn = openai_stream_turn(
+        profile,
+        api_key,
+        messages,
+        &[],
+        reasoning,
+        limits.web_search,
+        cancel,
+        &mut stream,
+    )?;
+    let mut meter = UsageMeter::default();
+    let usage = meter.record(profile, &turn.usage);
+    emit(app, "agent.usage", json!({"task_id":task_id,"usage":usage}));
+    let answer = turn.text;
     ensure_not_cancelled(cancel)?;
-    emit(
-        app,
-        "agent.message",
-        json!({"task_id":task_id,"delta":answer.clone()}),
-    );
     emit(app, "agent.turn_end", json!({"task_id":task_id}));
     Ok(answer)
 }
@@ -440,24 +645,39 @@ fn run_tool_mode(
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<String, RuntimeError> {
     let shell_root = workspace.local_root_path();
-    let tools = if full_agent { agent_tool_specs(shell_root.is_some()) } else if editable { edit_tool_specs() } else { read_tool_specs() };
+    let tools = if full_agent {
+        agent_tool_specs(shell_root.is_some())
+    } else if editable {
+        edit_tool_specs()
+    } else {
+        read_tool_specs()
+    };
     let mut read_revisions: HashMap<String, String> = HashMap::new();
     let mut visible = String::new();
     let mut total_calls = 0usize;
     let mut repair_attempts = 0usize;
     let started = Instant::now();
+    let mut meter = UsageMeter::default();
+    let mut repeated: HashMap<String, usize> = HashMap::new();
 
     for _round in 0..MAX_TOOL_ROUNDS {
         if limits.max_seconds > 0 && started.elapsed() >= Duration::from_secs(limits.max_seconds) {
-            return Err(RuntimeError::new("LIMIT_REACHED", format!("已停止：任务运行时间达到上限（{} 秒）", limits.max_seconds)));
+            return Err(RuntimeError::new(
+                "LIMIT_REACHED",
+                format!("已停止：任务运行时间达到上限（{} 秒）", limits.max_seconds),
+            ));
         }
         ensure_not_cancelled(cancel)?;
+        meter.check(&limits)?;
         emit(
             app,
             "agent.status",
             json!({"task_id":task_id,"state":"thinking","detail":""}),
         );
-        let kind = profile.get("kind").and_then(Value::as_str).unwrap_or("openai_compatible");
+        let kind = profile
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("openai_compatible");
         let mut emit_stream = |event| match event {
             StreamEvent::Text(delta) => emit(
                 app,
@@ -472,16 +692,37 @@ fn run_tool_mode(
         };
         let turn = match kind {
             "anthropic" => anthropic_stream_turn(
-                profile, api_key, &messages, &tools, reasoning, cancel, &mut emit_stream
+                profile,
+                api_key,
+                &messages,
+                &tools,
+                reasoning,
+                cancel,
+                &mut emit_stream,
             )?,
             "gemini_native" => gemini_stream_turn(
-                profile, api_key, &messages, &tools, reasoning, cancel, &mut emit_stream
+                profile,
+                api_key,
+                &messages,
+                &tools,
+                reasoning,
+                cancel,
+                &mut emit_stream,
             )?,
             _ => openai_stream_turn(
-                profile, api_key, &messages, &tools, reasoning, limits.web_search, cancel, &mut emit_stream
+                profile,
+                api_key,
+                &messages,
+                &tools,
+                reasoning,
+                limits.web_search,
+                cancel,
+                &mut emit_stream,
             )?,
         };
         ensure_not_cancelled(cancel)?;
+        let usage = meter.record(profile, &turn.usage);
+        emit(app, "agent.usage", json!({"task_id":task_id,"usage":usage}));
 
         if !turn.text.is_empty() {
             visible.push_str(&turn.text);
@@ -502,15 +743,24 @@ fn run_tool_mode(
         messages.push(turn.assistant_message);
 
         for call in turn.tool_calls {
+            ensure_not_cancelled(cancel)?;
+            meter.check(&limits)?;
             total_calls += 1;
-            let configured_limit = if limits.max_tool_calls == 0 { HARD_MAX_TOOL_CALLS } else { limits.max_tool_calls };
+            let configured_limit = if limits.max_tool_calls == 0 {
+                HARD_MAX_TOOL_CALLS
+            } else {
+                limits.max_tool_calls
+            };
             if total_calls > configured_limit {
                 return Err(RuntimeError::new(
                     "LIMIT_REACHED",
                     if limits.max_tool_calls == 0 {
                         "智能体调用工具次数异常过多，已停止以避免无限循环".to_owned()
                     } else {
-                        format!("已停止：工具调用次数达到上限（{} 次）", limits.max_tool_calls)
+                        format!(
+                            "已停止：工具调用次数达到上限（{} 次）",
+                            limits.max_tool_calls
+                        )
                     },
                 ));
             }
@@ -531,28 +781,70 @@ fn run_tool_mode(
 
             let result = if call.name == "ask_user" {
                 authorize_tool(
-                    app, cancel, task_id, &call, "interaction", "low", "",
-                    data_dir, profile, api_key, approvals.clone(), session_grants.clone()
-                ).and_then(|_| execute_ask_user(app, cancel, task_id, &call, questions.clone()))
+                    app,
+                    cancel,
+                    task_id,
+                    &call,
+                    "interaction",
+                    "low",
+                    "",
+                    data_dir,
+                    profile,
+                    api_key,
+                    approvals.clone(),
+                    session_grants.clone(),
+                )
+                .and_then(|_| execute_ask_user(app, cancel, task_id, &call, questions.clone()))
             } else if full_agent && call.name == "shell_run" {
-                let root = shell_root.as_deref().ok_or_else(|| RuntimeError::new(
-                    "WORKSPACE_CAPABILITY", "当前 Android SAF 工作区不提供 shell 工作目录能力"
-                ));
-                root.and_then(|root| execute_shell_tool(
-                    app, cancel, task_id, &call, root, data_dir,
-                    profile, api_key, approvals.clone(), session_grants.clone()
-                ))
+                let root = shell_root.as_deref().ok_or_else(|| {
+                    RuntimeError::new(
+                        "WORKSPACE_CAPABILITY",
+                        "当前 Android SAF 工作区不提供 shell 工作目录能力",
+                    )
+                });
+                root.and_then(|root| {
+                    execute_shell_tool(
+                        app,
+                        cancel,
+                        task_id,
+                        &call,
+                        root,
+                        data_dir,
+                        profile,
+                        api_key,
+                        approvals.clone(),
+                        session_grants.clone(),
+                    )
+                })
             } else if full_agent && call.name == "terminal_read" {
                 execute_terminal_read(
-                    app, cancel, task_id, &call, &terminal, data_dir,
-                    profile, api_key, approvals.clone(), session_grants.clone()
+                    app,
+                    cancel,
+                    task_id,
+                    &call,
+                    &terminal,
+                    data_dir,
+                    profile,
+                    api_key,
+                    approvals.clone(),
+                    session_grants.clone(),
                 )
             } else if full_agent && call.name == "web_fetch" {
                 execute_web_fetch(
-                    app, cancel, task_id, &call, data_dir,
-                    profile, api_key, approvals.clone(), session_grants.clone()
+                    app,
+                    cancel,
+                    task_id,
+                    &call,
+                    data_dir,
+                    profile,
+                    api_key,
+                    approvals.clone(),
+                    session_grants.clone(),
                 )
-            } else if matches!(call.name.as_str(), "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy") {
+            } else if matches!(
+                call.name.as_str(),
+                "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy"
+            ) {
                 if !editable {
                     Err(RuntimeError::new("UNKNOWN_TOOL", "当前模式没有写入工具"))
                 } else {
@@ -572,14 +864,28 @@ fn run_tool_mode(
                     )
                 }
             } else {
-                let target = call.arguments.get("path").and_then(Value::as_str)
+                let target = call
+                    .arguments
+                    .get("path")
+                    .and_then(Value::as_str)
                     .or_else(|| call.arguments.get("pattern").and_then(Value::as_str))
                     .or_else(|| call.arguments.get("query").and_then(Value::as_str))
                     .unwrap_or("");
                 authorize_tool(
-                    app, cancel, task_id, &call, "read", "low", target,
-                    data_dir, profile, api_key, approvals.clone(), session_grants.clone()
-                ).and_then(|_| execute_read_tool(workspace, &call))
+                    app,
+                    cancel,
+                    task_id,
+                    &call,
+                    "read",
+                    "low",
+                    target,
+                    data_dir,
+                    profile,
+                    api_key,
+                    approvals.clone(),
+                    session_grants.clone(),
+                )
+                .and_then(|_| execute_read_tool(workspace, &call))
             };
             let (payload, state, summary, detail) = match result {
                 Ok(value) => {
@@ -591,7 +897,12 @@ fn run_tool_mode(
                             read_revisions.insert(path.to_owned(), revision.to_owned());
                         }
                     } else if call.name == "fs_multi_read" {
-                        for file in value.get("files").and_then(Value::as_array).into_iter().flatten() {
+                        for file in value
+                            .get("files")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                        {
                             if let (Some(path), Some(revision)) = (
                                 file.get("path").and_then(Value::as_str),
                                 file.get("revision").and_then(Value::as_str),
@@ -601,19 +912,63 @@ fn run_tool_mode(
                         }
                     }
                     let summary = match call.name.as_str() {
-                        "fs_read" => format!("{} 行", value.get("total_lines").and_then(Value::as_u64).unwrap_or(0)),
-                        "fs_list" => format!("{} 条结果", value.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
-                        "fs_search" => format!("{} 条结果", value.get("matches").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
-                        "fs_glob" => format!("{} 条结果", value.get("paths").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
-                        "fs_multi_read" => format!("{} 个文件", value.get("files").and_then(Value::as_array).map(Vec::len).unwrap_or(0)),
-                        "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename" | "fs_copy" => "已修改".to_owned(),
+                        "fs_read" => format!(
+                            "{} 行",
+                            value
+                                .get("total_lines")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        ),
+                        "fs_list" => format!(
+                            "{} 条结果",
+                            value
+                                .get("entries")
+                                .and_then(Value::as_array)
+                                .map(Vec::len)
+                                .unwrap_or(0)
+                        ),
+                        "fs_search" => format!(
+                            "{} 条结果",
+                            value
+                                .get("matches")
+                                .and_then(Value::as_array)
+                                .map(Vec::len)
+                                .unwrap_or(0)
+                        ),
+                        "fs_glob" => format!(
+                            "{} 条结果",
+                            value
+                                .get("paths")
+                                .and_then(Value::as_array)
+                                .map(Vec::len)
+                                .unwrap_or(0)
+                        ),
+                        "fs_multi_read" => format!(
+                            "{} 个文件",
+                            value
+                                .get("files")
+                                .and_then(Value::as_array)
+                                .map(Vec::len)
+                                .unwrap_or(0)
+                        ),
+                        "fs_write" | "fs_patch" | "fs_create" | "fs_delete" | "fs_rename"
+                        | "fs_copy" => "已修改".to_owned(),
                         "ask_user" => "已回答".to_owned(),
-                        "shell_run" => format!("退出码 {}", value.get("exit_code").and_then(Value::as_i64).unwrap_or(-1)),
+                        "shell_run" => format!(
+                            "退出码 {}",
+                            value.get("exit_code").and_then(Value::as_i64).unwrap_or(-1)
+                        ),
                         "terminal_read" => "已读取终端".to_owned(),
-                        "web_fetch" => format!("HTTP {}", value.get("status").and_then(Value::as_u64).unwrap_or(0)),
+                        "web_fetch" => format!(
+                            "HTTP {}",
+                            value.get("status").and_then(Value::as_u64).unwrap_or(0)
+                        ),
                         _ => "完成".to_owned(),
                     };
-                    if matches!(call.name.as_str(), "fs_read" | "fs_list" | "fs_search" | "fs_glob" | "fs_multi_read") {
+                    if matches!(
+                        call.name.as_str(),
+                        "fs_read" | "fs_list" | "fs_search" | "fs_glob" | "fs_multi_read"
+                    ) {
                         let _ = checkpoints.add_event(
                             task_id,
                             "read",
@@ -622,8 +977,13 @@ fn run_tool_mode(
                         );
                     }
                     (value, "done", summary, String::new())
-                },
-                Err(error) if matches!(error.code.as_str(), "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE" | "USER_DECLINED") => {
+                }
+                Err(error)
+                    if matches!(
+                        error.code.as_str(),
+                        "SENSITIVE_PATH" | "OUTSIDE_WORKSPACE" | "USER_DECLINED"
+                    ) =>
+                {
                     let code = error.code.clone();
                     let message = error.message.clone();
                     (
@@ -639,7 +999,10 @@ fn run_tool_mode(
                         if repair_attempts > limits.max_repair_attempts {
                             return Err(RuntimeError::new(
                                 "REPAIR_LIMIT",
-                                format!("工具参数连续失败，已达到修复上限（{} 次）", limits.max_repair_attempts),
+                                format!(
+                                    "工具参数连续失败，已达到修复上限（{} 次）",
+                                    limits.max_repair_attempts
+                                ),
                             ));
                         }
                     }
@@ -651,7 +1014,23 @@ fn run_tool_mode(
                         "失败".into(),
                         message,
                     )
-                },
+                }
+            };
+
+            let shell_failed = call.name == "shell_run"
+                && (payload["exit_code"].as_i64().is_some_and(|n| n != 0)
+                    || payload["timed_out"] == true);
+            let failed = state == "error" || shell_failed;
+            let signature = format!("{}:{}", call.name, call.arguments);
+            let repeated_limit = if failed {
+                let count = repeated.entry(signature).or_default();
+                *count += 1;
+                *count >= limits.max_repeated_failures
+            } else {
+                if state == "done" {
+                    repeated.remove(&signature);
+                }
+                false
             };
 
             emit(
@@ -662,11 +1041,23 @@ fn run_tool_mode(
                     "call_id":call.id.clone(),
                     "title":tool_title(&call),
                     "args":call.arguments.clone(),
-                    "state":state,
+                    "state":if shell_failed{"error"}else{state},
                     "summary":summary,
-                    "detail":detail
+                    "detail":detail,
+                    "result":if call.name=="shell_run"{payload.clone()}else{Value::Null}
                 }),
             );
+            if repeated_limit {
+                emit(
+                    app,
+                    "agent.warning",
+                    json!({"task_id":task_id,"code":"REPEATED_FAILURE","message":"同一操作反复失败，已停止以避免继续消耗"}),
+                );
+                return Err(RuntimeError::new(
+                    "REPEATED_FAILURE",
+                    "同一操作反复失败，已停止以避免继续消耗",
+                ));
+            }
             messages.push(json!({
                 "role":"tool",
                 "tool_call_id":call.id,
@@ -788,30 +1179,54 @@ fn tool_title(call: &ToolCall) -> String {
     match call.name.as_str() {
         "fs_read" => format!(
             "读取“{}”",
-            call.arguments.get("path").and_then(Value::as_str).unwrap_or("")
+            call.arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("")
         ),
         "fs_list" => format!(
             "浏览“{}”",
-            call.arguments.get("path").and_then(Value::as_str).unwrap_or(".")
+            call.arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or(".")
         ),
         "fs_search" => format!(
             "搜索“{}”",
-            call.arguments.get("query").and_then(Value::as_str).unwrap_or("")
+            call.arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or("")
         ),
         "fs_glob" => format!(
             "查找“{}”",
-            call.arguments.get("pattern").and_then(Value::as_str).unwrap_or("")
+            call.arguments
+                .get("pattern")
+                .and_then(Value::as_str)
+                .unwrap_or("")
         ),
         "fs_multi_read" => "批量读取文件".to_owned(),
         "ask_user" => "向你提问".to_owned(),
         "shell_run" => format!(
             "运行“{}”",
-            call.arguments.get("command").and_then(Value::as_str).unwrap_or("").chars().take(80).collect::<String>()
+            call.arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(80)
+                .collect::<String>()
         ),
         "terminal_read" => "读取终端输出".to_owned(),
         "web_fetch" => format!(
             "访问“{}”",
-            call.arguments.get("url").and_then(Value::as_str).unwrap_or("").chars().take(90).collect::<String>()
+            call.arguments
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(90)
+                .collect::<String>()
         ),
         _ => call.name.clone(),
     }
@@ -820,22 +1235,42 @@ fn tool_title(call: &ToolCall) -> String {
 fn execute_read_tool(workspace: &Workspace, call: &ToolCall) -> Result<Value, RuntimeError> {
     match call.name.as_str() {
         "fs_list" => {
-            let raw = call.arguments.get("path").and_then(Value::as_str).unwrap_or(".");
+            let raw = call
+                .arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or(".");
             check_read_path(raw)?;
-            let depth = call.arguments.get("depth").and_then(Value::as_u64).unwrap_or(1).clamp(1, 4) as usize;
+            let depth = call
+                .arguments
+                .get("depth")
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .clamp(1, 4) as usize;
             let nodes = workspace.tree(raw, depth, true)?;
             let mut entries = Vec::new();
             fn flatten(nodes: &[Value], out: &mut Vec<Value>) {
                 for node in nodes {
                     let mut item = node.clone();
-                    if let Some(obj) = item.as_object_mut() { obj.remove("children"); }
-                    if item.get("path").and_then(Value::as_str).is_some_and(|p| check_read_path(p).is_ok()) {
+                    if let Some(obj) = item.as_object_mut() {
+                        obj.remove("children");
+                    }
+                    if item
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .is_some_and(|p| check_read_path(p).is_ok())
+                    {
                         out.push(item);
                     }
-                    if let Some(children) = node.get("children").and_then(Value::as_array) { flatten(children, out); }
+                    if let Some(children) = node.get("children").and_then(Value::as_array) {
+                        flatten(children, out);
+                    }
                 }
             }
-            flatten(nodes.as_array().map(Vec::as_slice).unwrap_or(&[]), &mut entries);
+            flatten(
+                nodes.as_array().map(Vec::as_slice).unwrap_or(&[]),
+                &mut entries,
+            );
             Ok(json!({"entries":entries}))
         }
         "fs_read" => {
@@ -845,16 +1280,37 @@ fn execute_read_tool(workspace: &Workspace, call: &ToolCall) -> Result<Value, Ru
             if value.get("binary").and_then(Value::as_bool) == Some(true) {
                 return Ok(value);
             }
-            let text = value.get("content").and_then(Value::as_str)
-                .ok_or_else(|| RuntimeError::new("BINARY_FILE", format!("{raw} 不是 UTF-8 文本文件")))?;
+            let text = value
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    RuntimeError::new("BINARY_FILE", format!("{raw} 不是 UTF-8 文本文件"))
+                })?;
             let lines = text.split('\n').collect::<Vec<_>>();
-            let start = call.arguments.get("start_line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-            let end = call.arguments.get("end_line").and_then(Value::as_u64).unwrap_or(lines.len() as u64).max(1) as usize;
+            let start = call
+                .arguments
+                .get("start_line")
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .max(1) as usize;
+            let end = call
+                .arguments
+                .get("end_line")
+                .and_then(Value::as_u64)
+                .unwrap_or(lines.len() as u64)
+                .max(1) as usize;
             let start = start.min(lines.len().max(1));
             let end = end.min(lines.len()).max(start);
-            let content = if call.arguments.get("start_line").is_some() || call.arguments.get("end_line").is_some() {
-                (start..=end).map(|n| format!("{n}: {}", lines.get(n - 1).copied().unwrap_or(""))).collect::<Vec<_>>().join("\n")
-            } else { text.to_owned() };
+            let content = if call.arguments.get("start_line").is_some()
+                || call.arguments.get("end_line").is_some()
+            {
+                (start..=end)
+                    .map(|n| format!("{n}: {}", lines.get(n - 1).copied().unwrap_or("")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                text.to_owned()
+            };
             Ok(json!({
                 "path":value.get("path").cloned().unwrap_or_else(||Value::String(raw.to_owned())),
                 "revision":value.get("revision").cloned().unwrap_or_else(||Value::String("absent".into())),
@@ -863,55 +1319,119 @@ fn execute_read_tool(workspace: &Workspace, call: &ToolCall) -> Result<Value, Ru
         }
         "fs_glob" => {
             let pattern = required_arg(&call.arguments, "pattern")?;
-            let max_results = call.arguments.get("max_results").and_then(Value::as_u64).unwrap_or(200).clamp(1, 500) as usize;
+            let max_results = call
+                .arguments
+                .get("max_results")
+                .and_then(Value::as_u64)
+                .unwrap_or(200)
+                .clamp(1, 500) as usize;
             let value = workspace.glob(pattern, max_results.saturating_mul(4).max(max_results))?;
-            let mut paths = value.get("paths").and_then(Value::as_array).into_iter().flatten()
-                .filter_map(Value::as_str).filter(|p| check_read_path(p).is_ok()).take(max_results).map(str::to_owned).collect::<Vec<_>>();
+            let mut paths = value
+                .get("paths")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter(|p| check_read_path(p).is_ok())
+                .take(max_results)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             paths.truncate(max_results);
             Ok(json!({"truncated":paths.len()>=max_results,"paths":paths}))
         }
         "fs_multi_read" => {
-            let paths = call.arguments.get("paths").and_then(Value::as_array)
+            let paths = call
+                .arguments
+                .get("paths")
+                .and_then(Value::as_array)
                 .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "fs_multi_read 缺少 paths"))?;
             let mut files = Vec::new();
             for raw in paths.iter().take(20).filter_map(Value::as_str) {
-                let nested = ToolCall { id:String::new(), name:"fs_read".into(), arguments:json!({"path":raw}) };
+                let nested = ToolCall {
+                    id: String::new(),
+                    name: "fs_read".into(),
+                    arguments: json!({"path":raw}),
+                };
                 match execute_read_tool(workspace, &nested) {
                     Ok(value) => files.push(value),
-                    Err(error) => files.push(json!({"path":raw,"error":format!("{}: {}",error.code,error.message)})),
+                    Err(error) => files.push(
+                        json!({"path":raw,"error":format!("{}: {}",error.code,error.message)}),
+                    ),
                 }
             }
             Ok(json!({"files":files}))
         }
         "fs_search" => {
             let query = required_arg(&call.arguments, "query")?;
-            if query.is_empty() { return Err(RuntimeError::new("BAD_QUERY", "搜索内容不能为空")); }
-            let case_sensitive = call.arguments.get("case_sensitive").and_then(Value::as_bool).unwrap_or(false);
-            let max_results = call.arguments.get("max_results").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
+            if query.is_empty() {
+                return Err(RuntimeError::new("BAD_QUERY", "搜索内容不能为空"));
+            }
+            let case_sensitive = call
+                .arguments
+                .get("case_sensitive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let max_results = call
+                .arguments
+                .get("max_results")
+                .and_then(Value::as_u64)
+                .unwrap_or(100)
+                .clamp(1, 200) as usize;
             // HardPolicy must prevent even internal reads of credential paths. Enumerate first,
             // filter paths, then read only allowed files instead of calling the unrestricted UI search.
             let all = workspace.glob("*", 5000)?;
-            let needle = if case_sensitive { query.to_owned() } else { query.to_lowercase() };
+            let needle = if case_sensitive {
+                query.to_owned()
+            } else {
+                query.to_lowercase()
+            };
             let mut matches = Vec::new();
             let mut scanned = 0usize;
-            for path in all.get("paths").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
-                if matches.len() >= max_results { break; }
-                if check_read_path(path).is_err() { continue; }
-                let Ok(value) = workspace.read(path) else { continue; };
-                if value.get("binary").and_then(Value::as_bool) == Some(true) { continue; }
-                let Some(text) = value.get("content").and_then(Value::as_str) else { continue; };
+            for path in all
+                .get("paths")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if matches.len() >= max_results {
+                    break;
+                }
+                if check_read_path(path).is_err() {
+                    continue;
+                }
+                let Ok(value) = workspace.read(path) else {
+                    continue;
+                };
+                if value.get("binary").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
+                let Some(text) = value.get("content").and_then(Value::as_str) else {
+                    continue;
+                };
                 scanned += 1;
-                for (idx,line) in text.lines().enumerate() {
-                    let hay = if case_sensitive { line.to_owned() } else { line.to_lowercase() };
-                    if let Some(column)=hay.find(&needle) {
+                for (idx, line) in text.lines().enumerate() {
+                    let hay = if case_sensitive {
+                        line.to_owned()
+                    } else {
+                        line.to_lowercase()
+                    };
+                    if let Some(column) = hay.find(&needle) {
                         matches.push(json!({"path":path,"line":idx+1,"column":column+1,"text":line.chars().take(300).collect::<String>()}));
-                        if matches.len() >= max_results { break; }
+                        if matches.len() >= max_results {
+                            break;
+                        }
                     }
                 }
             }
-            Ok(json!({"matches":matches,"files_scanned":scanned,"truncated":matches.len()>=max_results}))
+            Ok(
+                json!({"matches":matches,"files_scanned":scanned,"truncated":matches.len()>=max_results}),
+            )
         }
-        _ => Err(RuntimeError::new("UNKNOWN_TOOL", format!("未知的只读工具：{}", call.name))),
+        _ => Err(RuntimeError::new(
+            "UNKNOWN_TOOL",
+            format!("未知的只读工具：{}", call.name),
+        )),
     }
 }
 
@@ -924,10 +1444,16 @@ fn required_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, RuntimeError>
 fn resolve_inside(root: &Path, raw: &str) -> Result<PathBuf, RuntimeError> {
     let rel = Path::new(raw);
     if rel.is_absolute() {
-        return Err(RuntimeError::new("OUTSIDE_WORKSPACE", "只允许工作区相对路径"));
+        return Err(RuntimeError::new(
+            "OUTSIDE_WORKSPACE",
+            "只允许工作区相对路径",
+        ));
     }
     for part in rel.components() {
-        if matches!(part, Component::ParentDir | Component::RootDir | Component::Prefix(_)) {
+        if matches!(
+            part,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
             return Err(RuntimeError::new("OUTSIDE_WORKSPACE", "路径试图离开工作区"));
         }
     }
@@ -935,7 +1461,10 @@ fn resolve_inside(root: &Path, raw: &str) -> Result<PathBuf, RuntimeError> {
     let real = fs::canonicalize(&candidate)
         .map_err(|e| RuntimeError::new("NOT_FOUND", format!("{raw}: {e}")))?;
     if !real.starts_with(root) {
-        return Err(RuntimeError::new("OUTSIDE_WORKSPACE", "符号链接指向了工作区之外"));
+        return Err(RuntimeError::new(
+            "OUTSIDE_WORKSPACE",
+            "符号链接指向了工作区之外",
+        ));
     }
     Ok(real)
 }
@@ -953,7 +1482,12 @@ fn display_rel(root: &Path, path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-fn list_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Value>) -> Result<(), RuntimeError> {
+fn list_dir(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<Value>,
+) -> Result<(), RuntimeError> {
     let mut entries = fs::read_dir(dir)
         .map_err(|e| RuntimeError::new("READ_FAILED", format!("{}: {e}", dir.display())))?
         .filter_map(Result::ok)
@@ -974,7 +1508,17 @@ fn list_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Value>) -> Resu
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if matches!(name.as_str(), "node_modules" | "target" | ".git" | ".gradle" | ".idea" | "__pycache__" | ".venv" | "venv") {
+        if matches!(
+            name.as_str(),
+            "node_modules"
+                | "target"
+                | ".git"
+                | ".gradle"
+                | ".idea"
+                | "__pycache__"
+                | ".venv"
+                | "venv"
+        ) {
             continue;
         }
         out.push(json!({
@@ -1016,10 +1560,19 @@ fn glob_dir(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if ty.is_dir() && matches!(
-            name.as_str(),
-            "node_modules" | "target" | ".git" | ".gradle" | ".idea" | "__pycache__" | ".venv" | "venv"
-        ) {
+        if ty.is_dir()
+            && matches!(
+                name.as_str(),
+                "node_modules"
+                    | "target"
+                    | ".git"
+                    | ".gradle"
+                    | ".idea"
+                    | "__pycache__"
+                    | ".venv"
+                    | "venv"
+            )
+        {
             continue;
         }
         if wildcard_match(pattern, &rel) {
@@ -1063,10 +1616,28 @@ fn search_dir(
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         if ty.is_dir() {
-            if matches!(name.as_str(), "node_modules" | "target" | ".git" | ".gradle" | ".idea" | "__pycache__" | ".venv" | "venv") {
+            if matches!(
+                name.as_str(),
+                "node_modules"
+                    | "target"
+                    | ".git"
+                    | ".gradle"
+                    | ".idea"
+                    | "__pycache__"
+                    | ".venv"
+                    | "venv"
+            ) {
                 continue;
             }
-            search_dir(root, &path, query, case_sensitive, max_results, matches, scanned)?;
+            search_dir(
+                root,
+                &path,
+                query,
+                case_sensitive,
+                max_results,
+                matches,
+                scanned,
+            )?;
             continue;
         }
         if !ty.is_file() {
@@ -1080,11 +1651,21 @@ fn search_dir(
         if data[..data.len().min(4096)].contains(&0) {
             continue;
         }
-        let Ok(text) = std::str::from_utf8(&data) else { continue };
+        let Ok(text) = std::str::from_utf8(&data) else {
+            continue;
+        };
         *scanned += 1;
-        let needle = if case_sensitive { query.to_owned() } else { query.to_lowercase() };
+        let needle = if case_sensitive {
+            query.to_owned()
+        } else {
+            query.to_lowercase()
+        };
         for (idx, line) in text.lines().enumerate() {
-            let hay = if case_sensitive { line.to_owned() } else { line.to_lowercase() };
+            let hay = if case_sensitive {
+                line.to_owned()
+            } else {
+                line.to_lowercase()
+            };
             if let Some(column) = hay.find(&needle) {
                 matches.push(json!({
                     "path":rel,
@@ -1100,8 +1681,6 @@ fn search_dir(
     }
     Ok(())
 }
-
-
 
 fn execute_ask_user(
     app: &AppHandle,
@@ -1126,14 +1705,21 @@ fn execute_ask_user(
         }
     }
     if questions.is_empty() || questions.len() > 6 {
-        return Err(RuntimeError::new("BAD_ARGUMENTS", "ask_user 需要 1 到 6 个问题"));
+        return Err(RuntimeError::new(
+            "BAD_ARGUMENTS",
+            "ask_user 需要 1 到 6 个问题",
+        ));
     }
     for q in &mut questions {
-        let question = q.get("question").and_then(Value::as_str).unwrap_or("").trim();
+        let question = q
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
         if question.is_empty() {
             return Err(RuntimeError::new("BAD_ARGUMENTS", "问题文本不能为空"));
         }
-        if let Some(obj)=q.as_object_mut() {
+        if let Some(obj) = q.as_object_mut() {
             obj.entry("options").or_insert_with(|| json!([]));
             obj.entry("allow_custom").or_insert(Value::Bool(true));
         }
@@ -1147,31 +1733,55 @@ fn execute_ask_user(
         "call_id":call.id,
         "questions":questions
     });
-    questions_state.lock()
-        .map_err(|_| RuntimeError::new("LOCK_POISONED","提问状态锁已损坏"))?
-        .insert(question_id.clone(), PendingQuestion { payload:payload.clone(), tx });
-    let _ = app.emit("diffusion://event", RuntimeEvent { event:"agent.question".into(), data:payload });
-    let _ = app.emit("diffusion://event", RuntimeEvent {
-        event:"agent.status".into(),
-        data:json!({"task_id":task_id,"state":"waiting_user","detail":"等待你的回答"})
-    });
+    questions_state
+        .lock()
+        .map_err(|_| RuntimeError::new("LOCK_POISONED", "提问状态锁已损坏"))?
+        .insert(
+            question_id.clone(),
+            PendingQuestion {
+                payload: payload.clone(),
+                tx,
+            },
+        );
+    let _ = app.emit(
+        "diffusion://event",
+        RuntimeEvent {
+            event: "agent.question".into(),
+            data: payload,
+        },
+    );
+    let _ = app.emit(
+        "diffusion://event",
+        RuntimeEvent {
+            event: "agent.status".into(),
+            data: json!({"task_id":task_id,"state":"waiting_user","detail":"等待你的回答"}),
+        },
+    );
 
     loop {
         if cancel.load(Ordering::SeqCst) {
-            if let Ok(mut q)=questions_state.lock() { q.remove(&question_id); }
-            return Err(RuntimeError::new("STOPPED","已由你停止"));
+            if let Ok(mut q) = questions_state.lock() {
+                q.remove(&question_id);
+            }
+            return Err(RuntimeError::new("STOPPED", "已由你停止"));
         }
         match rx.recv_timeout(Duration::from_millis(120)) {
             Ok(answers) => {
-                let summary = questions.iter().zip(answers.iter()).map(|(q,a)| json!({
-                    "question":q.get("question").and_then(Value::as_str).unwrap_or(""),
-                    "answer":a
-                })).collect::<Vec<_>>();
+                let summary = questions
+                    .iter()
+                    .zip(answers.iter())
+                    .map(|(q, a)| {
+                        json!({
+                            "question":q.get("question").and_then(Value::as_str).unwrap_or(""),
+                            "answer":a
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 return Ok(json!({"answers":answers,"summary":summary}));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(RuntimeError::new("QUESTION_CLOSED","提问通道已经关闭"));
+                return Err(RuntimeError::new("QUESTION_CLOSED", "提问通道已经关闭"));
             }
         }
     }
@@ -1261,25 +1871,49 @@ fn execute_shell_tool(
             }
             CommandPolicyAction::Ask => {
                 request_user_approval(
-                    app, cancel, task_id, call, "exec", "high", verdict.reason,
-                    "hard_policy", approvals.clone(), session_grants.clone()
+                    app,
+                    cancel,
+                    task_id,
+                    call,
+                    "exec",
+                    "high",
+                    verdict.reason,
+                    "hard_policy",
+                    approvals.clone(),
+                    session_grants.clone(),
                 )?;
             }
         }
     } else {
         authorize_tool(
-            app, cancel, task_id, call, "exec", "medium", command,
-            data_dir, profile, api_key, approvals.clone(), session_grants.clone()
+            app,
+            cancel,
+            task_id,
+            call,
+            "exec",
+            "medium",
+            command,
+            data_dir,
+            profile,
+            api_key,
+            approvals.clone(),
+            session_grants.clone(),
         )?;
     }
     ensure_not_cancelled(cancel)?;
-    let timeout = call.arguments.get("timeout_seconds")
+    let timeout = call
+        .arguments
+        .get("timeout_seconds")
         .and_then(Value::as_f64)
         .unwrap_or(120.0)
         .clamp(1.0, 1800.0);
-    emit(app, "terminal.start", json!({
-        "source":"agent","call_id":call.id,"command":command
-    }));
+    emit(
+        app,
+        "terminal.start",
+        json!({
+            "source":"agent","call_id":call.id,"command":command
+        }),
+    );
     let result = run_capture(
         workspace_root,
         command,
@@ -1288,15 +1922,23 @@ fn execute_shell_tool(
     )?;
     let output = result.get("output").and_then(Value::as_str).unwrap_or("");
     if !output.is_empty() {
-        emit(app, "terminal.output", json!({
-            "source":"agent","call_id":call.id,"stream":"stdout","data":output
-        }));
+        emit(
+            app,
+            "terminal.output",
+            json!({
+                "source":"agent","call_id":call.id,"stream":"stdout","data":output
+            }),
+        );
     }
-    emit(app, "terminal.exit", json!({
-        "source":"agent",
-        "call_id":call.id,
-        "exit_code":result.get("exit_code").and_then(Value::as_i64).unwrap_or(-1)
-    }));
+    emit(
+        app,
+        "terminal.exit",
+        json!({
+            "source":"agent",
+            "call_id":call.id,
+            "exit_code":result.get("exit_code").and_then(Value::as_i64).unwrap_or(-1)
+        }),
+    );
     if result.get("cancelled").and_then(Value::as_bool) == Some(true) {
         return Err(RuntimeError::new("STOPPED", "已由你停止"));
     }
@@ -1317,11 +1959,23 @@ fn execute_terminal_read(
     session_grants: Arc<Mutex<HashSet<String>>>,
 ) -> Result<Value, RuntimeError> {
     authorize_tool(
-        app, cancel, task_id, call, "exec", "low", "",
-        data_dir, profile, api_key, approvals, session_grants
+        app,
+        cancel,
+        task_id,
+        call,
+        "exec",
+        "low",
+        "",
+        data_dir,
+        profile,
+        api_key,
+        approvals,
+        session_grants,
     )?;
     ensure_not_cancelled(cancel)?;
-    let max_chars = call.arguments.get("max_chars")
+    let max_chars = call
+        .arguments
+        .get("max_chars")
         .and_then(Value::as_u64)
         .unwrap_or(4000)
         .clamp(100, 20000) as usize;
@@ -1333,7 +1987,7 @@ fn execute_terminal_read(
             "alive":hist.get("alive").and_then(Value::as_bool).unwrap_or(false),
             "output":tail_chars(data,max_chars)
         })
-    } else if let Some((id,data)) = terminal.last_history() {
+    } else if let Some((id, data)) = terminal.last_history() {
         json!({"id":id,"alive":true,"output":tail_chars(&data,max_chars)})
     } else {
         json!({"output":"","note":"没有打开的终端会话"})
@@ -1356,52 +2010,87 @@ fn execute_web_fetch(
     let url = required_arg(&call.arguments, "url")?.trim();
     ensure_public_http_url(url)?;
     authorize_tool(
-        app, cancel, task_id, call, "network", "medium", url,
-        data_dir, profile, api_key, approvals, session_grants
+        app,
+        cancel,
+        task_id,
+        call,
+        "network",
+        "medium",
+        url,
+        data_dir,
+        profile,
+        api_key,
+        approvals,
+        session_grants,
     )?;
     ensure_not_cancelled(cancel)?;
-    let client = reqwest::blocking::Client::builder()
+    let network = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
-    let mut current = reqwest::Url::parse(url)
-        .map_err(|_| RuntimeError::new("BAD_URL", "网址格式无效"))?;
+    let mut current =
+        reqwest::Url::parse(url).map_err(|_| RuntimeError::new("BAD_URL", "网址格式无效"))?;
     let mut response = None;
     for _ in 0..=5 {
         ensure_not_cancelled(cancel)?;
         ensure_public_http_url(current.as_str())?;
-        let resp = client.get(current.clone())
-            .header("User-Agent","Diffusion-IDE-Agent/1.0")
-            .header("Accept","text/html,text/plain,application/json;q=0.9,*/*;q=0.5")
-            .send()
+        let request = client
+            .get(current.clone())
+            .header("User-Agent", "Diffusion-IDE-Agent/1.0")
+            .header(
+                "Accept",
+                "text/html,text/plain,application/json;q=0.9,*/*;q=0.5",
+            )
+            .send();
+        let resp = network
+            .block_on(cancellable(cancel, request))?
             .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
         if resp.status().is_redirection() {
-            let location = resp.headers()
+            let location = resp
+                .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| RuntimeError::new("WEB_FETCH_FAILED", "重定向响应缺少 Location"))?;
-            current = current.join(location)
+            current = current
+                .join(location)
                 .map_err(|_| RuntimeError::new("BAD_URL", "重定向地址无效"))?;
             continue;
         }
         response = Some(resp);
         break;
     }
-    let mut response = response
-        .ok_or_else(|| RuntimeError::new("WEB_FETCH_FAILED", "重定向次数过多"))?;
+    let mut response =
+        response.ok_or_else(|| RuntimeError::new("WEB_FETCH_FAILED", "重定向次数过多"))?;
     ensure_not_cancelled(cancel)?;
     let final_url = response.url().as_str().to_owned();
     ensure_public_http_url(&final_url)?;
     let status = response.status().as_u16();
-    let ctype = response.headers().get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v|v.to_str().ok()).unwrap_or("").to_owned();
+    let ctype = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
     let mut data = Vec::new();
-    response.by_ref().take((WEB_FETCH_MAX_BYTES + 1) as u64)
-        .read_to_end(&mut data)
-        .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+    while data.len() <= WEB_FETCH_MAX_BYTES {
+        let chunk = network
+            .block_on(cancellable(cancel, response.chunk()))?
+            .map_err(|e| RuntimeError::new("WEB_FETCH_FAILED", e.to_string()))?;
+        let Some(chunk) = chunk else {
+            break;
+        };
+        let remaining = WEB_FETCH_MAX_BYTES + 1 - data.len();
+        data.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
     let truncated_bytes = data.len() > WEB_FETCH_MAX_BYTES;
-    if truncated_bytes { data.truncate(WEB_FETCH_MAX_BYTES); }
+    if truncated_bytes {
+        data.truncate(WEB_FETCH_MAX_BYTES);
+    }
     let raw = String::from_utf8_lossy(&data).into_owned();
     let readable = if ctype.to_ascii_lowercase().contains("html") {
         strip_html(&raw)
@@ -1409,7 +2098,10 @@ fn execute_web_fetch(
         raw
     };
     let truncated_chars = readable.chars().count() > WEB_FETCH_MAX_CHARS;
-    let content = readable.chars().take(WEB_FETCH_MAX_CHARS).collect::<String>();
+    let content = readable
+        .chars()
+        .take(WEB_FETCH_MAX_CHARS)
+        .collect::<String>();
     Ok(json!({
         "url":final_url,
         "status":status,
@@ -1433,18 +2125,32 @@ fn strip_html(raw: &str) -> String {
             '<' => in_tag = true,
             '>' if in_tag => {
                 in_tag = false;
-                if !last_space { out.push(' '); last_space = true; }
+                if !last_space {
+                    out.push(' ');
+                    last_space = true;
+                }
             }
             _ if in_tag => {}
             '&' => {
-                if !last_space { out.push(' '); last_space = true; }
+                if !last_space {
+                    out.push(' ');
+                    last_space = true;
+                }
             }
             c if c.is_whitespace() => {
-                if !last_space { out.push(' '); last_space = true; }
+                if !last_space {
+                    out.push(' ');
+                    last_space = true;
+                }
             }
-            c => { out.push(c); last_space = false; }
+            c => {
+                out.push(c);
+                last_space = false;
+            }
         }
-        if out.len() > WEB_FETCH_MAX_CHARS * 4 { break; }
+        if out.len() > WEB_FETCH_MAX_CHARS * 4 {
+            break;
+        }
     }
     out.trim().to_owned()
 }
@@ -1466,7 +2172,10 @@ fn execute_edit_tool(
 ) -> Result<Value, RuntimeError> {
     ensure_not_cancelled(cancel)?;
 
-    let primary = call.arguments.get("path").and_then(Value::as_str)
+    let primary = call
+        .arguments
+        .get("path")
+        .and_then(Value::as_str)
         .or_else(|| call.arguments.get("from").and_then(Value::as_str))
         .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "写入工具缺少 path/from"))?;
     check_write_path(primary)?;
@@ -1480,7 +2189,11 @@ fn execute_edit_tool(
         task_id,
         call,
         "write",
-        if call.name == "fs_delete" { "medium" } else { "medium" },
+        if call.name == "fs_delete" {
+            "medium"
+        } else {
+            "medium"
+        },
         primary,
         data_dir,
         profile,
@@ -1496,15 +2209,18 @@ fn execute_edit_tool(
             let content = required_arg(&call.arguments, "content")?;
             let before = workspace.read(path).ok();
             let base = if before.is_some() {
-                let rev = read_revisions.get(path).ok_or_else(|| RuntimeError::new(
-                    "NEEDS_READ",
-                    format!("修改 {path} 之前请先用 fs_read 读取它"),
-                ))?;
+                let rev = read_revisions.get(path).ok_or_else(|| {
+                    RuntimeError::new(
+                        "NEEDS_READ",
+                        format!("修改 {path} 之前请先用 fs_read 读取它"),
+                    )
+                })?;
                 Some(rev.as_str())
             } else {
                 Some("absent")
             };
-            let before_bytes = before.as_ref()
+            let before_bytes = before
+                .as_ref()
                 .and_then(|v| v.get("content").and_then(Value::as_str))
                 .map(str::as_bytes);
             checkpoints.record_before(task_id, path, before_bytes)?;
@@ -1517,18 +2233,33 @@ fn execute_edit_tool(
         }
         "fs_patch" => {
             let path = required_arg(&call.arguments, "path")?;
-            let edits = call.arguments.get("edits").and_then(Value::as_array)
+            let edits = call
+                .arguments
+                .get("edits")
+                .and_then(Value::as_array)
                 .ok_or_else(|| RuntimeError::new("BAD_TOOL_ARGS", "fs_patch 缺少 edits"))?;
-            let base = read_revisions.get(path).cloned().ok_or_else(|| RuntimeError::new(
-                "NEEDS_READ",
-                format!("修改 {path} 之前请先用 fs_read 读取它"),
-            ))?;
+            let base = read_revisions.get(path).cloned().ok_or_else(|| {
+                RuntimeError::new(
+                    "NEEDS_READ",
+                    format!("修改 {path} 之前请先用 fs_read 读取它"),
+                )
+            })?;
             let before_value = workspace.read(path)?;
-            let before_text = before_value.get("content").and_then(Value::as_str)
-                .ok_or_else(|| RuntimeError::new("BINARY_FILE", format!("{path} 不是 UTF-8 文本")))?;
+            let before_text = before_value
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    RuntimeError::new("BINARY_FILE", format!("{path} 不是 UTF-8 文本"))
+                })?;
             checkpoints.record_before(task_id, path, Some(before_text.as_bytes()))?;
             let mutation = workspace.patch(path, &base, edits)?;
-            record_agent_mutation(app, checkpoints, task_id, &mutation.event, Some(before_text.as_bytes()))?;
+            record_agent_mutation(
+                app,
+                checkpoints,
+                task_id,
+                &mutation.event,
+                Some(before_text.as_bytes()),
+            )?;
             if let Some(rev) = mutation.result.get("revision").and_then(Value::as_str) {
                 read_revisions.insert(path.to_owned(), rev.to_owned());
             }
@@ -1536,8 +2267,16 @@ fn execute_edit_tool(
         }
         "fs_create" => {
             let path = required_arg(&call.arguments, "path")?;
-            let kind = call.arguments.get("kind").and_then(Value::as_str).unwrap_or("file");
-            let content = call.arguments.get("content").and_then(Value::as_str).unwrap_or("");
+            let kind = call
+                .arguments
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("file");
+            let content = call
+                .arguments
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             checkpoints.record_before(task_id, path, None)?;
             let mutation = workspace.create(path, kind, content)?;
             record_agent_mutation(app, checkpoints, task_id, &mutation.event, None)?;
@@ -1549,15 +2288,30 @@ fn execute_edit_tool(
         "fs_delete" => {
             let path = required_arg(&call.arguments, "path")?;
             let before = workspace.read(path).map_err(|e| {
-                if e.code == "NOT_FOUND" { e } else {
-                    RuntimeError::new("POLICY_DENIED", "智能体当前只允许删除普通文件，不允许删除文件夹")
+                if e.code == "NOT_FOUND" {
+                    e
+                } else {
+                    RuntimeError::new(
+                        "POLICY_DENIED",
+                        "智能体当前只允许删除普通文件，不允许删除文件夹",
+                    )
                 }
             })?;
-            let text = before.get("content").and_then(Value::as_str)
-                .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许删除 UTF-8 文本文件"))?;
+            let text = before
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    RuntimeError::new("POLICY_DENIED", "智能体当前只允许删除 UTF-8 文本文件")
+                })?;
             checkpoints.record_before(task_id, path, Some(text.as_bytes()))?;
             let mutation = workspace.delete(path)?;
-            record_agent_mutation(app, checkpoints, task_id, &mutation.event, Some(text.as_bytes()))?;
+            record_agent_mutation(
+                app,
+                checkpoints,
+                task_id,
+                &mutation.event,
+                Some(text.as_bytes()),
+            )?;
             read_revisions.remove(path);
             Ok(mutation.result)
         }
@@ -1565,30 +2319,56 @@ fn execute_edit_tool(
             let from = required_arg(&call.arguments, "from")?;
             let to = required_arg(&call.arguments, "to")?;
             let before = workspace.read(from)?;
-            let text = before.get("content").and_then(Value::as_str)
-                .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许重命名 UTF-8 文本文件"))?;
+            let text = before
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    RuntimeError::new("POLICY_DENIED", "智能体当前只允许重命名 UTF-8 文本文件")
+                })?;
             checkpoints.record_before(task_id, from, Some(text.as_bytes()))?;
             checkpoints.record_before(task_id, to, None)?;
             let mutation = workspace.rename(from, to)?;
             let before_blob = checkpoints.blob_for_event_before(Some(text.as_bytes()))?;
-            checkpoints.add_event(task_id, "edit", &format!("删除 {from}"), json!({
-                "path":from,"kind":"delete","before_blob":before_blob,"existed_before":true,
-                "after_rev":"absent","old_path":from,"new_path":to
-            }))?;
-            let after_rev = workspace.read(to)?.get("revision").cloned().unwrap_or(Value::String("absent".into()));
-            checkpoints.add_event(task_id, "edit", &format!("新建 {to}"), json!({
-                "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
-                "after_rev":after_rev,"old_path":from,"new_path":to
-            }))?;
+            checkpoints.add_event(
+                task_id,
+                "edit",
+                &format!("删除 {from}"),
+                json!({
+                    "path":from,"kind":"delete","before_blob":before_blob,"existed_before":true,
+                    "after_rev":"absent","old_path":from,"new_path":to
+                }),
+            )?;
+            let after_rev = workspace
+                .read(to)?
+                .get("revision")
+                .cloned()
+                .unwrap_or(Value::String("absent".into()));
+            checkpoints.add_event(
+                task_id,
+                "edit",
+                &format!("新建 {to}"),
+                json!({
+                    "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
+                    "after_rev":after_rev,"old_path":from,"new_path":to
+                }),
+            )?;
             let mut event = mutation.event.clone();
             if let Some(obj) = event.as_object_mut() {
                 obj.insert("actor".into(), Value::String("agent".into()));
                 obj.insert("task_id".into(), Value::String(task_id.into()));
             }
-            let _ = app.emit("diffusion://event", RuntimeEvent { event:"fs.changed".into(), data:event });
+            let _ = app.emit(
+                "diffusion://event",
+                RuntimeEvent {
+                    event: "fs.changed".into(),
+                    data: event,
+                },
+            );
             read_revisions.remove(from);
             if let Ok(v) = workspace.read(to) {
-                if let Some(rev)=v.get("revision").and_then(Value::as_str) { read_revisions.insert(to.to_owned(), rev.to_owned()); }
+                if let Some(rev) = v.get("revision").and_then(Value::as_str) {
+                    read_revisions.insert(to.to_owned(), rev.to_owned());
+                }
             }
             Ok(mutation.result)
         }
@@ -1596,8 +2376,12 @@ fn execute_edit_tool(
             let from = required_arg(&call.arguments, "from")?;
             let to = required_arg(&call.arguments, "to")?;
             let before = workspace.read(from)?;
-            before.get("content").and_then(Value::as_str)
-                .ok_or_else(|| RuntimeError::new("POLICY_DENIED", "智能体当前只允许复制 UTF-8 文本文件"))?;
+            before
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    RuntimeError::new("POLICY_DENIED", "智能体当前只允许复制 UTF-8 文本文件")
+                })?;
             checkpoints.record_before(task_id, to, None)?;
             let result = workspace.copy(from, to)?;
             let after = workspace.read(to)?;
@@ -1605,14 +2389,22 @@ fn execute_edit_tool(
                 "path":to,"kind":"create","before_blob":Value::Null,"existed_before":false,
                 "after_rev":after.get("revision").cloned().unwrap_or(Value::String("absent".into()))
             }))?;
-            let _ = app.emit("diffusion://event", RuntimeEvent {
-                event:"fs.changed".into(),
-                data:json!({"kind":"create","path":to,"actor":"agent","task_id":task_id})
-            });
-            if let Some(rev)=after.get("revision").and_then(Value::as_str) { read_revisions.insert(to.to_owned(), rev.to_owned()); }
+            let _ = app.emit(
+                "diffusion://event",
+                RuntimeEvent {
+                    event: "fs.changed".into(),
+                    data: json!({"kind":"create","path":to,"actor":"agent","task_id":task_id}),
+                },
+            );
+            if let Some(rev) = after.get("revision").and_then(Value::as_str) {
+                read_revisions.insert(to.to_owned(), rev.to_owned());
+            }
             Ok(result)
         }
-        _ => Err(RuntimeError::new("UNKNOWN_TOOL", format!("未知编辑工具：{}", call.name))),
+        _ => Err(RuntimeError::new(
+            "UNKNOWN_TOOL",
+            format!("未知编辑工具：{}", call.name),
+        )),
     }
 }
 
@@ -1652,28 +2444,49 @@ fn authorize_tool(
                 risk,
                 target,
                 data_dir,
+                cancel,
             ) {
                 Ok(("ALLOW", _)) => return Ok(()),
                 Ok(("DENY", reason)) => {
                     return Err(RuntimeError::new(
                         "POLICY_DENIED",
-                        if reason.is_empty() { "审批模型已拒绝".into() } else { reason },
+                        if reason.is_empty() {
+                            "审批模型已拒绝".into()
+                        } else {
+                            reason
+                        },
                     ));
                 }
                 Ok(("ASK_USER", reason)) => {
                     return request_user_approval(
-                        app, cancel, task_id, call, permission_class, risk,
-                        if reason.is_empty() { "审批模型建议由你确认".into() } else { reason },
+                        app,
+                        cancel,
+                        task_id,
+                        call,
+                        permission_class,
+                        risk,
+                        if reason.is_empty() {
+                            "审批模型建议由你确认".into()
+                        } else {
+                            reason
+                        },
                         "approval_agent",
-                        approvals, session_grants,
+                        approvals,
+                        session_grants,
                     );
                 }
                 Ok(_) | Err(_) => {
                     return request_user_approval(
-                        app, cancel, task_id, call, permission_class, risk,
+                        app,
+                        cancel,
+                        task_id,
+                        call,
+                        permission_class,
+                        risk,
                         "审批模型没有给出可靠结论，需要你确认".into(),
                         "approval_agent",
-                        approvals, session_grants,
+                        approvals,
+                        session_grants,
                     );
                 }
             }
@@ -1704,6 +2517,7 @@ fn review_tool_with_ai(
     risk: &str,
     target: &str,
     data_dir: &Path,
+    cancel: &AtomicBool,
 ) -> Result<(&'static str, String), RuntimeError> {
     let profiles = ProfileStore::new(data_dir.to_path_buf());
     let (profile, key) = if let Some(id) = settings.approval_profile() {
@@ -1721,24 +2535,36 @@ fn review_tool_with_ai(
         "target": target,
         "permission_config": cfg
     });
-    let text = chat_complete(
+    let text = openai_stream_turn(
         &profile,
         key.as_deref(),
         &[
             json!({"role":"system","content":system}),
             json!({"role":"user","content":serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into())})
         ],
-        "off",
-    )?;
+        &[], "off", false, cancel, |_| {},
+    )?.text;
     let start = text.find('{');
     let end = text.rfind('}');
-    let Some((start, end)) = start.zip(end).filter(|(a,b)| b >= a) else {
+    let Some((start, end)) = start.zip(end).filter(|(a, b)| b >= a) else {
         return Ok(("ASK_USER", "审批模型没有给出结论".into()));
     };
     let value: Value = serde_json::from_str(&text[start..=end])
         .map_err(|_| RuntimeError::new("APPROVAL_REVIEW_INVALID", "审批模型的结论不是有效 JSON"))?;
-    let reason = value.get("reason").and_then(Value::as_str).unwrap_or("").chars().take(300).collect();
-    match value.get("decision").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase().as_str() {
+    let reason = value
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(300)
+        .collect();
+    match value
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_uppercase()
+        .as_str()
+    {
         "ALLOW" => Ok(("ALLOW", reason)),
         "DENY" => Ok(("DENY", reason)),
         "ASK_USER" => Ok(("ASK_USER", reason)),
@@ -1774,33 +2600,53 @@ fn request_user_approval(
         "source":source,
         "forced":false
     });
-    approvals.lock()
-        .map_err(|_| RuntimeError::new("LOCK_POISONED","审批状态锁已损坏"))?
-        .insert(approval_id.clone(), PendingApproval { payload:payload.clone(), tx });
-    let _ = app.emit("diffusion://event", RuntimeEvent { event:"approval.request".into(), data:payload });
-    let _ = app.emit("diffusion://event", RuntimeEvent {
-        event:"agent.status".into(),
-        data:json!({"task_id":task_id,"state":"waiting_approval","detail":tool_title(call)})
-    });
+    approvals
+        .lock()
+        .map_err(|_| RuntimeError::new("LOCK_POISONED", "审批状态锁已损坏"))?
+        .insert(
+            approval_id.clone(),
+            PendingApproval {
+                payload: payload.clone(),
+                tx,
+            },
+        );
+    let _ = app.emit(
+        "diffusion://event",
+        RuntimeEvent {
+            event: "approval.request".into(),
+            data: payload,
+        },
+    );
+    let _ = app.emit(
+        "diffusion://event",
+        RuntimeEvent {
+            event: "agent.status".into(),
+            data: json!({"task_id":task_id,"state":"waiting_approval","detail":tool_title(call)}),
+        },
+    );
 
     loop {
         if cancel.load(Ordering::SeqCst) {
-            if let Ok(mut p)=approvals.lock() { p.remove(&approval_id); }
-            return Err(RuntimeError::new("STOPPED","已由你停止"));
+            if let Ok(mut p) = approvals.lock() {
+                p.remove(&approval_id);
+            }
+            return Err(RuntimeError::new("STOPPED", "已由你停止"));
         }
         match rx.recv_timeout(Duration::from_millis(120)) {
             Ok(decision) => {
                 if !decision.allow {
-                    return Err(RuntimeError::new("USER_DECLINED","你已拒绝这次操作"));
+                    return Err(RuntimeError::new("USER_DECLINED", "你已拒绝这次操作"));
                 }
                 if decision.scope == "session" {
-                    if let Ok(mut grants)=session_grants.lock() { grants.insert(call.name.clone()); }
+                    if let Ok(mut grants) = session_grants.lock() {
+                        grants.insert(call.name.clone());
+                    }
                 }
                 return Ok(());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(RuntimeError::new("APPROVAL_CLOSED","审批通道已经关闭"));
+                return Err(RuntimeError::new("APPROVAL_CLOSED", "审批通道已经关闭"));
             }
         }
     }
@@ -1813,26 +2659,50 @@ fn record_agent_mutation(
     raw_event: &Value,
     before: Option<&[u8]>,
 ) -> Result<(), RuntimeError> {
-    let kind = raw_event.get("kind").and_then(Value::as_str).unwrap_or("modify");
-    let path = raw_event.get("path").and_then(Value::as_str)
-        .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT","文件事件缺少 path"))?;
+    let kind = raw_event
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("modify");
+    let path = raw_event
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RuntimeError::new("CHECKPOINT_CORRUPT", "文件事件缺少 path"))?;
     let before_blob = checkpoints.blob_for_event_before(before)?;
-    let after_rev = raw_event.get("after_rev").cloned().unwrap_or(Value::String("absent".into()));
-    let verb = match kind {"create"=>"新建","delete"=>"删除","rename"=>"重命名",_=>"修改"};
-    checkpoints.add_event(task_id, "edit", &format!("{verb} {path}"), json!({
-        "path":path,
-        "kind":kind,
-        "before_blob":before_blob,
-        "existed_before":before.is_some(),
-        "after_rev":after_rev
-    }))?;
+    let after_rev = raw_event
+        .get("after_rev")
+        .cloned()
+        .unwrap_or(Value::String("absent".into()));
+    let verb = match kind {
+        "create" => "新建",
+        "delete" => "删除",
+        "rename" => "重命名",
+        _ => "修改",
+    };
+    checkpoints.add_event(
+        task_id,
+        "edit",
+        &format!("{verb} {path}"),
+        json!({
+            "path":path,
+            "kind":kind,
+            "before_blob":before_blob,
+            "existed_before":before.is_some(),
+            "after_rev":after_rev
+        }),
+    )?;
 
     let mut event = raw_event.clone();
-    if let Some(obj)=event.as_object_mut() {
+    if let Some(obj) = event.as_object_mut() {
         obj.insert("actor".into(), Value::String("agent".into()));
         obj.insert("task_id".into(), Value::String(task_id.to_owned()));
     }
-    let _ = app.emit("diffusion://event", RuntimeEvent { event:"fs.changed".into(), data:event });
+    let _ = app.emit(
+        "diffusion://event",
+        RuntimeEvent {
+            event: "fs.changed".into(),
+            data: event,
+        },
+    );
     Ok(())
 }
 
@@ -1857,4 +2727,60 @@ fn now_secs() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+#[cfg(test)]
+mod vibe_budget_tests {
+    use super::*;
+    use crate::core::provider::normalize_usage;
+    #[test]
+    fn cloned_stop_state_cancels_the_same_running_task() {
+        let original = AgentState::new();
+        let independent_stop = original.clone();
+        assert!(!independent_stop.stop());
+        assert!(!original.cancel.load(Ordering::SeqCst));
+        original.running.store(true, Ordering::SeqCst);
+        assert!(independent_stop.is_running());
+        assert!(independent_stop.stop());
+        assert!(original.cancel.load(Ordering::SeqCst));
+        original.running.store(false, Ordering::SeqCst);
+        assert!(!independent_stop.stop());
+    }
+    #[test]
+    fn budgets_stop_on_completed_usage_and_unknown_never_becomes_zero() {
+        let profile = json!({"pricing":{"input_per_million":1,"output_per_million":2}});
+        let mut meter = UsageMeter::default();
+        let usage = meter.record(
+            &profile,
+            &normalize_usage(
+                "openai",
+                Some(&json!({"prompt_tokens":100,"completion_tokens":50,"total_tokens":150})),
+            ),
+        );
+        assert_eq!(usage["total_tokens"], 150);
+        assert_eq!(usage["cost_source"], "configured_estimate");
+        assert!((usage["cost_usd"].as_f64().unwrap() - 0.0002).abs() < 1e-8);
+        assert_eq!(
+            meter
+                .check(&AgentLimits::from_params(
+                    Some(&json!({"max_tokens":100})),
+                    false
+                ))
+                .unwrap_err()
+                .code,
+            "BUDGET_REACHED"
+        );
+        let usage = meter.record(&profile, &normalize_usage("openai", None));
+        assert_eq!(usage["total_tokens"], Value::Null);
+        assert_eq!(
+            meter
+                .check(&AgentLimits::from_params(
+                    Some(&json!({"max_tokens":1000})),
+                    false
+                ))
+                .unwrap_err()
+                .code,
+            "BUDGET_USAGE_UNKNOWN"
+        );
+    }
 }

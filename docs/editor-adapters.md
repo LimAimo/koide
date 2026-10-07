@@ -3,7 +3,7 @@
 界面层只通过一组固定接口使用编辑器。**产品运行时固定使用 CodeMirror 6**（`packages/editor-cm6/src/index.js`）；`apps/web/src/editor/code-editor.js` 继续保留为适配器参考、动画/行为单测与 UI 测试替身，但不再作为产品 fallback。CM6 加载失败时必须显式显示错误，不能静默退回 textarea。
 
 ## 必须实现的接口
-`el`（要挂进页面的元素）、`isCM6`（可选标记）、`setDocument({path,text,readOnly})`、`getValue()`、`getSelectionText()`、
+`el`（要挂进页面的元素）、`isCM6`（可选标记）、`setDocument({path,text,readOnly})`、`getValue()`、`getSelectionText()`、`getCaretOffset()`（UTF-16 光标位置）、
 `getScroll()` / `setScroll({top,left})`、`focus()`、`insertText(t)`、`indent(dir)`、`moveCaret(delta)`、
 `countMatches / find / replaceCurrent / replaceAll / clearFind`（查找栏使用）、`revealOffset(offset)`、`applyExternal(after,{animate,reveal})`、`cancelAnimation()`、`destroy()`。
 构造时接收回调：`onChange`、`onSave`、`onFocus`、`onBlur`、`onFind`，外部编辑器额外接收 `getSettings()` 和 `isReducedMotion()`
