@@ -8,7 +8,7 @@ import { renderMarkdown } from "./markdown.js";
 import { loadCM6 } from "../services/editor-factory.js";
 import { settingsStore, reducedMotion } from "../services/store.js";
 import {
-  state, events, getWorkspaceEpoch, tabOf, activeTab, activate, closeTab, closeOthers, closeRight, togglePin, moveTab, updateText, saveTab, resolveConflict,
+  state, events, getWorkspaceEpoch, tabOf, activeTab, activate, closeTab, closeOthers, closeRight, togglePin, keepTab, moveTab, updateText, saveTab, resolveConflict,
 } from "../services/app.js";
 
 const base = (p) => p.split("/").pop();
@@ -35,7 +35,7 @@ export function createEditorPane() {
     let value = "";
     const title = kind === "error" ? "CodeMirror 6 加载失败" : "正在加载 CodeMirror 6…";
     const message = kind === "error"
-      ? (detail || "编辑器构建产物不可用。请重新安装依赖并执行 pnpm build:cm6，然后重新打开 Diffusion。")
+      ? (detail || "编辑器构建产物不可用。请重新安装依赖并执行 pnpm build:cm6，然后重新打开 Koide。")
       : "编辑器正在初始化。";
     const el = h("div", { class: `editor-empty cm6-status ${kind}`, role: kind === "error" ? "alert" : "status" },
       h("div", null, h("h2", null, title), h("p", null, message)));
@@ -57,7 +57,7 @@ export function createEditorPane() {
   const fe = () => focused || editor;
   toolbar = createCodingToolbar(() => fe());
 
-  const strip = h("div", { class: "tab-strip", role: "tablist" });
+  const strip = h("div", { class: "tab-strip", role: "tablist", "aria-label": "已打开的文件" });
   const saveBtn = h("button", { class: "btn small tonal", type: "button", style: { margin: "6px 4px", display: "none" }, onclick: () => save() }, "保存");
   const more = iconButton("more", "所有已打开的文件", () => openTabList(), "tabs-more");
   const findBtn = iconButton("search", "查找与替换", () => (findBar.hidden ? openFind() : closeFind()), "tabs-more");
@@ -135,6 +135,9 @@ export function createEditorPane() {
   const mainPane = h("div", { class: "epane" }, editor.el, mdPreview);
   const editors = h("div", { class: "editors" }, mainPane);
   const el = h("main", { class: "editor-pane" }, tabs, findBar, banner, empty, binary, editors);
+  const resizeSplit = () => editors.classList.toggle("v", el.getBoundingClientRect().width < 700);
+  if (globalThis.ResizeObserver) new ResizeObserver(resizeSplit).observe(el);
+  else window.addEventListener("resize", resizeSplit);
 
   const splitName = h("span", { class: "sname" });
   const splitHead = h("div", { class: "split-head" }, splitName, h("div", { class: "spacer" }), iconButton("close", "关闭分屏", () => closeSplit()));
@@ -148,7 +151,7 @@ export function createEditorPane() {
       splitWrap = h("div", { class: "epane split" }, splitHead, splitEditor.el);
       editors.appendChild(splitWrap);
     }
-    editors.classList.toggle("v", el.getBoundingClientRect().width < 700);        // 窄屏上下分，宽屏左右分
+    resizeSplit();        // 容器缩放和侧栏展开后也按可用空间切换分屏方向。
     splitPath = path;
     splitName.textContent = base(path);
     splitEditor.setDocument({ path, text: t.text });
@@ -183,7 +186,7 @@ export function createEditorPane() {
   // ---- tabs ---------------------------------------------------------------------------------------------------
   const tabEls = new Map();
 
-  function tabMenu(t) {
+  function tabMenu(t, anchor) {
     openMenu(base(t.path), [
       { label: "在分屏中打开", icon: "split", onClick: () => openSplit(t.path) },
       { label: t.pinned ? "取消固定" : "固定", icon: "check", onClick: () => togglePin(t.path) },
@@ -192,21 +195,35 @@ export function createEditorPane() {
       { label: "关闭右侧", icon: "close", onClick: () => closeRight(t.path) },
       { label: "向左移动", icon: "back", onClick: () => moveTab(t.path, -1) },
       { label: "向右移动", icon: "chevron", onClick: () => moveTab(t.path, 1) },
-    ]);
+    ], { anchor });
   }
 
   function makeTab(t) {
-    let timer = null, long = false, sx = 0;
-    const node = h("div", { class: "tab tab-enter", role: "tab", tabindex: "0", dataset: { path: t.path } },
+    let timer = null, long = false, sx = 0, sy = 0;
+    const node = h("div", { class: "tab tab-enter", role: "tab", tabindex: "-1", dataset: { path: t.path } },
       h("span", { class: "name" }),
       h("span", { class: "flag" }),
       h("button", { class: "x", type: "button", "aria-label": "关闭标签页" }, icon("close", 16)));
     node.querySelector(".x").addEventListener("click", (e) => { e.stopPropagation(); closeTab(t.path); });
-    node.addEventListener("pointerdown", (e) => { long = false; sx = e.clientX; timer = setTimeout(() => { long = true; tabMenu(tabOf(t.path) || t); }, 480); });
-    node.addEventListener("pointermove", (e) => { if (Math.abs(e.clientX - sx) > 8) clearTimeout(timer); });
+    node.addEventListener("pointerdown", (e) => {
+      long = false; clearTimeout(timer);
+      if (e.pointerType === "mouse" || e.target.closest(".x")) return;
+      sx = e.clientX; sy = e.clientY;
+      timer = setTimeout(() => { long = true; tabMenu(tabOf(t.path) || t, node); }, 480);
+    });
+    node.addEventListener("pointermove", (e) => { if (Math.hypot(e.clientX - sx, e.clientY - sy) > 8) clearTimeout(timer); });
     for (const ev of ["pointerup", "pointercancel"]) node.addEventListener(ev, () => clearTimeout(timer));
     node.addEventListener("click", () => { if (long) { long = false; return; } activate(t.path); });
-    node.addEventListener("keydown", (e) => { if (e.key === "Enter") activate(t.path); });
+    node.addEventListener("dblclick", (e) => { if (!e.target.closest(".x")) keepTab(t.path); });
+    node.addEventListener("contextmenu", (e) => { e.preventDefault(); clearTimeout(timer); node.focus(); tabMenu(tabOf(t.path) || t, node); });
+    node.addEventListener("keydown", (e) => {
+      if (e.target !== node) return;
+      if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); tabMenu(tabOf(t.path) || t, node); return; }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(t.path); return; }
+      const list = state.get().tabs, index = list.findIndex((tab) => tab.path === t.path);
+      const next = e.key === "Home" ? 0 : e.key === "End" ? list.length - 1 : e.key === "ArrowLeft" ? (index + list.length - 1) % list.length : e.key === "ArrowRight" ? (index + 1) % list.length : -1;
+      if (next >= 0) { e.preventDefault(); activate(list[next].path); tabEls.get(list[next].path)?.focus(); }
+    });
     setTimeout(() => node.classList.remove("tab-enter"), 320);
     return node;
   }
@@ -225,6 +242,8 @@ export function createEditorPane() {
       node.querySelector(".name").textContent = base(t.path);
       node.title = t.path;
       node.setAttribute("aria-selected", String(t.path === s.active));
+      node.tabIndex = t.path === s.active ? 0 : -1;
+      node.querySelector(".x").tabIndex = t.path === s.active ? 0 : -1;
       node.classList.toggle("preview", !!t.preview);
       node.classList.toggle("pinned", !!t.pinned);
       const flag = node.querySelector(".flag");

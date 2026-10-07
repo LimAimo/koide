@@ -1,0 +1,60 @@
+/* 桌面提供稳定的工作区层级；触控设备保留完整的点击面积。 */
+.workspace-pages { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; container-type: inline-size; }
+.workspace-pages[hidden] { display: none; }
+.center-stack:has(> .workspace-pages:not([hidden])) > .editor-pane,
+.work:has(.workspace-pages:not([hidden])) > .welcome { display: none; }
+.toolbar-divider { display: none; }
+#app.mode-wide .appbar { gap: 4px; height: 52px; padding: 0 12px; border-bottom: 1px solid var(--outline-variant); background: var(--surface-1); }
+#app.mode-wide .appbar .title { max-width: 180px; font-size: 14px; padding: 0 12px 0 4px; }
+#app.mode-wide .appbar .capsule { max-width: min(320px, 24vw); margin-left: 4px; }
+#app.mode-wide .appbar .icon-btn { border-radius: 8px; }
+#app.mode-wide .toolbar-divider { display: block; width: 1px; height: 24px; margin: 0 8px; background: var(--outline-variant); flex: none; }
+#app.mode-wide .files-head, #app.mode-wide .ai-head { background: var(--surface-1); border-bottom: 1px solid var(--outline-variant); }
+#app.mode-wide .ai { container-type: inline-size; container-name: ai-panel; }
+#app.mode-wide .files-head .name { font-size: 12px; letter-spacing: .3px; }
+#app.mode-wide .tabs { height: 42px; }
+#app.mode-wide .tab { padding-left: 12px; font-size: 12px; border-right: 1px solid var(--outline-variant); }
+#app.mode-wide .tab[aria-selected="true"] { font-weight: 500; }
+#app.mode-wide .tab .x { border-radius: 6px; }
+#app.mode-wide .tabs .icon-btn { border-radius: 6px; }
+#app.mode-wide .findbar { padding: 8px 12px; background: var(--surface-1); }
+#app.mode-wide .studio-heading { min-height: 64px; padding: 12px 20px; }
+#app.mode-wide .studio-body { width: 100%; max-width: 1160px; margin-inline: auto; }
+#app.mode-wide .studio-card { border-radius: 12px; padding: 18px; }
+.adaptive-surface:has(> .sheet-body > .studio-workbench) > .sheet-heading { display: none; }
+.adaptive-surface:has(> .sheet-body > .studio-workbench) > .sheet-body { padding: 0; overflow: hidden; display: flex; min-height: 0; }
+.adaptive-surface[data-placement="page"]:has(.ambience-hero) > .sheet-body { padding: 24px; max-width: 1080px; width: 100%; margin-inline: auto; }
+.adaptive-surface[data-placement="page"]:has(.ambience-hero) .ambience-section { border-radius: 12px; }
+/* 系统滚动条帮助鼠标用户发现更多内容；代码编辑器保持自己的滚动策略。 */
+#app.mode-wide *, .adaptive-surface[data-mode="desktop"] *, .surface-popover { scrollbar-width: thin; scrollbar-color: var(--outline) transparent; }
+#app.mode-wide *::-webkit-scrollbar, .adaptive-surface[data-mode="desktop"] *::-webkit-scrollbar, .surface-popover::-webkit-scrollbar { display: block; width: 8px; height: 8px; }
+#app.mode-wide *::-webkit-scrollbar-thumb, .adaptive-surface[data-mode="desktop"] *::-webkit-scrollbar-thumb, .surface-popover::-webkit-scrollbar-thumb { background: var(--outline); border: 2px solid transparent; background-clip: padding-box; border-radius: 8px; }
+#app.mode-wide .tab-strip { scrollbar-width: none; }
+#app.mode-wide .tab-strip::-webkit-scrollbar { display: none; }
+#app.mode-wide input:focus-visible, #app.mode-wide textarea:focus-visible,
+.adaptive-surface[data-mode="desktop"] input:focus-visible, .adaptive-surface[data-mode="desktop"] textarea:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+#app.mode-tablet .appbar { padding-inline: 8px; gap: 2px; border-bottom: 1px solid var(--outline-variant); }
+#app.mode-tablet .appbar .title { max-width: 130px; font-size: 14px; }
+#app.mode-tablet .appbar .capsule { max-width: 190px; min-width: 0; }
+#app.mode-tablet .appbar .capsule .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app:not(.mode-wide) .btn.small, .adaptive-surface:not([data-mode="desktop"]) .btn.small { min-height: 40px; }
+#app:not(.mode-wide) .tab .x { width: 40px; height: 40px; }
+#app.mode-tablet .node .row { min-height: 40px; }
+#app:not(.mode-wide) .segmented button, .adaptive-surface:not([data-mode="desktop"]) .segmented button { min-height: 40px; }
+@media (hover: hover) {
+  #app.mode-wide .tab:hover, #app.mode-wide .tab .x:hover { background: var(--surface-2); }
+  #app.mode-wide .r3:hover { background: var(--primary); }
+}
+@media (max-width: 1000px) {
+  #app.mode-wide .appbar .title { max-width: 112px; }
+  #app.mode-wide .appbar .capsule { max-width: 180px; }
+  #app.mode-wide .appbar { gap: 2px; padding-inline: 6px; }
+  #app.mode-tablet .appbar .title { display: none; }
+}
+@container ai-panel (max-width: 360px) {
+  .ai-head { flex-wrap: wrap; justify-content: flex-end; padding: 8px 12px; }
+  .ai-head .seg-wrap { flex: 1 0 100%; }
+  .ai-head .mode-slider { display: flex; width: 100%; }
+  .ai-head .mode-slider button { flex: 1; min-width: 0; padding-inline: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { .workspace-pages *, #app.mode-wide .tab-strip { scroll-behavior: auto; } }

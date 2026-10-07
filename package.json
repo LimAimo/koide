@@ -1,6 +1,6 @@
 {
   "name": "diffusion-ide",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "Koide：本地优先的跨平台 AI IDE，原生应用由 Rust Native Core 驱动。",

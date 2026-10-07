@@ -11,7 +11,8 @@ const KEYS = [["Ctrl+C", "\x03"], ["Ctrl+D", "\x04"], ["Tab", "\t"], ["Esc", "\x
 
 function createTerminalSurface({ onNoPty } = {}) {
   const sessions = new Map();
-  let current = null, raf = 0, started = false, destroyed = false;
+  let current = null, raf = 0, resizeFrame = 0, started = false, destroyed = false;
+  const lastSizes = new Map();
   const tabs = h("div", { class: "term-tabs", role: "tablist", "aria-label": "终端会话" });
   const out = h("div", { class: "term-out term-screen", role: "log", "aria-live": "off" });
   const input = h("input", { class: "text-field", type: "text", autocapitalize: "off", autocomplete: "off", spellcheck: "false", enterkeyhint: "send", placeholder: "输入命令，回车执行", "aria-label": "终端输入" });
@@ -42,7 +43,7 @@ function createTerminalSurface({ onNoPty } = {}) {
     for (const s of sessions.values()) {
       n++;
       tabs.appendChild(h("div", { class: "ttab" + (s.id === current ? " on" : "") + (s.alive ? "" : " dead"), role: "tab", "aria-selected": String(s.id === current) },
-        h("button", { type: "button", onclick: () => { current = s.id; paintTabs(); scheduleRender(); } }, `终端 ${n}`),
+        h("button", { type: "button", onclick: () => { current = s.id; paintTabs(); scheduleRender(); onResize(); } }, `终端 ${n}`),
         h("button", { class: "x", type: "button", "aria-label": "关闭这个终端", onclick: () => closeSession(s.id) }, icon("close", 14))));
     }
     tabs.appendChild(h("button", { class: "icon-btn", type: "button", "aria-label": "新建终端", onclick: () => newSession() }, icon("add", 18)));
@@ -55,18 +56,23 @@ function createTerminalSurface({ onNoPty } = {}) {
     return { cols: Math.max(20, Math.floor(((out.clientWidth || 640) - 20) / cw)) || 80, rows: Math.max(8, Math.floor((out.clientHeight || 300) / 18)) || 24 };
   };
   async function newSession() {
+    if (destroyed) return;
     try {
       const r = await runtime.terminal.open(size());
+      if (destroyed) return; // 终端会话仍由运行时持有，关闭界面不隐式结束进程。
       sessions.set(r.id, { id: r.id, screen: new TermScreen(), alive: true });
       current = r.id;
-      paintTabs(); scheduleRender();
+      paintTabs(); scheduleRender(); onResize();
     } catch (e) {
+      if (destroyed) return;
       if (e.code === "NO_PTY") onNoPty?.();
       else toast(e.message);
     }
   }
   async function closeSession(id) {
     await runtime.terminal.close({ id }).catch(() => {});
+    if (destroyed) return;
+    lastSizes.delete(id);
     sessions.delete(id);
     if (current === id) current = [...sessions.keys()].pop() || null;
     if (!sessions.size) newSession(); else { paintTabs(); scheduleRender(); }
@@ -76,8 +82,20 @@ function createTerminalSurface({ onNoPty } = {}) {
     runtime.on("terminal.data", (d) => { const s = sessions.get(d.id); if (s) { s.screen.write(d.data); if (d.id === current) scheduleRender(); } }),
     runtime.on("terminal.closed", (d) => { const s = sessions.get(d.id); if (s) { s.alive = false; s.screen.write(`\r\n[进程已退出，退出码 ${d.exit_code}]\r\n`); paintTabs(); if (d.id === current) scheduleRender(); } }),
   ];
-  const onResize = () => { if (current && !destroyed) { const { cols, rows } = size(); runtime.terminal.resize({ id: current, cols, rows }).catch(() => {}); } };
+  const onResize = () => {
+    if (destroyed || resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (!current || destroyed || !out.clientWidth || !out.clientHeight) return;
+      const id = current, { cols, rows } = size(), key = `${cols}:${rows}`;
+      if (lastSizes.get(id) === key) return;
+      lastSizes.set(id, key);
+      runtime.terminal.resize({ id, cols, rows }).catch(() => { if (lastSizes.get(id) === key) lastSizes.delete(id); });
+    });
+  };
   window.addEventListener("resize", onResize);
+  const observer = globalThis.ResizeObserver ? new ResizeObserver(onResize) : null;
+  observer?.observe(out);
 
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !rawBox.checked) { e.preventDefault(); send(input.value + "\r"); input.value = ""; } else if (e.key === "Enter") { e.preventDefault(); send("\r"); } });
   input.addEventListener("input", () => { if (rawBox.checked && input.value) { send(input.value); input.value = ""; } });
@@ -96,21 +114,26 @@ function createTerminalSurface({ onNoPty } = {}) {
     started = true;
     try {
       const { sessions: list } = await runtime.terminal.list();
+      if (destroyed) return;
       for (const s of list.filter((x) => x.alive)) {
         const hist = await runtime.terminal.history({ id: s.id });
+        if (destroyed) return;
         const screen = new TermScreen();
         screen.write(hist.data);
         sessions.set(s.id, { id: s.id, screen, alive: true });
         current = s.id;
       }
     } catch { /* no old sessions */ }
+    if (destroyed) return;
     if (!sessions.size) await newSession(); else { paintTabs(); scheduleRender(); }
     requestAnimationFrame(() => onResize());
   }
-  function focus() { setTimeout(() => input.focus(), 40); }
+  function focus() { setTimeout(() => { if (!destroyed && input.isConnected && input.getBoundingClientRect().width) input.focus(); }, 40); }
   function destroy() {
     destroyed = true;
     if (raf) cancelAnimationFrame(raf);
+    if (resizeFrame) cancelAnimationFrame(resizeFrame);
+    observer?.disconnect();
     offs.forEach((f) => f());
     window.removeEventListener("resize", onResize);
   }

@@ -75,6 +75,18 @@ try {
   assert.equal(result.missingMethod, "METHOD_NOT_IMPLEMENTED");
   assert.equal(result.bootFallback, false);
   assert.equal(result.capsule, "本地环境已就绪");
+  assert.equal(result.version, JSON.parse(await readFile("package.json", "utf8")).version, "原生运行时与当前应用版本一致");
+  // 从真正打包的自定义协议读取资源，防止只验证到旧缓存或编译前的界面。
+  const assetPaths = ["/src/main.js", "/src/components/layout.js", "/src/components/overlays.js", "/src/components/settings.js", "/src/components/editor-pane.js", "/src/components/terminal.js", "/src/components/ambience.js", "/src/components/file-tree.js", "/src/services/app.js", "/src/services/viewport.js", "/src/styles/layout.css", "/src/styles/surfaces.css", "/src/styles/desktop.css"];
+  const assets = await page.evaluate(async (paths) => {
+    const { sha256Sync } = await import("/src/services/sha256.js");
+    return Promise.all(paths.map(async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`发行版资源不可用：${url}`);
+      return { path: url, sha256: sha256Sync(new Uint8Array(await response.arrayBuffer())) };
+    }));
+  }, assetPaths);
+  for (const asset of assets) assert.equal(asset.sha256, createHash("sha256").update(await readFile(path.join("apps/web", asset.path.slice(1)))).digest("hex"), `发行版资源应与已验证源码一致：${asset.path}`);
   const language = await page.evaluate(() => new Promise((resolve, reject) => {
     const worker = new Worker(new URL("/vendor/language.js", location.href), { type: "module" });
     const finish = (error, result) => { clearTimeout(timer); worker.terminate(); error ? reject(error) : resolve(result); };
@@ -103,9 +115,9 @@ try {
   result.csp ||= probe.policy;
   assert.match(result.csp, /script-src[^;]*'self'/);
   await page.screenshot({ path: path.join(output, "原生启动.png"), fullPage: true });
-  const report = { ...result, languageWorker: { code: typeError.code, message: typeError.message }, cspProbe: probe, executable, artifact, startedAt, finishedAt: new Date().toISOString(), screenshot: path.join(output, "原生启动.png") };
+  const report = { ...result, assets, languageWorker: { code: typeError.code, message: typeError.message }, cspProbe: probe, executable, artifact, startedAt, finishedAt: new Date().toISOString(), screenshot: path.join(output, "原生启动.png") };
   await writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
-  console.log("原生真实 WebView2 启动、Runtime IPC、语言 Worker 与 CSP 检查通过");
+  console.log("原生真实 WebView2 启动、Runtime IPC、发行版资源、语言 Worker 与 CSP 检查通过");
   console.log(JSON.stringify({ boot: result.boot, runtime: result.runtime, connection: result.connection, version: result.version, capsule: result.capsule, missingMethod: result.missingMethod, languageWorker: report.languageWorker, cspBlocked: probe.blocked, cspDirective: probe.directive, artifact, report: path.join(output, "report.json"), screenshot: report.screenshot }, null, 2));
 } finally {
   await browser?.close().catch(() => {});

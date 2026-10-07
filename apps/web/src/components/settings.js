@@ -1,7 +1,7 @@
 // Settings: a full-screen page with searchable sections. Configuration can be exported / imported as JSON.
 
 import { h, icon, iconButton, clear, toast } from "./dom.js";
-import { pushLayer, openSheet, openDialog, openMenu, confirmDialog } from "./overlays.js";
+import { openSheet, openDialog, openMenu, confirmDialog } from "./overlays.js";
 import { openReplay } from "./timeline.js";
 import { runtime, state, connectManual, openWorkspace } from "../services/app.js";
 import { settingsStore, saveSettings, exportSettings, importSettings, resetSettings, applyTheme } from "../services/store.js";
@@ -385,7 +385,7 @@ function advancedSection(rerender) {
       openDialog({ title: "导入设置", body: ta, actions: [{ label: "取消" }, { label: "导入", primary: true, onClick: () => { try { importSettings(ta.value); applyTheme(); rerender(); toast("设置已导入"); } catch (e) { toast("设置无效：" + e.message); } } }] });
     }, "恢复 restore"),
     btnRow("重置所有设置", "undo", async () => { if (await confirmDialog({ title: "重置设置？", message: "界面偏好会恢复默认值；桥接服务里的服务商配置会保留。", confirmLabel: "重置", danger: true })) { resetSettings(); applyTheme(); rerender(); } }, "默认 default"),
-    row({ label: runtime.kind === "native" ? "Koide 0.9.0 Native" : "Koide 0.9.0 Web", desc: runtime.kind === "native" ? "本地模式由 Tauri + Rust Native Core 直接提供工作区、Agent、Git 与平台能力，不依赖 Python Bridge。" : "Web 兼容模式通过 Python Bridge 提供本地或 LAN 执行能力。" }),
+    row({ label: `Koide ${state.get().hello?.version || ""} ${runtime.kind === "native" ? "Native" : "Web"}`.replace(/\s+/g, " "), desc: runtime.kind === "native" ? "本地模式由 Tauri + Rust Native Core 直接提供工作区、Agent、Git 与平台能力，不依赖 Python Bridge。" : "Web 兼容模式通过 Python Bridge 提供本地或 LAN 执行能力。" }),
   ]);
 }
 
@@ -393,23 +393,48 @@ function advancedSection(rerender) {
 export function openSettings(jumpTo = null) {
   const body = h("div", { class: "page-body" });
   const q = h("input", { class: "text-field", type: "search", placeholder: "搜索设置", "aria-label": "搜索设置" });
-  const page = h("div", { class: "page", role: "dialog", "aria-label": "设置" },
-    h("div", { class: "page-head settings-head" }, iconButton("back", "返回", () => request()), h("div", null, h("h1", null, "设置"), h("small", { class: "muted" }, "Koide · 本机与工作区偏好"))),
-    h("div", { class: "search-box" }, icon("search", 20), q), body);
-  document.body.appendChild(page);
-  requestAnimationFrame(() => page.classList.add("in"));
-  let closed = false;
-  const request = pushLayer(() => { if (closed) return; closed = true; unsub(); page.classList.remove("in"); setTimeout(() => page.remove(), 340); });
+  const nav = h("nav", { class: "settings-nav", "aria-label": "设置分类" });
+  const empty = h("p", { class: "settings-empty muted", role: "status", hidden: true }, "没有找到匹配的设置");
+  const page = h("div", { class: "settings-page", "aria-label": "设置" },
+    h("div", { class: "settings-intro" }, h("p", { class: "muted" }, "本机与工作区偏好"), h("div", { class: "search-box" }, icon("search", 20), q)),
+    h("div", { class: "settings-layout" }, nav, h("div", { class: "settings-content" }, empty, body)));
+  let closed = false, unsub = () => {};
+  const surface = openSheet({ title: "设置", body: page, presentation: "page", mobileFullscreen: true, onClose: () => { if (closed) return; closed = true; unsub(); } });
+  surface.el.classList.add("settings-surface");
+  const request = surface.close;
+  const groups = [["appearance", "外观"], ["editor", "编辑器"], ["animation", "编辑动画"], ["providers", "AI 模型"], ["agent", "智能体"], ["permissions", "权限"], ["workspace", "工作区"], ["git", "Git 与终端"], ["bridge", "连接"], ["privacy", "隐私"], ["advanced", "高级"]];
+  let selected = jumpTo || "appearance";
+  const selectSection = (id, scroll = true) => {
+    selected = id;
+    for (const button of nav.children) button.setAttribute("aria-current", button.dataset.section === id ? "true" : "false");
+    if (scroll) [...body.querySelectorAll(".sec")].find((node) => node.dataset.id === id)?.scrollIntoView({ behavior: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth", block: "start" });
+  };
+  for (const [id, label] of groups) nav.appendChild(h("button", { type: "button", dataset: { section: id }, onclick: () => { q.value = ""; filter(); selectSection(id); } }, label));
 
   function render() {
     const y = body.scrollTop;
+    const focused = document.activeElement;
+    const previousSection = body.contains(focused) ? focused.closest?.(".sec") : null;
+    const controls = previousSection ? [...previousSection.querySelectorAll("input, textarea, select, button")] : [];
+    const restore = previousSection ? { section: previousSection.dataset.id, index: controls.indexOf(focused), value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
     clear(body);
-    body.append(h("div", { class: "settings-group-title" }, "界面与编辑"), appearance(render), editorSection(), animationSection(render), h("div", { class: "settings-group-title" }, "AI"), providers(render), agentSection(), permissionsSection(), h("div", { class: "settings-group-title" }, "项目与系统"), workspaceSection(render), gitSection(), bridgeSection(render), privacySection(), advancedSection(render));
+    body.append(appearance(render), editorSection(), animationSection(render), providers(render), agentSection(), permissionsSection(), workspaceSection(render), gitSection(), bridgeSection(render), privacySection(), advancedSection(render));
     body.scrollTop = y;
     filter();
+    selectSection(selected, false);
+    if (restore) {
+      const nextSection = [...body.querySelectorAll(".sec")].find((node) => node.dataset.id === restore.section);
+      const next = [...(nextSection?.querySelectorAll("input, textarea, select, button") || [])][restore.index];
+      if (next && !nextSection.hidden) {
+        if (["INPUT", "TEXTAREA"].includes(next.tagName)) next.value = restore.value;
+        next.focus();
+        if (typeof restore.start === "number" && typeof restore.end === "number" && ["text", "search", "password", "url", "tel"].includes(next.type || next.getAttribute("type"))) next.setSelectionRange?.(restore.start, restore.end);
+      }
+    }
   }
   function filter() {
     const term = q.value.trim().toLowerCase();
+    let found = false;
     for (const sec of body.querySelectorAll(".sec")) {
       let any = false;
       for (const r of sec.querySelectorAll(".card > *")) {
@@ -418,11 +443,15 @@ export function openSettings(jumpTo = null) {
         if (hit) any = true;
       }
       sec.hidden = !any;
+      found ||= any;
+      const button = [...nav.children].find((node) => node.dataset.section === sec.dataset.id);
+      if (button) button.hidden = !any;
     }
+    empty.hidden = found;
   }
   q.addEventListener("input", filter);
-  const unsub = state.subscribe((() => { let last = ""; return (s) => { const sig = s.conn + s.profiles.map((p) => p.id + p.has_key).join() + (s.workspace?.name || "") + JSON.stringify(s.permissions || {}); if (sig !== last) { last = sig; render(); } }; })());
+  unsub = state.subscribe((() => { let last = ""; return (s) => { const sig = s.conn + JSON.stringify(s.profiles) + (s.workspace?.name || "") + JSON.stringify(s.permissions || {}); if (sig !== last) { last = sig; render(); } }; })());
   render();
-  if (jumpTo) { const t = body.querySelector(`[data-id="${jumpTo}"]`); if (t) setTimeout(() => t.scrollIntoView({ behavior: "smooth", block: "start" }), 380); }
-  return { close: request };
+  if (jumpTo) requestAnimationFrame(() => { if (!closed) selectSection(jumpTo); });
+  return { close: request, el: surface.el };
 }

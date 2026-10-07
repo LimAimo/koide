@@ -1,6 +1,6 @@
 # Koide Native 构建说明
 
-当前应用版本：`0.10.0`。
+当前应用版本：`0.11.0`。
 
 ## 工具链
 
@@ -35,7 +35,7 @@ pnpm --filter @diffusion/native exec tauri build --bundles nsis
 
 产物位于 `apps/native/src-tauri/target/release/` 与其 `bundle/nsis/` 子目录。`diffusion-native` 仍是内部二进制名，用于兼容既有工程结构；对外产品名和发行文件名使用 Koide。NSIS 安装器使用简体中文；不指定 `--bundles` 时也生成简体中文 MSI。
 
-Windows 需要 MSVC Build Tools、Windows SDK 和 WebView2 Runtime。构建脚本包含 Common Controls v6 manifest，Rust 测试与程序启动均使用相同的系统组件声明。0.10.0 已在本机完成 x64 EXE / MSI / NSIS 构建和真实 WebView2 启动检查。
+Windows 需要 MSVC Build Tools、Windows SDK 和 WebView2 Runtime。构建脚本包含 Common Controls v6 manifest，Rust 测试与程序启动均使用相同的系统组件声明。0.10.0 已在本机完成 x64 EXE / MSI / NSIS 构建和真实 WebView2 启动检查；0.11.0 的界面、构建与校验记录见 [界面验收](RESPONSIVE_VALIDATION.md)。
 
 ## Android ARM64
 
@@ -45,7 +45,7 @@ pnpm --filter @diffusion/native exec tauri icon koide-icon.svg
 pnpm --filter @diffusion/native exec tauri android build --debug --apk --target aarch64
 ```
 
-Android 0.10.0 的 `versionName` 来自 `tauri.conf.json`，当前 `versionCode` 为 `10000`。CI 会使用 `apksigner verify` 检查 APK 签名。本轮本机未构建 Android APK 或进行真机验收，不能用 Windows / 手机浏览器测试替代。
+Android 0.11.0 的 `versionName` 来自 `tauri.conf.json`，当前 `versionCode` 为 `11000`。CI 会使用 `apksigner verify` 检查 APK 签名。本轮本机未构建 Android APK 或进行真机验收，不能用 Windows / 手机浏览器测试替代。
 
 当前自动构建使用调试签名以保证产物可安装；应用商店或公开生产分发应另外配置正式签名密钥。
 

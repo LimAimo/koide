@@ -297,8 +297,8 @@ test("Time Machine lists the tasks and can restore the whole first task", async 
 
 test("Settings page renders every section and search filters them", async () => {
   const { openSettings } = await import("../../apps/web/src/components/settings.js");
-  openSettings();
-  const secs = await until(() => { const s = $$(body(), ".sec"); return s.length >= 10 && s; }, "settings sections");
+  const settings = openSettings();
+  const secs = await until(() => { const s = $$(settings.el, ".sec"); return s.length >= 10 && s; }, "settings sections");
   const ids = secs.map((s) => s.dataset.id);
   for (const want of ["appearance", "editor", "providers", "agent", "permissions", "animation", "bridge", "workspace", "privacy", "advanced"]) assert.ok(ids.includes(want), "missing " + want);
   const perm = secs.find((s) => s.dataset.id === "permissions");
@@ -306,12 +306,14 @@ test("Settings page renders every section and search filters them", async () => 
   const editorSec = secs.find((s) => s.dataset.id === "editor");
   assert.match(text(editorSec), /CodeMirror 6/);
   assert.match(text(editorSec), /跟随 AI 编辑/);
-  assert.doesNotMatch(text($$(body(), ".page")[0]), /切换全屏/);
-  const q = $$($$(body(), ".page")[0], ".search-box .text-field")[0];        // 只取设置页里的搜索框（编辑器的查找栏里也有 search 类型的输入框）
+  assert.doesNotMatch(text(settings.el), /切换全屏/);
+  assert.equal($$(settings.el, ".settings-nav button").length, 11, "所有设置分类都有导航入口");
+  const q = $$(settings.el, ".search-box .text-field")[0];        // 只取设置页里的搜索框（编辑器的查找栏里也有 search 类型的输入框）
   q.value = "hue";
   q.dispatchEvent({ type: "input" });
-  const visible = $$(body(), ".sec").filter((s) => !s.hidden).map((s) => s.dataset.id);
+  const visible = $$(settings.el, ".sec").filter((s) => !s.hidden).map((s) => s.dataset.id);
   assert.deepEqual(visible, ["appearance"], "searching 'hue' leaves only Appearance: " + visible);
+  settings.close.dismiss();
 });
 
 

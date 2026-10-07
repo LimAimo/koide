@@ -117,9 +117,12 @@ export function restoreConversation() {
 export async function openFile(path, { preview = false } = {}) {
   const generation = workspaceEpoch;
   const existing = tabOf(path);
-  if (existing) { state.set({ active: path }); return existing; }
+  if (existing) { if (!preview) keepTab(path); state.set({ active: path }); return tabOf(path); }
   const res = await runtime.files.read(await workspaceParams({ path }, generation));
   assertWorkspace(generation);
+  // 双击和并发打开可能同时等待磁盘；迟到的读取不能覆盖已经打开的编辑缓冲区。
+  const opened = tabOf(res.path) || tabOf(path);
+  if (opened) { if (!preview) keepTab(opened.path); state.set({ active: opened.path }); return tabOf(opened.path); }
   const tab = { path: res.path, text: res.content || "", savedText: res.content || "", revision: res.revision,
     binary: !!res.binary, dirty: false, preview, pinned: false, conflict: false };
   state.set((s) => {
@@ -128,6 +131,11 @@ export async function openFile(path, { preview = false } = {}) {
     return { tabs: [...tabs, tab], active: tab.path };
   });
   return tab;
+}
+
+/** 预览标签转为普通标签，仍可正常关闭，不占用另一个预览位置。 */
+export function keepTab(path) {
+  if (tabOf(path)?.preview) patchTab(path, { preview: false });
 }
 
 const DEMO_BEFORE = "def add(a, b):\n    return a - b\n\ndef greet(name):\n    print('hi', name)\n\nresult = add(1, 2)\n";

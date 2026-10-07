@@ -243,7 +243,7 @@ export function createAmbience({ app, projectStore, state, events, runtime, onFo
   function open() {
     if (!hasProject()) { toast("先打开一个项目，再布置它的创作房间。"); return; }
     if (sheet) return;
-    sheet = openSheet({ title: "创作房间", tall: true, onClose: () => { sheet = null; audioButton = audioNote = null; } }); renderPanel();
+    sheet = openSheet({ title: "创作房间", tall: true, presentation: "page", mobileFullscreen: true, anchor: ambientButton, onClose: () => { sheet = null; audioButton = audioNote = null; } }); renderPanel();
   }
   const listen = (emitter, name, fn) => { if (emitter?.on) offs.push(emitter.on(name, fn)); };
   offs.push(projectStore.subscribe(onStoreChanged));
