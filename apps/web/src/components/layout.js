@@ -5,7 +5,7 @@ import { viewportMode } from "../services/viewport.js";
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const finite = (v, fallback) => Number.isFinite(Number(v)) ? Number(v) : fallback;
 const vh = () => window.visualViewport?.height || window.innerHeight;
-const MIN_EDITOR = 360, MIN_TABLET_CENTER = 480;
+const MIN_EDITOR = 360;
 
 export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, terminal, onCloseAI }) {
   const center = app.querySelector(".center-stack");
@@ -30,8 +30,6 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
 
   const dismiss = (request) => { if (!request) return; request.dismiss ? request.dismiss() : request(); };
   const closeLayer = (request, quiet = false) => { if (quiet) dismiss(request); else request?.(); };
-  const cssNumber = (name) => Math.max(0, finite(parseFloat(getComputedStyle(app).getPropertyValue(name)), 0));
-  const externalWidth = () => cssNumber("--surface-left") + cssNumber("--surface-right");
   const hasWorkspace = () => !app.classList.contains("no-ws");
   const desktopFiles = () => panels.filesVisible && hasWorkspace() && !app.classList.contains("studio-focus");
   const visibleAI = () => panels.aiVisible && hasWorkspace();
@@ -45,27 +43,40 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
   }
   function notifySize() {
     const geometry = JSON.stringify([mode, window.innerWidth, vh(), hasWorkspace(), desktopFiles(), visibleAI(), panels.terminalVisible,
-      app.classList.contains("files-open"), app.classList.contains("tablet-panel-overlay"), app.style.getPropertyValue("--layout-left"), app.style.getPropertyValue("--layout-right"),
-      cssNumber("--surface-left"), cssNumber("--surface-right"), sizes.files, sizes.ai, sizes.terminal, Math.round(center?.getBoundingClientRect?.().width || 0)]);
+      app.classList.contains("files-open"), app.classList.contains("tablet-panel-overlay"), sizes.files, sizes.ai, sizes.terminal, Math.round(center?.getBoundingClientRect?.().width || 0)]);
     if (lastGeometry === geometry) return;
     lastGeometry = geometry; window.dispatchEvent?.(new Event("koide:layout-resize"));
   }
+  function restoreFocus(anchor) {
+    if (!anchor?.focus) return;
+    const restore = () => {
+      if (destroyed || !(anchor.isConnected ?? document.body.contains(anchor))) return;
+      // 另一个模态层可能仍锁住应用；此时保留它正在使用的焦点。
+      for (let node = anchor; node; node = node.parentNode) if (node.inert) return;
+      anchor.focus();
+    };
+    if (refreshing) requestAnimationFrame(restore);
+    else restore();
+  }
 
   function closeAI(notify = true, quiet = false) {
+    const anchor = ai.contains(document.activeElement) ? aiAnchor : null;
+    aiAnchor = null;
     panels = { ...panels, aiVisible: false };
     setClass("ai-hidden", true);
     const request = aiClose; aiClose = null;
     closeLayer(request, quiet);
-    if (ai.contains(document.activeElement) && aiAnchor?.isConnected !== false) aiAnchor?.focus?.();
-    aiAnchor = null;
     if (notify) onCloseAI?.();
+    refreshLayout();
+    restoreFocus(anchor);
   }
   function removeDrawer() {
+    const anchor = drawerAnchor;
+    drawerAnchor = null;
     setClass("files-open", false);
     drawerClose = null;
-    if (drawerAnchor?.isConnected !== false && drawerAnchor?.focus) drawerAnchor.focus();
-    drawerAnchor = null;
     refreshLayout();
+    restoreFocus(anchor);
   }
   function closeDrawer(quiet = false) {
     const request = drawerClose; drawerClose = null;
@@ -77,8 +88,7 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
     if (app.classList.contains("files-open")) { closeDrawer(); return; }
     drawerAnchor = anchor?.currentTarget || anchor || document.activeElement;
     lastPanel = "files";
-    const bothFit = window.innerWidth - externalWidth() - tabletWidth("files") - tabletWidth("ai") >= MIN_TABLET_CENTER;
-    if (device === "tablet" && visibleAI() && !bothFit) closeAI(true, true);
+    if (device === "tablet" && visibleAI()) closeAI(true, true);
     setClass("files-open", true);
     drawerClose = pushLayer(removeDrawer);
     refreshLayout();
@@ -125,6 +135,7 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
     if (refreshing || destroyed) return;
     refreshing = true;
     try {
+      app.style.setProperty("--appbar-height", `${app.querySelector(".appbar")?.offsetHeight || 56}px`);
       const filesOpen = hasWorkspace() && app.classList.contains("files-open");
       let aiVisible = visibleAI();
       const bounds = terminalBounds();
@@ -144,22 +155,16 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
         accessible(files, showFiles); accessible(ai, aiVisible);
         center && (center.inert = false);
       } else if (device === "tablet") {
-        const fw = tabletWidth("files"), aw = tabletWidth("ai"), available = window.innerWidth - externalWidth();
-        if (filesOpen && aiVisible && available - fw - aw < MIN_TABLET_CENTER) {
+        const fw = tabletWidth("files"), aw = tabletWidth("ai");
+        if (filesOpen && aiVisible) {
           if (lastPanel === "files") { closeAI(true, true); aiVisible = false; }
           else closeDrawer(true);
         }
         const nowFiles = hasWorkspace() && app.classList.contains("files-open");
-        const total = (nowFiles ? fw : 0) + (aiVisible ? aw : 0);
-        const push = available - total >= MIN_TABLET_CENTER;
-        const filePush = nowFiles && push, aiPush = aiVisible && push;
-        setClass("tablet-files-push", filePush); setClass("tablet-ai-push", aiPush);
-        setClass("tablet-panel-overlay", (nowFiles || aiVisible) && !push);
+        setClass("tablet-panel-overlay", nowFiles || aiVisible);
         app.style.setProperty("--tablet-files-w", `${fw}px`); app.style.setProperty("--tablet-ai-w", `${aw}px`);
-        app.style.setProperty("--layout-left", filePush ? `${fw}px` : "0px");
-        app.style.setProperty("--layout-right", aiPush ? `${aw}px` : "0px");
-        accessible(files, nowFiles, nowFiles && !push); accessible(ai, aiVisible, aiVisible && !push);
-        center && (center.inert = (nowFiles || aiVisible) && !push);
+        accessible(files, nowFiles, nowFiles); accessible(ai, aiVisible, aiVisible);
+        center && (center.inert = nowFiles || aiVisible);
       } else {
         accessible(files, filesOpen, filesOpen); accessible(ai, aiVisible, mode === "port" && isFull);
         center && (center.inert = filesOpen || (mode === "port" && isFull && aiVisible));
@@ -170,8 +175,7 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
         }
       }
       if (device !== "tablet") {
-        setClass("tablet-files-push", false); setClass("tablet-ai-push", false); setClass("tablet-panel-overlay", false);
-        app.style.setProperty("--layout-left", "0px"); app.style.setProperty("--layout-right", "0px");
+        setClass("tablet-panel-overlay", false);
       }
       for (const [name, element] of Object.entries(resizers)) {
         if (!element) continue;
@@ -193,7 +197,7 @@ export function setupLayout({ app, files, ai, grip, scrim, resizers = {}, termin
       if (visibleAI() && !wasAI) {
         aiAnchor = document.activeElement;
         lastPanel = "ai";
-        if (app.classList.contains("files-open") && window.innerWidth - externalWidth() - tabletWidth("files") - tabletWidth("ai") < MIN_TABLET_CENTER) closeDrawer(true);
+        if (app.classList.contains("files-open")) closeDrawer(true);
       }
       if (visibleAI() && !aiClose) {
         const request = pushLayer(() => { if (aiClose !== request) return; aiClose = null; closeAI(); refreshLayout(); });

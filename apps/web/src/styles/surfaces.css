@@ -30,7 +30,6 @@
 }
 .adaptive-surface[data-placement="sidepane"][data-side="left"] { left: 0; right: auto; border-left: 0; border-right: 1px solid var(--outline-variant); transform: translateX(-102%); }
 .adaptive-surface[data-placement="sidepane"].in { transform: none; }
-.adaptive-surface[data-placement="sidepane"][data-push="true"] { box-shadow: none; }
 .adaptive-surface[data-placement="fullscreen"] { inset: 0; width: 100%; height: 100dvh; max-height: none; max-width: none; margin: 0; border-radius: 0; padding-top: env(safe-area-inset-top); transform: translateX(100%); }
 .adaptive-surface[data-placement="fullscreen"].in { transform: none; }
 .adaptive-surface[data-placement="bottomsheet"] .sheet-body { padding: 8px 16px 16px; }

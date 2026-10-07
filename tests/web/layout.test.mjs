@@ -83,27 +83,31 @@ test("取消拖动与失去指针捕获恢复原尺寸，模式切换清理进�
   } finally { f.layout.destroy(); }
 });
 
-test("平板文件初始关闭，左侧与右侧在空间充足时推开内容，窄屏改为覆盖", async () => {
-  const f = fixture({ width: 1024, height: 768, coarse: true, shortSide: 768 });
-  try {
-    f.layout.syncPanels({ filesVisible: true, aiVisible: false }); assert.equal(f.files.inert, true);
-    f.layout.openDrawer(); assert.equal(f.app.classList.contains("files-open"), true); assert.equal(f.css("--layout-left"), 320); assert.equal(f.center.inert, false);
-    f.layout.syncPanels({ aiVisible: true }); assert.equal(f.app.classList.contains("files-open"), false); assert.equal(f.css("--layout-right"), 420); assert.equal(f.closedAI, 0);
-    f.resize(768, 1024, true, 768); assert.equal(f.css("--layout-right"), 0); assert.equal(f.center.inert, true); assert.equal(f.ai.getAttribute("aria-modal"), "true");
-    await tick(); f.scrim.click(); assert.equal(f.closedAI, 1); assert.equal(f.ai.inert, true); assert.equal(f.center.inert, false);
-    f.layout.openDrawer(); assert.equal(f.files.getAttribute("aria-modal"), "true"); assert.equal(f.css("--layout-left"), 0);
-  } finally { f.layout.destroy(); }
+test("768、1024与1440触控平板文件和AI始终覆盖，关闭恢复编辑区交互", async () => {
+  for (const width of [768, 1024, 1440]) {
+    await tick();
+    const f = fixture({ width, height: 1024, coarse: true, shortSide: 768 });
+    try {
+      f.layout.syncPanels({ filesVisible: true, aiVisible: false }); assert.equal(f.files.inert, true);
+      f.layout.openDrawer(); assert.equal(f.app.classList.contains("files-open"), true); assert.equal(f.center.inert, true); assert.equal(f.files.getAttribute("aria-modal"), "true");
+      assert.equal(f.app.classList.contains("tablet-panel-overlay"), true); assert.equal(f.center.getBoundingClientRect().width, width);
+      assert.equal(f.app.style.getPropertyValue("--layout-left"), ""); assert.equal(f.app.style.getPropertyValue("--layout-right"), "");
+      f.layout.syncPanels({ aiVisible: true }); assert.equal(f.app.classList.contains("files-open"), false); assert.equal(f.closedAI, 0); assert.equal(f.ai.getAttribute("aria-modal"), "true");
+      f.resize(width + 120, 1024, true, 768); assert.equal(f.center.inert, true); assert.equal(f.ai.getAttribute("aria-modal"), "true"); assert.equal(f.app.classList.contains("tablet-panel-overlay"), true);
+      await tick(); f.scrim.click(); assert.equal(f.closedAI, 1); assert.equal(f.ai.inert, true); assert.equal(f.center.inert, false); assert.equal(f.app.classList.contains("tablet-panel-overlay"), false);
+    } finally { f.layout.destroy(); }
+  }
   assert.equal(hasLayers(), false);
 });
 
-test("大平板左右面板可同时常驻，其他功能侧栏占位会重新保护中心空间", () => {
-  const f = fixture({ width: 1366, height: 1024, coarse: true, shortSide: 1024 });
+test("宽平板核心侧栏也始终单一活动，打开文件收起AI并同步设置", () => {
+  const f = fixture({ width: 1440, height: 1024, coarse: true, shortSide: 1024 });
   try {
     f.layout.openDrawer(); f.layout.syncPanels({ aiVisible: true });
-    assert.equal(f.css("--layout-left"), 320); assert.equal(f.css("--layout-right"), 420); assert.equal(f.center.inert, false);
-    f.app.style.setProperty("--surface-left", "500px"); dom.fireWindow("koide:surface-layout");
-    assert.equal(f.app.classList.contains("files-open"), false); assert.equal(f.css("--layout-left"), 0); assert.equal(f.css("--layout-right"), 0); assert.equal(f.center.inert, true);
-    f.app.style.removeProperty("--surface-left"); dom.fireWindow("koide:surface-layout"); assert.equal(f.css("--layout-right"), 420); assert.equal(f.center.inert, false);
+    assert.equal(f.app.classList.contains("files-open"), false); assert.equal(f.ai.inert, false); assert.equal(f.center.inert, true);
+    f.layout.openDrawer(); assert.equal(f.app.classList.contains("files-open"), true); assert.equal(f.closedAI, 1); assert.equal(f.ai.inert, true); assert.equal(f.files.getAttribute("aria-modal"), "true");
+    f.resize(768, 1024, true, 768); f.resize(1440, 1024, true, 1024); assert.equal(f.app.classList.contains("tablet-panel-overlay"), true); assert.equal(f.center.inert, true);
+    f.layout.closeDrawer(); assert.equal(f.center.inert, false); assert.equal(f.files.inert, true); assert.equal(f.ai.inert, true);
   } finally { f.layout.destroy(); }
 });
 
@@ -115,6 +119,39 @@ test("覆盖侧栏圈定键盘焦点，关闭文件面板返回触发按钮", as
     f.lastFile.focus(); let prevented = false; dom.fireDoc("keydown", { key: "Tab", preventDefault() { prevented = true; } }); assert.equal(prevented, true); assert.equal(document.activeElement, f.firstFile);
     dom.fireDoc("keydown", { key: "Tab", shiftKey: true, preventDefault() {} }); assert.equal(document.activeElement, f.lastFile);
     f.layout.closeDrawer(); assert.equal(document.activeElement, trigger); assert.equal(hasLayers(), false);
+  } finally { f.layout.destroy(); }
+});
+
+test("文件与AI覆盖关闭先解除inert，再恢复编辑器焦点", async () => {
+  const f = fixture({ width: 1024, height: 768, coarse: true, shortSide: 768 });
+  try {
+    const editor = document.createElement("textarea"); f.center.append(editor);
+    editor.focus = () => {
+      for (let node = editor; node; node = node.parentNode) if (node.inert) return;
+      document.activeElement = editor;
+    };
+    editor.focus(); f.layout.openDrawer(editor); await tick();
+    assert.equal(f.center.inert, true); assert.equal(document.activeElement, f.firstFile);
+    editor.focus(); assert.equal(document.activeElement, f.firstFile, "浏览器拒绝给inert中的编辑器聚焦");
+    f.layout.closeDrawer(); assert.equal(f.center.inert, false); assert.equal(document.activeElement, editor);
+    await tick(); f.layout.syncPanels({ aiVisible: true }); await tick();
+    assert.equal(f.center.inert, true); assert.equal(document.activeElement, f.firstAI);
+    f.scrim.click(); assert.equal(f.center.inert, false); assert.equal(document.activeElement, editor);
+  } finally { f.layout.destroy(); }
+});
+
+test("关闭核心侧栏不会从其他模态层抢回被锁定的编辑器焦点", async () => {
+  const f = fixture({ width: 1024, height: 768, coarse: true, shortSide: 768 });
+  try {
+    const editor = document.createElement("textarea"), modalButton = document.createElement("button"); f.center.append(editor); document.body.append(modalButton);
+    editor.focus = () => {
+      for (let node = editor; node; node = node.parentNode) if (node.inert) return;
+      document.activeElement = editor;
+    };
+    editor.focus(); f.layout.openDrawer(editor); await tick();
+    f.app.inert = true; document.activeElement = modalButton;
+    f.layout.closeDrawer(true); assert.equal(f.center.inert, false); assert.equal(document.activeElement, modalButton);
+    f.app.inert = false;
   } finally { f.layout.destroy(); }
 });
 

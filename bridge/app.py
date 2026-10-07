@@ -41,7 +41,7 @@ from .tools.builtin import build_registry
 from .studio import Studio
 from .preview import PreviewManager
 
-VERSION = "0.11.0"
+VERSION = "1.0.0"
 
 
 class Connection:

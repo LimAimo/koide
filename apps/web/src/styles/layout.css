@@ -45,12 +45,9 @@
 #app.mode-wide .grip { display: none; }
 #app.mode-wide .files-close { display: none; }
 
-/* 平板把可用空间留给正在使用的内容；顶栏不随功能侧栏一起移动。 */
+/* 平板侧栏始终覆盖编辑区，打开与关闭均不改变编辑器尺寸。 */
 #app.mode-tablet .work {
   grid-template-columns: minmax(0, 1fr);
-  margin-left: calc(var(--layout-left, 0px) + var(--surface-left, 0px));
-  margin-right: calc(var(--layout-right, 0px) + var(--surface-right, 0px));
-  transition: margin .24s var(--ease-decel);
 }
 #app.mode-tablet .resizer, #app.mode-tablet .grip { display: none; }
 #app.mode-tablet .menu-btn { display: none; }
@@ -58,11 +55,10 @@
   position: absolute; z-index: 40; top: 0; bottom: 0; min-height: 0;
   border-radius: 0; box-shadow: var(--shadow); transition: transform .24s var(--ease-decel);
 }
-#app.mode-tablet .files { left: calc(-1 * var(--layout-left, 0px)); width: var(--tablet-files-w, 320px); transform: translateX(-102%); border-right: 1px solid var(--outline-variant); }
-#app.mode-tablet .ai { right: calc(-1 * var(--layout-right, 0px)); width: var(--tablet-ai-w, 420px); transform: translateX(0); border-left: 1px solid var(--outline-variant); }
+#app.mode-tablet .files { left: 0; width: var(--tablet-files-w, 320px); transform: translateX(-102%); border-right: 1px solid var(--outline-variant); }
+#app.mode-tablet .ai { right: 0; width: var(--tablet-ai-w, 420px); transform: translateX(0); border-left: 1px solid var(--outline-variant); }
 #app.mode-tablet:not(.ai-hidden) .ai { animation: tablet-ai-in .24s var(--ease-decel); }
 @keyframes tablet-ai-in { from { transform: translateX(102%); } to { transform: translateX(0); } }
-#app.mode-tablet.tablet-files-push .files, #app.mode-tablet.tablet-ai-push .ai { box-shadow: none; }
 #app.mode-tablet .drawer-scrim { top: var(--appbar-height, 56px); }
 #app.mode-tablet .node > .row { min-height: 44px; }
 

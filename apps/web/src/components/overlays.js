@@ -90,7 +90,13 @@ function activeAnchor(anchor) {
 function reducedMotion() { return !!globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches; }
 function connected(element) { return !!element && (element.isConnected ?? document.body.contains(element)); }
 function focusables(element) {
-  return [...element.querySelectorAll("button, input, textarea, select, a[href], [tabindex]")].filter((node) => !node.disabled && !node.hidden && node.getAttribute("tabindex") !== "-1" && !node.closest?.("[hidden], [inert]"));
+  return [...element.querySelectorAll("button, input, textarea, select, a[href], [tabindex]")].filter((node) => {
+    if (node.disabled || node.hidden || node.getAttribute("tabindex") === "-1" || node.closest?.("[hidden], [inert]")) return false;
+    // CSS 隐藏的父级没有可布局矩形；纯 Node 测试 DOM 没有这项浏览器能力。
+    if (typeof node.getClientRects === "function" && !node.getClientRects().length) return false;
+    const visibility = globalThis.getComputedStyle?.(node)?.visibility;
+    return visibility !== "hidden" && visibility !== "collapse";
+  });
 }
 function setInert(nodes) {
   for (const node of nodes) {
@@ -151,25 +157,12 @@ function accessibility(element, request, trigger, { modal = false, menu = false 
     },
   };
 }
-function layoutChanged() { if (globalThis.CustomEvent) window.dispatchEvent?.(new CustomEvent("koide:surface-layout")); }
-function syncPush() {
-  if (!hosts.app) return;
-  for (const side of ["left", "right"]) {
-    const width = [...surfaces].filter((surface) => surface.side === side).reduce((total, surface) => total + surface.pushed(), 0);
-    if (width) hosts.app.style.setProperty(`--surface-${side}`, `${width}px`);
-    else hosts.app.style.removeProperty(`--surface-${side}`);
-  }
-  const left = hosts.app.style.getPropertyValue("--surface-left"), right = hosts.app.style.getPropertyValue("--surface-right");
-  if (left || right) hosts.app.dataset.surfacePush = left && right ? "both" : left ? "left" : "right";
-  else delete hosts.app.dataset.surfacePush;
-}
-
 /** 手机底部面板、平板定向侧栏、桌面主区域页面或居中面板。 */
 export function openSheet({ title, body, onClose, tall = false, footer = null, presentation = "panel", anchor, side, mobileFullscreen = false } = {}) {
   const trigger = activeAnchor(anchor), direction = side === "left" || side === "right" ? side : surfaceSide(trigger);
   const root = layerRoot(), scrim = h("div", { class: "scrim surface-scrim" });
   const content = h("div", { class: "sheet-body" }, body), grip = h("div", { class: "sheet-handle" }, h("span"));
-  let request = () => {}, closed = false, a11y, pushed = 0, dragging = false, pointerId = null, layingOut = false;
+  let request = () => {}, closed = false, a11y, dragging = false, pointerId = null, layingOut = false;
   const heading = title ? h("div", { class: "sheet-heading" }, h("div", { class: "sheet-title" }, title), h("button", { class: "icon-btn sheet-close", type: "button", "aria-label": `关闭${title}`, title: "关闭", onclick: () => request() }, icon("close", 20))) : null;
   const sheet = h("div", { class: "sheet adaptive-surface" + (tall ? " tall" : ""), role: "dialog", "aria-label": title || "面板", dataset: { side: direction } }, grip, heading, content, footer ? h("div", { class: "sheet-footer" }, footer) : null);
   root.append(scrim, sheet);
@@ -178,10 +171,6 @@ export function openSheet({ title, body, onClose, tall = false, footer = null, p
     if (pointerId !== null) { try { grip.releasePointerCapture?.(pointerId); } catch { /* 捕获已释放 */ } }
     pointerId = null;
   };
-  const clearPush = (notify = true) => {
-    if (!pushed || !hosts.app) return;
-    pushed = 0; syncPush(); if (notify) layoutChanged();
-  };
   const layout = () => {
     if (closed || layingOut) return;
     layingOut = true;
@@ -189,12 +178,8 @@ export function openSheet({ title, body, onClose, tall = false, footer = null, p
     const mode = viewportMode(), isPage = mode === "desktop" && presentation === "page" && hosts.pageHost;
     const width = globalThis.innerWidth || window.innerWidth;
     const sideWidth = Math.round(Math.min(560, Math.max(320, width * 0.42)));
-    const center = hosts.app?.querySelector(".center-stack");
-    const available = center?.getBoundingClientRect().width || hosts.app?.getBoundingClientRect().width || width;
-    const canPush = mode === "tablet" && available + pushed - sideWidth >= 480;
-    const previousPush = pushed;
     const placement = isPage ? "page" : mode === "desktop" ? "panel" : mode === "tablet" ? "sidepane" : mobileFullscreen ? "fullscreen" : "bottomsheet";
-    sheet.dataset.mode = mode; sheet.dataset.placement = placement; sheet.dataset.push = String(canPush);
+    sheet.dataset.mode = mode; sheet.dataset.placement = placement; sheet.dataset.push = "false";
     sheet.style.setProperty("--surface-width", `${sideWidth}px`);
     const focused = sheet.contains(document.activeElement) ? document.activeElement : null;
     const selection = focused ? { start: focused.selectionStart, end: focused.selectionEnd } : null;
@@ -205,21 +190,18 @@ export function openSheet({ title, body, onClose, tall = false, footer = null, p
       if (sheet.parentNode !== hosts.pageHost) { hosts.pageHost.appendChild(sheet); moved = true; }
     } else if (sheet.parentNode !== root) { root.appendChild(sheet); moved = true; }
     if (hosts.pageHost && ![...surfaces].some((surface) => surface !== managed && surface.el.dataset.placement === "page") && !isPage) hosts.pageHost.hidden = true;
-    const nextPush = canPush && hosts.app ? sideWidth : 0;
-    if (pushed !== nextPush) { pushed = nextPush; syncPush(); }
-    scrim.hidden = !!isPage || canPush;
-    a11y?.setModal(!isPage && !canPush);
-    sheet.setAttribute("role", isPage || canPush ? "region" : "dialog");
+    scrim.hidden = !!isPage;
+    a11y?.setModal(!isPage);
+    sheet.setAttribute("role", isPage ? "region" : "dialog");
     if (moved && focused && focused.isConnected !== false && !focused.closest?.("[inert]")) {
       focused.focus({ preventScroll: true });
       if (typeof selection.start === "number" && typeof selection.end === "number" && ["text", "search", "password", "url", "tel"].includes(focused.type || focused.getAttribute("type"))) focused.setSelectionRange?.(selection.start, selection.end);
     }
-    if (previousPush !== pushed) layoutChanged();
     layingOut = false;
   };
-  const managed = { el: sheet, layout, close: null, presentation, side: direction, pushed: () => pushed };
+  const managed = { el: sheet, layout, close: null, presentation };
   const closeImpl = () => {
-    if (closed) return; closed = true; cancelDrag(); clearPush(); surfaces.delete(managed);
+    if (closed) return; closed = true; cancelDrag(); surfaces.delete(managed);
     window.removeEventListener("resize", layout);
     window.removeEventListener("koide:layout-changed", layout);
     window.removeEventListener("koide:layout-resize", layout);

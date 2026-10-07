@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "diffusion-native"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "diffusion-saf",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "diffusion-saf"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",

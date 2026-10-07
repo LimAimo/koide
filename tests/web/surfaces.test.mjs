@@ -69,31 +69,55 @@ test("桌面设置式页面进入主区域，普通面板居中，不限制外�
   panel.close.dismiss(); assert.equal(app.inert, false); await flush();
 });
 
-test("平板侧栏遵循左右按钮，宽屏推开，窄屏遮罩", async () => {
-  resize(1024, 900, true); available = 1024;
-  const left = openSheet({ title: "左侧工具", body: "内容", anchor: trigger("left") });
-  assert.equal(left.el.dataset.placement, "sidepane"); assert.equal(left.el.dataset.side, "left"); assert.equal(left.el.dataset.push, "true");
-  assert.equal(app.style.getPropertyValue("--surface-left"), "430px"); assert.equal(app.inert, false);
-  left.close.dismiss(); assert.equal(app.style.getPropertyValue("--surface-left"), "");
-  resize(768, 1024, true); available = 768;
-  const right = openSheet({ title: "右侧工具", body: "内容", anchor: trigger("right") });
-  assert.equal(right.el.dataset.side, "right"); assert.equal(right.el.dataset.push, "false"); assert.equal(app.inert, true);
-  right.close.dismiss(); await flush();
+test("平板768、1024、1440侧栏均覆盖，方向由左右按钮决定", async () => {
+  for (const width of [768, 1024, 1440]) {
+    resize(width, 1024, true); available = width;
+    for (const side of ["left", "right"]) {
+      const button = trigger(side), before = center.getBoundingClientRect();
+      const panel = openSheet({ title: "侧栏工具", body: "内容", anchor: button });
+      assert.equal(panel.el.dataset.placement, "sidepane"); assert.equal(panel.el.dataset.side, side); assert.equal(panel.el.dataset.push, "false");
+      assert.equal(panel.el.getAttribute("role"), "dialog"); assert.equal(panel.el.getAttribute("aria-modal"), "true"); assert.equal(app.inert, true);
+      assert.equal(app.style.getPropertyValue("--surface-left"), ""); assert.equal(app.style.getPropertyValue("--surface-right"), ""); assert.equal(app.dataset.surfacePush, undefined);
+      assert.deepEqual(center.getBoundingClientRect(), before);
+      panel.close.dismiss(); assert.equal(app.inert, false); await flush();
+    }
+  }
 });
 
-test("平板已有常驻侧栏时按实际剩余空间决定覆盖", async () => {
+test("平板已有侧栏时新面板仍使用遮罩并保持嵌套隔离", async () => {
   resize(1024, 900, true); available = 704;
-  const panel = openSheet({ title: "设置", body: "内容", anchor: trigger("right") });
-  assert.equal(panel.el.dataset.push, "false"); assert.equal(app.style.getPropertyValue("--surface-right"), "");
-  panel.close.dismiss(); await flush();
+  const first = openSheet({ title: "文件工具", body: "内容", anchor: trigger("left") });
+  const panel = openSheet({ title: "设置", body: "内容", side: "right" });
+  assert.equal(panel.el.dataset.push, "false"); assert.equal(app.style.getPropertyValue("--surface-right"), ""); assert.equal(app.inert, true);
+  panel.close.dismiss(); assert.equal(app.inert, true); first.close.dismiss(); assert.equal(app.inert, false); await flush();
 });
 
-test("平板推开后的再次布局不把自己的占位重复扣除", async () => {
-  resize(1024, 900, true); available = 1024;
-  const panel = openSheet({ title: "设置", body: "内容", anchor: trigger("right") });
-  available = 594; fireWindow("resize");
-  assert.equal(panel.el.dataset.push, "true"); assert.equal(app.style.getPropertyValue("--surface-right"), "430px");
-  panel.close.dismiss(); await flush();
+test("平板横竖屏变化保留输入焦点、选区和模态键盘循环", async () => {
+  resize(768, 1024, true); available = 768;
+  const button = trigger("right"), input = h("input", { type: "text", value: "未提交草稿" });
+  const panel = openSheet({ title: "设置", body: input, anchor: button });
+  await flush(); input.focus(); input.setSelectionRange(1, 3);
+  resize(1440, 1024, true); available = 1440; fireWindow("resize");
+  assert.equal(panel.el.dataset.push, "false"); assert.equal(panel.content.firstChild, input); assert.equal(input.value, "未提交草稿"); assert.equal(doc.activeElement, input);
+  assert.equal(input.selectionStart, 1); assert.equal(input.selectionEnd, 3); assert.equal(app.inert, true);
+  assert.equal(key("Tab").prevented, true); assert.equal(doc.activeElement, panel.el.querySelector(".sheet-close"));
+  assert.equal(key("Tab", { shiftKey: true }).prevented, true); assert.equal(doc.activeElement, input);
+  key("Escape"); assert.equal(doc.activeElement, button); assert.equal(app.inert, false); await flush();
+});
+
+test("工作台CSS隐藏的外层关闭按钮不抢首次焦点或Tab循环", async () => {
+  resize(1024, 900, true);
+  const origin = trigger("right"), first = h("button", { type: "button" }, "返回代码"), last = h("button", { type: "button" }, "工作台末尾操作");
+  const body = h("section", { class: "studio-workbench" }, first, last);
+  const panel = openSheet({ title: "创作工作台", presentation: "page", body, anchor: origin });
+  const heading = panel.el.querySelector(".sheet-heading"), outerClose = panel.el.querySelector(".sheet-close");
+  heading.style.display = "none";
+  // 模拟真实浏览器中 desktop.css 隐藏工作台外层标题后的布局矩形，保留DOM节点。
+  outerClose.getClientRects = () => heading.style.display === "none" ? [] : [{}];
+  await flush(); assert.equal(doc.activeElement, first); assert.equal(app.inert, true);
+  last.focus(); assert.equal(key("Tab").prevented, true); assert.equal(doc.activeElement, first);
+  assert.equal(key("Tab", { shiftKey: true }).prevented, true); assert.equal(doc.activeElement, last);
+  key("Escape"); assert.equal(doc.activeElement, origin); assert.equal(app.inert, false); await flush();
 });
 
 test("模式切换移动原有输入节点并清理手机拖动状态", async () => {

@@ -4,6 +4,27 @@ const app = (page) => page.locator("#app");
 const surface = (page, title) => page.locator(`.adaptive-surface[aria-label="${title}"]`);
 const geometry = (locator) => locator.evaluate((element) => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom, display: getComputedStyle(element).display }; });
 const mode = (testInfo) => testInfo.project.metadata.device;
+const tabletSizes = [{ width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 950 }];
+const viewportKey = ({ width, height }) => `${width}x${height}`;
+async function painted(page) { await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))); }
+async function collectClosedCenters(page, sizes = tabletSizes) {
+  const original = page.viewportSize(), baselines = new Map();
+  const originalMode = await app(page).getAttribute("data-layout");
+  for (const size of sizes) {
+    await page.setViewportSize(size);
+    // 浏览器 resize 事件可能晚于两帧绘制；采样必须等真实布局模式切换完成。
+    await expect(app(page)).toHaveAttribute("data-layout", "tablet"); await painted(page);
+    baselines.set(viewportKey(size), await geometry(page.locator(".center-stack")));
+  }
+  await page.setViewportSize(original); await expect(app(page)).toHaveAttribute("data-layout", originalMode); await painted(page);
+  return baselines;
+}
+async function assertCenterUnchanged(page, baselines) {
+  const baseline = baselines.get(viewportKey(page.viewportSize()));
+  expect(baseline, "当前视口应有关闭侧栏时的实测基准").toBeDefined();
+  const center = await geometry(page.locator(".center-stack"));
+  for (const key of ["x", "y", "width", "height"]) expect(Math.abs(center[key] - baseline[key]), `侧栏覆盖时编辑区 ${key} 应保持原值（${baseline[key]} → ${center[key]}）`).toBeLessThanOrEqual(1);
+}
 async function noOverflow(page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth)).toBe(true);
   const misses = await page.locator(".appbar button").evaluateAll((buttons) => buttons.filter((button) => {
@@ -57,22 +78,23 @@ async function assertDesktopColumns(page) {
   expect(modes.filter((button) => !button.withinClip || !button.reachable)).toEqual([]);
   await noOverflow(page);
 }
-async function assertSide(page, title, side, push) {
+async function assertSide(page, title, side, baselines) {
   const panel = surface(page, title), viewport = page.viewportSize();
   await expect(panel).toHaveClass(/\bin\b/);
   await expect(panel).toHaveAttribute("data-mode", "tablet");
   await expect(panel).toHaveAttribute("data-placement", "sidepane");
   await expect(panel).toHaveAttribute("data-side", side);
-  await expect(panel).toHaveAttribute("data-push", String(push));
+  await expect(panel).toHaveAttribute("data-push", "false");
+  await expect(panel).toHaveAttribute("role", "dialog");
+  await expect(panel).toHaveAttribute("aria-modal", "true");
   const r = await geometry(panel);
   expect(side === "left" ? Math.abs(r.x) : Math.abs(r.right - viewport.width)).toBeLessThanOrEqual(1);
   expect(r.height).toBeGreaterThan(viewport.height * 0.7);
-  expect(await app(page).evaluate((element) => element.inert)).toBe(!push);
-  const center = await geometry(page.locator(".center-stack"));
-  if (push) {
-    expect(center.width).toBeGreaterThanOrEqual(479);
-    expect(side === "left" ? center.x >= r.right - 1 : center.right <= r.x + 1).toBe(true);
-  }
+  expect(await app(page).evaluate((element) => element.inert)).toBe(true);
+  const scrim = page.locator(".surface-scrim.in").last();
+  await expect(scrim).toBeVisible();
+  expect(await scrim.evaluate((element) => element.hidden)).toBe(false);
+  await assertCenterUnchanged(page, baselines);
   await noOverflow(page);
 }
 async function assertClean(page) {
@@ -120,30 +142,57 @@ test("真实编辑器布局、分栏极限与设备输入方式", async ({ page,
       await expect(page.getByRole("separator", { name: "调整终端高度", exact: true })).toBeHidden();
     }
   } else if (mode(testInfo) === "tablet") {
+    const baselines = await collectClosedCenters(page);
     await toggleAI(page, true);
     const ai = await geometry(page.locator(".ai")), viewport = page.viewportSize();
     expect(Math.abs(ai.right - viewport.width)).toBeLessThanOrEqual(1);
     expect(ai.height).toBeGreaterThan(viewport.height * 0.7);
     await expect(page.locator(".ai .grip")).toBeHidden();
     await page.screenshot({ path: testInfo.outputPath("平板右侧AI.png"), fullPage: true });
+    for (const size of tabletSizes) {
+      await page.setViewportSize(size); await painted(page);
+      await expect(app(page)).toHaveClass(/tablet-panel-overlay/);
+      await expect(app(page)).not.toHaveClass(/files-open|tablet-files-push|tablet-ai-push/);
+      await expect(page.locator(".ai")).toHaveAttribute("aria-modal", "true");
+      expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(true);
+      await assertCenterUnchanged(page, baselines);
+      const scrim = page.locator(".drawer-scrim");
+      expect(await scrim.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("auto");
+      await showFiles(page);
+      await expect(app(page)).toHaveClass(/files-open.*ai-hidden|ai-hidden.*files-open/);
+      await expect(page.locator(".files")).toHaveAttribute("aria-modal", "true");
+      expect(Math.abs((await geometry(page.locator(".files"))).x)).toBeLessThanOrEqual(1);
+      await assertCenterUnchanged(page, baselines);
+      await toggleAI(page, true);
+      await expect(app(page)).not.toHaveClass(/files-open/);
+      await expect(page.locator(".files")).toHaveAttribute("aria-hidden", "true");
+      await assertCenterUnchanged(page, baselines);
+    }
+    await page.screenshot({ path: testInfo.outputPath("宽平板右侧AI覆盖.png"), fullPage: true });
+    await expect(page.locator(".ai .mode-slider button").first()).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(app(page)).toHaveClass(/ai-hidden/);
-    await showFiles(page);
-    const files = await geometry(page.locator(".files"));
-    expect(Math.abs(files.x)).toBeLessThanOrEqual(1);
-    expect(files.height).toBeGreaterThan(viewport.height * 0.7);
-    await page.screenshot({ path: testInfo.outputPath("平板左侧文件.png"), fullPage: true });
-    await page.setViewportSize({ width: 1024, height: 768 });
-    await expect(app(page)).toHaveClass(/tablet-files-push/);
-    expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(false);
-    expect((await geometry(page.locator(".center-stack"))).width).toBeGreaterThanOrEqual(479);
-    await page.setViewportSize({ width: 768, height: 1024 });
-    await expect(app(page)).toHaveClass(/tablet-panel-overlay/);
-    expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(true);
-    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "显示或隐藏 AI 面板", exact: true })).toBeFocused();
     expect(await app(page).evaluate((element) => element.inert)).toBe(false);
     expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(false);
     await expect(app(page)).not.toHaveClass(/tablet-files-push|tablet-panel-overlay/);
+    await showFiles(page);
+    await page.screenshot({ path: testInfo.outputPath("宽平板左侧文件覆盖.png"), fullPage: true });
+    await expect(page.locator(".files button").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "显示或隐藏文件面板", exact: true })).toBeFocused();
+    await assertCenterUnchanged(page, baselines);
+    const code = page.locator(".cm-content").first();
+    await code.click(); await expect(code).toBeFocused();
+    // 真正的工作台通知入口自动展开 AI；不启动模型、不制造假的面板或焦点。
+    await page.evaluate(async () => { const { events } = await import("/src/services/app.js"); events.emit("studio:show-chat"); });
+    await expect(page.locator(".ai .mode-slider button").first()).toBeFocused();
+    expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(true);
+    await assertCenterUnchanged(page, baselines);
+    await page.keyboard.press("Escape");
+    await expect(app(page)).toHaveClass(/ai-hidden/);
+    expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(false);
+    await expect(code).toBeFocused();
     await noOverflow(page);
   } else {
     await toggleAI(page, true);
@@ -160,9 +209,10 @@ test("真实编辑器布局、分栏极限与设备输入方式", async ({ page,
   expect(errors).toEqual([]);
 });
 
-test("完整设置页面保留输入，平板定向侧栏随可用空间推开或覆盖", async ({ page, services }, testInfo) => {
+test("完整设置页面保留输入，平板定向侧栏始终覆盖原编辑区", async ({ page, services }, testInfo) => {
   await bootWorkspace(page, services);
   await toggleAI(page, false);
+  const baselines = mode(testInfo) === "tablet" ? await collectClosedCenters(page) : mode(testInfo) === "desktop" ? await collectClosedCenters(page, [tabletSizes[0]]) : new Map();
   const settings = page.getByRole("button", { name: "设置", exact: true });
   await settings.click();
   const panel = surface(page, "设置"), search = panel.getByRole("searchbox", { name: "搜索设置", exact: true });
@@ -184,7 +234,7 @@ test("完整设置页面保留输入，平板定向侧栏随可用空间推开�
     expect(await app(page).evaluate((element) => element.inert)).toBe(false);
     await expect(panel.locator(".sheet-handle")).toBeHidden();
     await page.setViewportSize({ width: 768, height: 1024 });
-    await assertSide(page, "设置", "right", false);
+    await assertSide(page, "设置", "right", baselines);
     await expect(search).toHaveValue("权限");
     await expect(search).toBeFocused();
     await page.setViewportSize(testInfo.project.use.viewport);
@@ -192,17 +242,14 @@ test("完整设置页面保留输入，平板定向侧栏随可用空间推开�
     await expect(search).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath("桌面设置主页面.png"), fullPage: true });
   } else if (mode(testInfo) === "tablet") {
-    await assertSide(page, "设置", "right", page.viewportSize().width >= 1000);
+    await assertSide(page, "设置", "right", baselines);
     await page.screenshot({ path: testInfo.outputPath("平板设置初始.png"), fullPage: true });
-    // 同一个设置节点在横竖屏间重排，不重新创建输入；关闭后清理推挤与 inert。
-    await page.setViewportSize({ width: 1024, height: 768 });
-    await assertSide(page, "设置", "right", true);
-    await expect(search).toHaveValue("权限");
-    await expect(search).toBeFocused();
-    await page.setViewportSize({ width: 768, height: 1024 });
-    await assertSide(page, "设置", "right", false);
-    await expect(search).toHaveValue("权限");
-    await expect(search).toBeFocused();
+    // 同一个输入节点在768/1024/1440保留文本与焦点；侧栏从不挤压编辑区。
+    for (const size of tabletSizes) {
+      await page.setViewportSize(size); await painted(page);
+      await assertSide(page, "设置", "right", baselines);
+      await expect(search).toHaveValue("权限"); await expect(search).toBeFocused();
+    }
     await page.screenshot({ path: testInfo.outputPath("平板右侧覆盖.png"), fullPage: true });
   } else {
     await expect(panel).toHaveAttribute("data-placement", "fullscreen");
@@ -217,32 +264,59 @@ test("完整设置页面保留输入，平板定向侧栏随可用空间推开�
   await page.getByRole("button", { name: "Git", exact: true }).click();
   const git = surface(page, "Git");
   await expect(git).toBeVisible();
-  if (mode(testInfo) === "tablet") await assertSide(page, "Git", "left", page.viewportSize().width >= 1000);
+  if (mode(testInfo) === "tablet") await assertSide(page, "Git", "left", baselines);
   if (mode(testInfo) === "phone") await expect(git).toHaveAttribute("data-placement", "bottomsheet");
   await page.screenshot({ path: testInfo.outputPath("左侧Git.png"), fullPage: true });
   await closeTop(page); await assertClean(page); await noOverflow(page);
 
-  if (mode(testInfo) !== "phone") {
-    // 宽触控平板可以同时容纳左右面板；普通1024平板不强行挤成三列。
-    if (mode(testInfo) === "tablet") await page.setViewportSize({ width: 1440, height: 950 });
+  if (mode(testInfo) === "desktop") {
     await showFiles(page); await settings.click();
     await expect(surface(page, "设置")).toBeVisible();
-    if (mode(testInfo) === "tablet") await assertSide(page, "设置", "right", true);
     await page.locator('.node[data-path="README.md"] > .row').click();
     await expect(surface(page, "设置")).toHaveCount(0);
     await expect(page.locator(".cm-content").first()).toBeVisible();
     await expect(page.locator(".cm-content").first()).toContainText("临时界面回归项目");
     expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(false);
+  } else if (mode(testInfo) === "tablet") {
+    await page.setViewportSize({ width: 1440, height: 950 }); await painted(page);
+    await settings.click(); await assertSide(page, "设置", "right", baselines);
+    // 完整模态侧栏阻止背景操作；关闭后才允许打开文件。
+    const fileButton = page.getByRole("button", { name: "显示或隐藏文件面板", exact: true });
+    await expect(fileButton.click({ trial: true, timeout: 700 })).rejects.toThrow(/Timeout|intercepts pointer events|not receive pointer/);
+    await expect(app(page)).not.toHaveClass(/files-open/);
+    await closeTop(page); await assertClean(page);
+    await showFiles(page); await page.locator('.node[data-path="README.md"] > .row').click();
+    await expect(page.locator(".cm-content").first()).toBeVisible();
+    await expect(page.locator(".cm-content").first()).toContainText("临时界面回归项目");
+    expect(await page.locator(".center-stack").evaluate((element) => element.inert)).toBe(false);
+    await assertCenterUnchanged(page, baselines);
   }
 
+  if (mode(testInfo) === "tablet") { await page.setViewportSize(testInfo.project.use.viewport); await painted(page); }
   const workbenchButton = page.getByRole("button", { name: "创作工作台", exact: true });
   await workbenchButton.click();
   await expect(page.locator(".studio-workbench")).toBeVisible();
   if (mode(testInfo) === "desktop") {
     await expect(surface(page, "创作工作台")).toHaveAttribute("data-placement", "page");
     expect(await surface(page, "创作工作台").evaluate((element) => !!element.closest(".workspace-pages"))).toBe(true);
-  } else if (mode(testInfo) === "tablet") await assertSide(page, "创作工作台", "right", true);
-  else {
+  } else if (mode(testInfo) === "tablet") {
+    const workbenchPanel = surface(page, "创作工作台");
+    const back = workbenchPanel.getByRole("button", { name: "返回代码", exact: true });
+    await assertSide(page, "创作工作台", "right", baselines);
+    // 被 CSS 隐藏的通用标题关闭按钮不能占据首个焦点或截断 Tab 回环。
+    await expect(workbenchPanel.locator(".sheet-heading .sheet-close")).toBeHidden();
+    await expect(back).toBeFocused();
+    const controls = workbenchPanel.locator('button:visible:enabled, input:visible:enabled, textarea:visible:enabled, select:visible:enabled, a[href]:visible, [tabindex]:visible:not([tabindex="-1"])');
+    expect(await controls.count()).toBeGreaterThan(1);
+    for (const size of tabletSizes) {
+      await page.setViewportSize(size); await painted(page);
+      await assertSide(page, "创作工作台", "right", baselines);
+      await controls.last().focus();
+      await page.keyboard.press("Tab"); await expect(back).toBeFocused();
+      await page.keyboard.press("Shift+Tab"); await expect(controls.last()).toBeFocused();
+      await page.keyboard.press("Tab"); await expect(back).toBeFocused();
+    }
+  } else {
     await expect(app(page).locator(".center-stack")).toHaveClass(/studio-workbench-open/);
     await expect(surface(page, "创作工作台")).toHaveCount(0);
   }

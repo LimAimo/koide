@@ -1,6 +1,6 @@
-# Koide 0.11.0 当前状态
+# Koide 1.0.0 当前状态
 
-Koide 0.11.0 提供独立桌面工作区和平板侧栏，沿用创作工作台和创作房间。**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。功能用法和实际边界见 [创作工作台](WORKBENCH.md) 与 [桌面和平板操作说明](RESPONSIVE_UI.md)。
+Koide 1.0.0 提供独立桌面工作区和平板覆盖侧栏，沿用创作工作台和创作房间。**Native Runtime 是本地应用的主路径**；Python Bridge 保留为浏览器与 LAN 兼容模式，不再是 Windows / Android 本地使用的前置条件。功能用法和实际边界见 [创作工作台](WORKBENCH.md) 与 [桌面和平板操作说明](RESPONSIVE_UI.md)。
 
 ## Native 主链
 
@@ -32,13 +32,13 @@ UI 只通过 `apps/web/src/services/runtime/` 调用领域能力。当前 Native
 
 ## 桌面与平板界面
 
-桌面采用可调宽的文件 / 编辑器 / AI 常驻分栏和可调高终端；完整功能页进入主区域，普通面板与确认居中，菜单锚定入口。平板按触控方式和可用空间独立识别，文件向左、AI 向右，其他侧栏跟随触发入口；剩余编辑区至少 480px 时推开内容，否则覆盖。缩放和横竖屏切换保留输入并清理旧焦点隔离。手机保留自由高度 AI 和全屏设置。
+桌面采用可调宽的文件 / 编辑器 / AI 常驻分栏和可调高终端；完整功能页进入主区域，普通面板与确认居中，菜单锚定入口。平板按触控方式和可用空间独立识别，文件向左、AI 向右，其他侧栏跟随触发入口；侧栏始终覆盖编辑区，不改变其位置和宽度，文件与 AI 侧栏互斥。缩放和横竖屏切换保留输入并清理旧焦点隔离。手机保留自由高度 AI 和全屏设置。
 
 鼠标、键盘、触控和减少动态效果均有回归覆盖；操作方法见 [桌面和平板操作说明](RESPONSIVE_UI.md)。平板模拟和手机浏览器验证不代替实体 Android 平板验收。
 
 ## Android SAF
 
-SAF 后端自 0.9.0 起进入主线；历史版本通过 Android CI 编译与 APK 签名验证。它支持原地 tree/read/write/patch/create/delete/rename/copy、search/glob、large write、Checkpoint、Trash、Export 和项目 `AGENTS.md`。本轮在 Windows 验证桌面、触控平板模拟和手机浏览器布局；0.11.0 Android APK 与真机验证仍由 Android CI / 设备回归完成，不能由手机浏览器结果替代。
+SAF 后端自 0.9.0 起进入主线；历史版本通过 Android CI 编译与 APK 签名验证。它支持原地 tree/read/write/patch/create/delete/rename/copy、search/glob、large write、Checkpoint、Trash、Export 和项目 `AGENTS.md`。本轮在 Windows 验证桌面、触控平板模拟和手机浏览器布局；1.0.0 Android APK 与真机验证仍由 Android CI / 设备回归完成，不能由手机浏览器结果替代。
 
 ## Provider
 

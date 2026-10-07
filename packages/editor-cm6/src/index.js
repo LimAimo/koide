@@ -203,4 +203,4 @@ class CM6Editor {
 }
 
 export function createCM6Editor(options = {}) { return new CM6Editor(options); }
-export const version = "0.11.0";
+export const version = "1.0.0";
