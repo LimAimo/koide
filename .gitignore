@@ -9,3 +9,4 @@ apps/web/vendor/
 apps/native/src-tauri/target/
 apps/native/src-tauri/gen/
 *.keystore
+website/
