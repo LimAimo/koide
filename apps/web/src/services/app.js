@@ -32,6 +32,19 @@ export const state = createStore({
   conversationId: null,               // 当前对话，任务之间延续上下文
 });
 
+let workspaceEpoch = 0, lastWorkspaceKey = "null";
+state.subscribe((s) => {
+  const key = JSON.stringify(s.workspace?.location || s.workspace?.roots || null);
+  if (key !== lastWorkspaceKey) { lastWorkspaceKey = key; workspaceEpoch++; }
+});
+export const getWorkspaceEpoch = () => workspaceEpoch;
+const assertWorkspace = (expected) => { if (expected !== workspaceEpoch) throw new Error("项目已切换，文件操作已取消"); };
+async function workspaceParams(params, expected) {
+  const { studioState } = await import("./studio.js");
+  assertWorkspace(expected);
+  return { ...params, workspace_key: studioState.get().workspaceKey || undefined };
+}
+
 const setAgent = (patch) => state.set((s) => ({ agent: { ...s.agent, ...patch } }));
 export const tabOf = (path) => state.get().tabs.find((t) => t.path === path);
 export const activeTab = () => tabOf(state.get().active);
@@ -54,6 +67,10 @@ export async function initConnection() {
 }
 
 export async function connectManual(target) {
+  state.set({ workspace: null, hello: null, tabs: [], active: null, editing: {}, conversationId: null,
+    profiles: [], permissions: null, approvals: [], git: { is_repo: false, files: {} },
+    agent: { running: false, state: "idle", detail: "", taskId: null } });
+  events.emit("conversation:load", null);
   await runtime.connect(target, { timeout: 6000 });
   const rem = settingsStore.get().bridge.remembered.filter((t) => `${t.host}:${t.port}` !== `${target.host}:${target.port}`);
   saveSettings({ bridge: { remembered: [target, ...rem].slice(0, 6) } });
@@ -71,14 +88,15 @@ export async function openWorkspace(location) {
 
 // ---- Git 状态（文件树上的角标、Git 面板的分支信息）-----------------------------------------------------------------------
 export async function refreshGit() {
+  const generation = workspaceEpoch;
   const workspace = state.get().workspace;
   if (runtime.status !== "online" || !workspace || workspace?.capabilities?.git === false) return state.set({ git: { is_repo: false, files: {} } });
   try {
     const st = await runtime.git.status();
     const files = {};
     for (const f of st.files || []) files[f.path] = f.index === "?" ? "U" : f.index !== " " ? f.index : f.worktree;
-    state.set({ git: { ...st, files } });
-  } catch { state.set({ git: { is_repo: false, files: {} } }); }
+    if (generation === workspaceEpoch) state.set({ git: { ...st, files } });
+  } catch { if (generation === workspaceEpoch) state.set({ git: { is_repo: false, files: {} } }); }
 }
 const refreshGitSoon = (() => { let t; return () => { clearTimeout(t); t = setTimeout(refreshGit, 700); }; })();
 runtime.on("git.changed", refreshGitSoon);
@@ -97,9 +115,14 @@ export function restoreConversation() {
 }
 
 export async function openFile(path, { preview = false } = {}) {
+  const generation = workspaceEpoch;
   const existing = tabOf(path);
-  if (existing) { state.set({ active: path }); return existing; }
-  const res = await runtime.files.read({ path });
+  if (existing) { if (!preview) keepTab(path); state.set({ active: path }); return tabOf(path); }
+  const res = await runtime.files.read(await workspaceParams({ path }, generation));
+  assertWorkspace(generation);
+  // 双击和并发打开可能同时等待磁盘；迟到的读取不能覆盖已经打开的编辑缓冲区。
+  const opened = tabOf(res.path) || tabOf(path);
+  if (opened) { if (!preview) keepTab(opened.path); state.set({ active: opened.path }); return tabOf(opened.path); }
   const tab = { path: res.path, text: res.content || "", savedText: res.content || "", revision: res.revision,
     binary: !!res.binary, dirty: false, preview, pinned: false, conflict: false };
   state.set((s) => {
@@ -108,6 +131,11 @@ export async function openFile(path, { preview = false } = {}) {
     return { tabs: [...tabs, tab], active: tab.path };
   });
   return tab;
+}
+
+/** 预览标签转为普通标签，仍可正常关闭，不占用另一个预览位置。 */
+export function keepTab(path) {
+  if (tabOf(path)?.preview) patchTab(path, { preview: false });
 }
 
 const DEMO_BEFORE = "def add(a, b):\n    return a - b\n\ndef greet(name):\n    print('hi', name)\n\nresult = add(1, 2)\n";
@@ -157,19 +185,23 @@ export function updateText(path, text) {
 }
 
 export async function saveTab(path) {
+  const generation = workspaceEpoch;
   const t = tabOf(path);
   if (!t || !t.dirty) return { saved: false };
   if (t.virtual) throw new Error("草稿本不会保存到任何地方。请先打开项目文件夹，才能保存文件。");
-  const res = await runtime.files.write({ path, content: t.text, base_revision: t.revision });
-  patchTab(path, { savedText: t.text, revision: res.revision, dirty: false, conflict: false });
+  const res = await runtime.files.write(await workspaceParams({ path, content: t.text, base_revision: t.revision }, generation));
+  assertWorkspace(generation);
+  patchTab(path, { savedText: t.text, revision: res.revision, dirty: tabOf(path)?.text !== t.text, conflict: false });
   return { saved: true };
 }
 
 /** Resolve a conflict banner: take the disk version or overwrite disk with the local buffer. */
 export async function resolveConflict(path, keep) {
+  const generation = workspaceEpoch;
   const t = tabOf(path);
   if (!t) return;
-  const disk = await runtime.files.read({ path });
+  const disk = await runtime.files.read(await workspaceParams({ path }, generation));
+  assertWorkspace(generation);
   if (keep === "theirs") {
     patchTab(path, { text: disk.content, savedText: disk.content, revision: disk.revision, dirty: false, conflict: false });
     events.emit("editor:replace", { path, text: disk.content });
@@ -180,7 +212,9 @@ export async function resolveConflict(path, keep) {
 }
 
 export async function refreshTabFromDisk(path) {
-  const disk = await runtime.files.read({ path });
+  const generation = workspaceEpoch;
+  const disk = await runtime.files.read(await workspaceParams({ path }, generation));
+  assertWorkspace(generation);
   patchTab(path, { text: disk.content, savedText: disk.content, revision: disk.revision, dirty: false, conflict: false });
   events.emit("editor:replace", { path, text: disk.content });
 }
@@ -204,9 +238,11 @@ function seedAgentFollowTab(c) {
 }
 
 async function followAgentChangeFromDisk(c) {
+  const generation = workspaceEpoch;
   if (!settingsStore.get().followAgentEdits || c.actor !== "agent" || c.kind === "delete") return;
   try {
-    const disk = await runtime.files.read({ path: c.path });
+    const disk = await runtime.files.read(await workspaceParams({ path: c.path }, generation));
+    assertWorkspace(generation);
     if (disk.binary) return;
     const synthetic = { ...c, after_text: disk.content || "", after_rev: disk.revision };
     applyFsChanged(synthetic);
@@ -247,12 +283,14 @@ runtime.on("fs.changed", (c) => {
 });
 
 runtime.on("fs.external", async (d) => {
+  const generation = workspaceEpoch;
   events.emit("tree:refresh", null);
   for (const ch of d.changes) {
     const t = tabOf(ch.path);
     if (!t || ch.kind !== "modify") continue;
     try {
       const h = await runtime.files.hash({ path: ch.path });
+      assertWorkspace(generation);
       if (h.revision === t.revision) continue;
       if (t.dirty) patchTab(ch.path, { conflict: true });
       else await refreshTabFromDisk(ch.path);
@@ -280,7 +318,7 @@ runtime.on("approval.resolved", (a) => state.set((s) => ({ approvals: s.approval
 
 /** 返回开始页：关闭当前项目（同时停止正在运行的智能体和终端），清空标签页。 */
 export async function goHome() {
-  if (state.get().workspace && runtime.status === "online") await runtime.workspace.close().catch(() => {});
+  if (state.get().workspace && runtime.status === "online") await runtime.workspace.close();
   state.set({ workspace: null, tabs: [], active: null, editing: {}, conversationId: null, git: { is_repo: false, files: {} } });
   events.emit("conversation:load", null);
 }
@@ -295,13 +333,22 @@ export function moveTab(path, dir) {
   });
 }
 
-export async function startAgent(goal) {
+export async function startAgent(goal, { mode = null, freshConversation = false } = {}) {
+  const generation = workspaceEpoch;
   const s = settingsStore.get();
   const profile = s.agent.profile || state.get().profiles[0]?.id;
   if (!profile) throw new Error("请先在「设置」里添加一个模型服务商");
   const t = activeTab();
   const goalText = t ? `${goal}\n\n(The user currently has "${t.path}" open in the editor.)` : goal;
-  const r = await runtime.agent.start({ goal: goalText, profile, mode: s.agent.mode, reasoning: s.agent.reasoning, web_search: !!s.agent.webSearch, limits: s.agent.limits, conversation_id: state.get().conversationId });
+  const { buildContext, studioState, getProjectEpoch, assertProjectEpoch } = await import("./studio.js");
+  assertWorkspace(generation);
+  const projectEpoch = getProjectEpoch();
+  const context = await buildContext(goalText);
+  assertProjectEpoch(projectEpoch);
+  const r = await runtime.agent.start({ goal: context.goal, attachments: context.attachments, workspace_key: context.workspace_key, profile, mode: mode || s.agent.mode, reasoning: s.agent.reasoning, web_search: !!s.agent.webSearch, limits: s.agent.limits, conversation_id: freshConversation ? null : state.get().conversationId });
+  assertProjectEpoch(projectEpoch);
+  events.emit("studio:show-chat");
+  studioState.set({ attachments: [], selections: [], sentContext: context.included });
   if (r.conversation_id && r.conversation_id !== state.get().conversationId) setConversation(r.conversation_id);
   return r;
 }

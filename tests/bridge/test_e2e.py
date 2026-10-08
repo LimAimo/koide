@@ -168,10 +168,10 @@ class E2EBase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.td = tempfile.TemporaryDirectory()
         tmp = Path(self.td.name)
-        self.proj = tmp / "proj"
+        self.proj = (tmp / "proj").resolve()
         (self.proj / "src").mkdir(parents=True)
-        (self.proj / "src" / "app.py").write_text(SRC)
-        (tmp / "outside.txt").write_text("secret")
+        (self.proj / "src" / "app.py").write_text(SRC, encoding="utf-8", newline="")
+        (tmp / "outside.txt").write_text("secret", encoding="utf-8", newline="")
         self.app = BridgeApp(tmp / "data", ROOT / "apps" / "web", ROOT / "bridge")
         self.server = await serve(self.app, "127.0.0.1", 0)
         self.port = self.server.sockets[0].getsockname()[1]
@@ -328,7 +328,7 @@ class E2E(E2EBase):
 
     async def test_user_edit_conflict_and_transactional_write_over_ws(self):
         rd = await self.c.rpc("fs.read", {"path": "src/app.py"})
-        (self.proj / "src" / "app.py").write_text("changed by someone else\n")
+        (self.proj / "src" / "app.py").write_text("changed by someone else\n", encoding="utf-8", newline="")
         err = await self.c.rpc("fs.write", {"path": "src/app.py", "content": "mine", "base_revision": rd["revision"]},
                                expect_error=True)
         self.assertEqual(err["code"], "CONFLICT")

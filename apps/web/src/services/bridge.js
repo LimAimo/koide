@@ -18,6 +18,8 @@ export class Bridge {
     this._wantOnline = false;
     this._retry = 0;
     this._retryTimer = null;
+    this._connectionGeneration = 0;
+    this._cancelConnect = null;
   }
 
   onStatus(fn) { this._statusHandlers.add(fn); return () => this._statusHandlers.delete(fn); }
@@ -53,42 +55,61 @@ export class Bridge {
 
   connect(target, { timeout = 5000, quiet = false } = {}) {
     this.close(true);
+    const generation = this._connectionGeneration;
     this.target = target;
     this._wantOnline = true;
     this._setStatus("connecting");
     return new Promise((resolve, reject) => {
       const url = `${target.tls ? "wss" : "ws"}://${target.host.includes(":") ? `[${target.host}]` : target.host}:${target.port}/ws${target.token ? `?token=${encodeURIComponent(target.token)}` : ""}`;
-      let settled = false;
+      let settled = false, ws, timer;
+      const current = () => generation === this._connectionGeneration;
+      const currentSocket = () => current() && this.ws === ws;
       const fail = (why) => {
         if (settled) return;
         settled = true;
-        try { ws.close(); } catch { /* ignore */ }
-        if (quiet) { this._wantOnline = false; this._setStatus("offline"); }
+        clearTimeout(timer);
+        if (this._cancelConnect === fail) this._cancelConnect = null;
+        if (current()) {
+          this.ws = null;
+          this._rejectPending(why);
+          this._detachSocket(ws);
+          try { ws?.close(); } catch { /* ignore */ }
+          if (quiet) this._wantOnline = false;
+          this._setStatus("offline");
+          if (!quiet) this._scheduleRetry();
+        }
         reject(new Error(why));
       };
-      let ws;
+      this._cancelConnect = fail;
       try { ws = new WebSocket(url); } catch (e) { return fail(e.message); }
       this.ws = ws;
-      const timer = setTimeout(() => fail("连接超时"), timeout);
+      timer = setTimeout(() => fail("连接超时"), timeout);
       ws.onopen = async () => {
+        if (!currentSocket()) return;
         try {
-          this.hello = await this.rpc("hello");
+          const hello = await this.rpc("hello");
+          if (!currentSocket()) return;
+          this.hello = hello;
           settled = true;
           clearTimeout(timer);
+          if (this._cancelConnect === fail) this._cancelConnect = null;
           this._retry = 0;
           this._setStatus("online");
           this._emit("hello", this.hello);
           resolve(this.hello);
         } catch (e) { clearTimeout(timer); fail(e.message); }
       };
-      ws.onmessage = (ev) => this._onMessage(ev.data);
+      ws.onmessage = (ev) => { if (currentSocket()) this._onMessage(ev.data); };
       ws.onerror = () => {};
       ws.onclose = () => {
+        if (!currentSocket()) return;
         clearTimeout(timer);
-        for (const p of this._pending.values()) p.reject(new Error("连接已断开"));
-        this._pending.clear();
         if (!settled) return fail("无法连接");
-        if (this.ws === ws) { this.ws = null; this._setStatus("offline"); this._scheduleRetry(); }
+        this.ws = null;
+        this._detachSocket(ws);
+        this._rejectPending("连接已断开");
+        this._setStatus("offline");
+        this._scheduleRetry();
       };
     });
   }
@@ -96,21 +117,38 @@ export class Bridge {
   _scheduleRetry() {
     if (!this._wantOnline || !this.target) return;
     const delay = Math.min(10000, 500 * 2 ** this._retry++);
+    const generation = this._connectionGeneration, target = this.target;
     clearTimeout(this._retryTimer);
     this._retryTimer = setTimeout(() => {
-      if (!this._wantOnline || this.status === "online") return;
+      if (generation !== this._connectionGeneration || !this._wantOnline || this.status === "online") return;
       this._setStatus("connecting");
-      this.connect(this.target, { timeout: 4000 }).catch(() => { this._setStatus("offline"); this._scheduleRetry(); });
+      this.connect(target, { timeout: 4000 }).catch(() => {});
     }, delay);
   }
 
   close(silent = false) {
     this._wantOnline = false;
     clearTimeout(this._retryTimer);
+    this._connectionGeneration++;
     const ws = this.ws;
     this.ws = null;
-    if (ws) { ws.onclose = null; try { ws.close(); } catch { /* ignore */ } }
+    const cancel = this._cancelConnect;
+    this._cancelConnect = null;
+    cancel?.("连接已取消");
+    this._rejectPending("连接已断开");
+    this._detachSocket(ws);
+    if (ws) { try { ws.close(); } catch { /* ignore */ } }
     if (!silent) this._setStatus("offline");
+  }
+
+  _detachSocket(ws) {
+    if (ws) ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+  }
+
+  _rejectPending(message) {
+    const pending = [...this._pending.values()];
+    this._pending.clear();
+    for (const p of pending) p.reject(new Error(message));
   }
 
   _onMessage(raw) {
@@ -130,7 +168,8 @@ export class Bridge {
       const id = ++this._id;
       const t = setTimeout(() => { this._pending.delete(id); reject(new Error(`${method} 请求超时`)); }, timeoutMs);
       this._pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
-      this.ws.send(JSON.stringify({ type: "rpc", id, method, params }));
+      try { this.ws.send(JSON.stringify({ type: "rpc", id, method, params })); }
+      catch (error) { this._pending.delete(id); clearTimeout(t); reject(error); }
     });
   }
 

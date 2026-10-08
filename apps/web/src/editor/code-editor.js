@@ -78,6 +78,7 @@ export class CodeEditor {
 
   getValue() { return this.input.value; }
   getSelectionText() { return this.input.value.slice(this.input.selectionStart, this.input.selectionEnd); }
+  getCaretOffset() { return this.input.selectionEnd || 0; }
   getScroll() { return { top: this.el.scrollTop, left: this.el.scrollLeft }; }
   setScroll(s) { this.el.scrollTop = s.top; this.el.scrollLeft = s.left; }
   focus() { this.input.focus(); }

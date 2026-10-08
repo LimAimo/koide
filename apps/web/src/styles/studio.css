@@ -1,0 +1,103 @@
+/* 创作工作台使用 IDE 现有色彩变量，保持编辑器、项目面板与手机视图一致。 */
+.studio-workbench { min-height: 0; min-width: 0; flex: 1; display: flex; flex-direction: column; background: var(--surface); overflow: hidden; }
+.studio-workbench[hidden] { display: none; }
+.studio-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 78px; padding: 16px 22px; border-bottom: 1px solid var(--outline-variant); background: var(--surface-1); }
+.studio-heading > div { display: grid; gap: 5px; min-width: 0; }
+.studio-heading strong { font-size: 18px; font-weight: 600; }
+.studio-heading .btn { flex: none; min-height: 44px; }
+.studio-tabs { display: flex; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain; padding: 8px 12px; flex-shrink: 0; border-bottom: 1px solid var(--outline-variant); }
+.studio-tabs button { white-space: nowrap; min-height: 44px; min-width: 44px; flex: none; }
+.studio-tabs [aria-current="page"] { background: var(--primary-container); color: var(--on-primary-container); }
+.studio-status { padding: 8px 22px 0; font-size: 12px; line-height: 1.6; color: var(--on-surface-variant); overflow-wrap: anywhere; }
+.studio-status:empty { display: none; }
+.studio-body { overflow: auto; padding: 20px 22px 28px; display: flex; flex-direction: column; gap: 16px; min-height: 0; min-width: 0; overscroll-behavior: contain; }
+.studio-card { border: 1px solid var(--outline-variant); border-radius: 18px; padding: 20px; background: var(--surface-1); display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-width: 0; }
+.studio-card > h3 { width: 100%; margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.studio-card > p, .studio-card > .studio-field, .studio-card > details { width: 100%; min-width: 0; }
+.studio-card .btn { min-height: 44px; max-width: 100%; }
+.studio-muted { color: var(--on-surface-variant); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.studio-card pre { width: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; background: var(--surface-2); padding: 14px; border-radius: 10px; font: 12px/1.7 var(--font-code); margin: 0; }
+.studio-field { display: grid; gap: 8px; font-size: 12px; color: var(--on-surface-variant); }
+.studio-field .text-field { font-size: 14px; min-height: 44px; }
+.studio-field textarea { min-height: 88px; }
+.studio-command { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; width: 100%; min-width: 0; }
+.studio-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--font-code); font-size: 12px; }
+.studio-command .btn { flex: none; }
+.studio-command > .studio-muted { flex: 0 0 100%; font-size: 12px; }
+.studio-card > .studio-command:has(.btn.filled) { padding-top: 14px; border-top: 1px solid var(--outline-variant); }
+.studio-criterion, .studio-memory, .studio-experiment { width: 100%; padding: 16px; background: var(--surface-2); border-radius: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; overflow-wrap: anywhere; }
+.studio-criterion strong, .studio-memory p, .studio-experiment h4 { width: 100%; margin: 0; }
+.studio-criterion > .studio-muted, .studio-criterion > code { flex: 0 0 100%; font-size: 12px; overflow-wrap: anywhere; }
+.studio-criterion > code { font-family: var(--font-code); }
+.studio-evidence summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; line-height: 1.6; overflow-wrap: anywhere; }
+.studio-evidence.passed summary { color: var(--ok); }
+.studio-evidence.failed summary { color: var(--error); }
+.studio-evidence.stale summary { color: var(--on-surface-variant); }
+.studio-preview-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.studio-preview-tools .btn { min-height: 44px; }
+.studio-preview-stage { overflow: auto; text-align: center; background: var(--surface-2); border: 1px solid var(--outline-variant); border-radius: 16px; padding: 8px; min-height: 420px; flex-shrink: 0; }
+.studio-preview-frame { width: 100%; height: 600px; border: 0; background: white; max-width: 100%; transition: width .2s; border-radius: 8px; }
+.studio-workbench-open > .editor-pane { display: none; }
+.studio-workbench-open { min-height: 0; }
+.studio-attachment-tray { display: flex; gap: 8px; overflow-x: auto; max-width: 100%; padding: 6px; }
+.studio-attachment { display: flex; align-items: center; gap: 6px; border: 1px solid var(--outline-variant); border-radius: 10px; padding: 4px; flex-shrink: 0; }
+.studio-attachment img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
+.studio-attachment button { min-height: 40px; min-width: 40px; }
+.studio-composer-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.studio-composer-tools button { min-width: 40px; min-height: 40px; }
+.studio-annotation-stage { position: relative; touch-action: none; max-width: 100%; overflow: hidden; }
+.studio-annotation-stage canvas { display: block; max-width: 100%; height: auto; touch-action: none; }
+.studio-context-sheet code { overflow-wrap: anywhere; }
+.studio-context-sheet li { padding: 8px 0; }
+.studio-context-sheet details { min-width: 0; margin: 8px 0; border: 1px solid var(--outline-variant); border-radius: 12px; padding: 0 12px; background: var(--surface-1); }
+.studio-context-sheet summary { min-height: 44px; padding: 12px 0; cursor: pointer; overflow-wrap: anywhere; }
+.studio-context-sheet pre { min-width: 0; max-width: 100%; margin: 0 0 12px; padding: 12px; border-radius: 8px; background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 360px; font: 12px/1.7 var(--font-code); }
+.studio-control-note { padding: 8px; font-size: 12px; line-height: 1.6; }
+.studio-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0 20px; width: 100%; }
+.studio-compare .studio-card { min-width: 0; padding: 16px; align-content: start; }
+.studio-compare pre { max-height: min(52dvh, 560px); }
+.sheet:has(.studio-compare) { max-width: min(1100px, 96vw); }
+.sheet:has(.studio-compare) .sheet-body > div > details > summary { min-height: 44px; padding: 10px 8px; font-family: var(--font-code); font-size: 12px; overflow-wrap: anywhere; cursor: pointer; }
+/* 用 ID 选择器覆盖 layout.css/chat.css 的桌面网格；手机文件抽屉仍可按需打开。 */
+#app.mode-wide.studio-focus .files, #app.mode-wide.studio-focus .r1 { display: none !important; }
+#app.mode-wide.studio-focus .work { grid-template-columns: minmax(0, 1fr) 1px var(--ai-w, 380px); }
+#app.mode-wide.studio-focus.ai-hidden .work { grid-template-columns: minmax(0, 1fr); }
+#app.no-ws .appbar > button[aria-label="创作工作台"] { display: none; }
+@media (max-width: 600px) {
+  .studio-heading { padding: 12px; min-height: 64px; }
+  .studio-heading .studio-muted { display: none; }
+  .studio-heading strong { font-size: 16px; }
+  .studio-body { padding: 12px 12px 24px; gap: 12px; }
+  .studio-status { padding: 8px 12px 0; }
+  .studio-card { padding: 14px; border-radius: 14px; gap: 10px; }
+  .studio-card > .btn { padding: 0 15px; font-size: 13px; }
+  .studio-preview-frame { height: 520px; }
+  .studio-tabs { padding: 4px; }
+  .studio-preview-stage { min-height: 300px; }
+  .studio-criterion, .studio-memory, .studio-experiment { padding: 12px; }
+  .studio-compare { grid-template-columns: minmax(0, 1fr); }
+  .studio-compare .studio-card { padding: 12px; }
+  .sheet:has(.studio-compare) { max-width: 100%; }
+}
+/* 窄手机用两排工具栏，所有操作保留 40px 触控面积，不把新增入口挤出屏幕。 */
+@media (max-width: 520px) {
+  #app.mode-port { --studio-appbar-height: 100px; }
+  #app.mode-port .appbar { display: grid; grid-template-columns: 40px 40px minmax(0, 1fr) 40px 40px; grid-template-rows: 44px 44px; gap: 4px; height: calc(100px + env(safe-area-inset-top)); padding: calc(4px + env(safe-area-inset-top)) 6px 4px; }
+  #app.mode-port .appbar .icon-btn { width: 40px; height: 40px; min-width: 40px; min-height: 40px; justify-self: center; }
+  #app.mode-port .appbar .title, #app.mode-port .appbar .spacer { display: none; }
+  #app.mode-port .appbar .home-btn { grid-area: 1 / 1; }
+  #app.mode-port .appbar .menu-btn { grid-area: 1 / 2; }
+  #app.mode-port .appbar .capsule { grid-area: 1 / 3; max-width: 100%; width: 100%; min-width: 0; padding: 0 8px; justify-self: stretch; font-size: 11px; gap: 6px; }
+  #app.mode-port .appbar .ambience-button { grid-area: 1 / 4; }
+  #app.mode-port .appbar > button[aria-label="设置"] { grid-area: 1 / 5; }
+  #app.mode-port .appbar .ai-toggle { grid-area: 2 / 1; }
+  #app.mode-port .appbar > button[aria-label="Git"] { grid-area: 2 / 2; }
+  #app.mode-port .appbar > button[aria-label="时光机"] { grid-area: 2 / 3; }
+  #app.mode-port .appbar > button[aria-label="显示或隐藏终端"] { grid-area: 2 / 4; }
+  #app.mode-port .appbar > button[aria-label="创作工作台"] { grid-area: 2 / 5; }
+  #app.no-ws.mode-port .appbar { height: calc(56px + env(safe-area-inset-top)); grid-template-rows: 44px; }
+  #app.no-ws.mode-port { --studio-appbar-height: 56px; }
+  #app.no-ws.mode-port .appbar .capsule { grid-column: 1 / 5; width: auto; justify-self: start; }
+  #app.no-ws.mode-port .appbar > button[aria-label="创作工作台"] { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .studio-preview-frame { transition: none; } }

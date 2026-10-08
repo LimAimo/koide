@@ -1,6 +1,6 @@
 {
   "name": "diffusion-ide",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Koide：本地优先的跨平台 AI IDE，原生应用由 Rust Native Core 驱动。",
@@ -14,11 +14,16 @@
     "build": "pnpm -r --if-present run build",
     "build:cm6": "pnpm --filter @diffusion/editor-cm6 run build",
     "watch:cm6": "pnpm --filter @diffusion/editor-cm6 run watch",
-    "test": "bash tests/run-all.sh",
-    "test:web": "node --test tests/web/",
-    "test:bridge": "python3 -m unittest tests.bridge.test_workspace tests.bridge.test_e2e tests.bridge.test_providers tests.bridge.test_git tests.bridge.test_extras",
+    "test": "pnpm build:cm6 && pnpm test:bridge && pnpm test:web && node scripts/check-native-parity.mjs",
+    "test:web": "node --test tests/web/*.test.mjs",
+    "test:bridge": "python3 -m unittest discover -s tests/bridge -v",
+    "test:browser": "playwright test --config tests/browser/playwright.config.mjs",
     "native:dev": "pnpm --filter @diffusion/native dev",
     "native:build": "pnpm --filter @diffusion/native build",
     "android:build": "pnpm --filter @diffusion/native android:build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "typescript": "^5.9.3"
   }
 }

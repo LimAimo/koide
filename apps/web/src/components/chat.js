@@ -6,6 +6,7 @@ import { renderMarkdown } from "./markdown.js";
 import { openSheet, confirmDialog } from "./overlays.js";
 import { runtime, events, state, startAgent, stopAgent, respondApproval, setConversation } from "../services/app.js";
 import { settingsStore, saveSettings } from "../services/store.js";
+import { createContextInput } from "./context-input.js";
 
 const MODES = [["chat", "聊天"], ["read", "只读"], ["edit", "编辑"], ["agent", "智能体"]];
 const SUGGESTIONS = ["讲讲这个项目的结构", "找出构建失败的原因并修复", "给主要模块补上测试"];
@@ -23,7 +24,8 @@ export function createChat({ onNeedExpand, onOpenTimeline, onOpenProviders }) {
   const composerCard = h("div", { class: "composer-card" },
     input,
     h("div", { class: "composer-actions" }, profileChip, h("span", { class: "composer-spacer" }), send));
-  const composer = h("div", { class: "composer" }, composerCard);
+  const contextInput = createContextInput();
+  const composer = h("div", { class: "composer" }, contextInput.tray, contextInput.tools, composerCard);
   const el = h("section", { class: "ai", "aria-label": "AI 助手" }, head, scroll, composer);
 
   // ---- helpers -------------------------------------------------------------------------------------------------

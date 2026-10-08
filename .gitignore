@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 node_modules/
+*.egg-info/
 dist/
 apps/web/vendor/
 .diffusion-tmp-*
@@ -8,3 +9,4 @@ apps/web/vendor/
 apps/native/src-tauri/target/
 apps/native/src-tauri/gen/
 *.keystore
+website/

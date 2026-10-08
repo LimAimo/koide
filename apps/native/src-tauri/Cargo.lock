@@ -629,9 +629,11 @@ dependencies = [
 
 [[package]]
 name = "diffusion-native"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "diffusion-saf",
+ "getrandom 0.2.17",
  "portable-pty",
  "reqwest 0.12.28",
  "serde",
@@ -640,12 +642,13 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
+ "tokio",
  "zip",
 ]
 
 [[package]]
 name = "diffusion-saf"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3843,7 +3846,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

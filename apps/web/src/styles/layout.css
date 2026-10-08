@@ -1,4 +1,4 @@
-/* Layout modes are set by JS on #app: mode-wide (>=900px), mode-land (narrow landscape), mode-port (portrait phone). */
+/* 桌面常驻分栏；平板左右侧栏；手机保留横屏分栏与纵屏聊天面板。 */
 #app { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--surface); }
 
 .appbar {
@@ -27,21 +27,40 @@
 .capsule[data-state="online"] .glyph { background: var(--ok); }
 .capsule[data-state="offline"] .glyph { background: var(--outline); }
 
-.work { flex: 1; min-height: 0; position: relative; display: grid; }
+.work { flex: 1; min-height: 0; min-width: 0; position: relative; display: grid; }
 .editor-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); position: relative; }
 .files { background: var(--surface-1); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .files-head { flex: none; display: flex; align-items: center; gap: 4px; height: 48px; padding: 0 8px 0 16px; font-weight: 500; }
 .files-head .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree { flex: 1; overflow: auto; padding: 0 8px 24px; overscroll-behavior: contain; }
-.resizer { position: relative; cursor: col-resize; touch-action: none; background: var(--outline-variant); width: 1px; }
+.resizer { position: relative; z-index: 6; cursor: col-resize; touch-action: none; background: var(--outline-variant); width: 1px; }
 .resizer::before { content: ""; position: absolute; inset: 0 -8px; }
-.resizer:hover, .resizer.dragging { background: var(--primary); width: 3px; margin: 0 -1px; }
+.resizer:hover, .resizer.dragging, .resizer:focus-visible { background: var(--primary); }
+.resizer:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; z-index: 5; }
 
 /* wide: files | editor | AI */
 #app.mode-wide .work { grid-template-columns: var(--files-w, 264px) 1px minmax(0, 1fr) 1px var(--ai-w, 380px); }
 #app.mode-wide .menu-btn { display: none; }
 #app.mode-wide .ai { border-radius: 0; }
 #app.mode-wide .grip { display: none; }
+#app.mode-wide .files-close { display: none; }
+
+/* 平板侧栏始终覆盖编辑区，打开与关闭均不改变编辑器尺寸。 */
+#app.mode-tablet .work {
+  grid-template-columns: minmax(0, 1fr);
+}
+#app.mode-tablet .resizer, #app.mode-tablet .grip { display: none; }
+#app.mode-tablet .menu-btn { display: none; }
+#app.mode-tablet .files, #app.mode-tablet .ai {
+  position: absolute; z-index: 40; top: 0; bottom: 0; min-height: 0;
+  border-radius: 0; box-shadow: var(--shadow); transition: transform .24s var(--ease-decel);
+}
+#app.mode-tablet .files { left: 0; width: var(--tablet-files-w, 320px); transform: translateX(-102%); border-right: 1px solid var(--outline-variant); }
+#app.mode-tablet .ai { right: 0; width: var(--tablet-ai-w, 420px); transform: translateX(0); border-left: 1px solid var(--outline-variant); }
+#app.mode-tablet:not(.ai-hidden) .ai { animation: tablet-ai-in .24s var(--ease-decel); }
+@keyframes tablet-ai-in { from { transform: translateX(102%); } to { transform: translateX(0); } }
+#app.mode-tablet .drawer-scrim { top: var(--appbar-height, 56px); }
+#app.mode-tablet .node > .row { min-height: 44px; }
 
 /* narrow landscape: editor | AI, files in a drawer */
 #app.mode-land .work { grid-template-columns: minmax(0, 1fr) 1px var(--ai-w, 340px); }
@@ -66,11 +85,12 @@
 #app .work { transition: grid-template-columns .3s var(--ease-decel); }
 .drawer-scrim { position: fixed; inset: 0; z-index: 35; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .25s; }
 #app.files-open .files { transform: translateX(0) !important; }
-#app.files-open .drawer-scrim { opacity: 1; pointer-events: auto; }
+#app.files-open:not(.mode-tablet) .drawer-scrim,
+#app.mode-tablet.tablet-panel-overlay .drawer-scrim { opacity: 1; pointer-events: auto; }
 #app.files-dragging .files { transition: none !important; }
 #app.files-dragging .drawer-scrim { transition: none; }
 
-.grip { flex: none; display: flex; justify-content: center; padding: 10px 0 6px; touch-action: none; cursor: grab; }
+.grip { flex: none; display: flex; justify-content: center; padding: 10px 0 6px; min-height: 24px; touch-action: none; cursor: grab; }
 .grip span { width: 36px; height: 4px; border-radius: 2px; background: var(--outline); opacity: .7; transition: width .2s, opacity .2s; }
 .ai.dragging .grip span { width: 52px; opacity: 1; }
 
@@ -79,6 +99,7 @@
   position: relative; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 8px 0 calc(8px + var(--depth, 0) * 14px);
   border-radius: var(--r-sm); user-select: none; -webkit-user-select: none; cursor: pointer; overflow: hidden; touch-action: manipulation;
 }
+#app.mode-port .node > .row, #app.mode-land .node > .row { min-height: 40px; }
 .node > .row::after { content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity .15s; pointer-events: none; }
 .node > .row:active::after { opacity: .12; }
 @media (hover: hover) { .node > .row:hover::after { opacity: .06; } }
@@ -108,6 +129,7 @@
 /* Desktop panel visibility controls: file tree and AI can be independently hidden. */
 .panel-files-toggle { display: none; }
 #app.mode-wide .panel-files-toggle { display: inline-flex; }
+#app.mode-tablet .panel-files-toggle { display: inline-flex; }
 #app.mode-wide.files-hidden .files,
 #app.mode-wide.files-hidden .resizer.r1 { display: none; }
 #app.mode-wide.files-hidden .work { grid-template-columns: minmax(0, 1fr) 1px var(--ai-w, 380px); }
@@ -117,6 +139,10 @@
 .center-stack { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .center-stack > .editor-pane { flex: 1 1 auto; min-height: 0; }
 .terminal-dock { flex: 0 0 clamp(190px, 32vh, 340px); min-height: 0; border-top: 1px solid var(--outline-variant); background: var(--surface-1); overflow: hidden; }
+.terminal-dock { flex-basis: var(--terminal-h, 260px); border-top: 0; }
+.resizer.r3 { width: 100%; height: 1px; flex: 0 0 1px; cursor: row-resize; }
+.resizer.r3::before { inset: -6px 0; }
+#app:not(.terminal-open) .resizer.r3, #app:not(.mode-wide) .resizer.r3 { display: none; }
 .terminal-dock[hidden] { display: none !important; }
 .terminal-dock-head { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; font-size: 12px; font-weight: 600; color: var(--on-surface-variant); }
 .terminal-dock-head .spacer { flex: 1; }

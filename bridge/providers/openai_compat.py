@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import socket
 import urllib.error
 import urllib.request
 import uuid
 from typing import AsyncIterator
+from .media import ensure_vision, normalize_usage
 
 PRESETS = {
     "openai": {"endpoint": "https://api.openai.com/v1", "model": "gpt-4.1"},
@@ -117,8 +119,10 @@ class OpenAICompatible:
 
     @staticmethod
     def _request(profile: dict, api_key: str | None, messages: list, tools: list | None):
+        ensure_vision(profile, messages)
         url = profile["endpoint"].rstrip("/") + "/chat/completions"
-        body = {"model": profile["model"], "messages": messages, "stream": True}
+        body = {"model": profile["model"], "messages": messages, "stream": True,
+                "stream_options": {"include_usage": True}}
         body.update({k: v for k, v in (profile.get("sampling") or {}).items() if v is not None})
         mode = profile.get("_reasoning_mode", "auto")
         kind = profile.get("kind", "openai_compatible")
@@ -180,6 +184,8 @@ class OpenAICompatible:
                 if chunk.get("error"):
                     emit({"type": "error", "message": str(chunk["error"])[:500], "truncated": False})
                     return
+                if isinstance(chunk.get("usage"), dict):
+                    emit({"type": "usage", "usage": normalize_usage("openai_compatible", chunk["usage"])})
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
@@ -253,13 +259,16 @@ class OpenAICompatible:
         req = self._request(profile, api_key, messages, tools)
 
         def emit(ev):
-            loop.call_soon_threadsafe(q.put_nowait, ev)
+            if not holder["stop"] and not loop.is_closed():
+                loop.call_soon_threadsafe(q.put_nowait, ev)
 
         def run():
             try:
                 self._worker(req, emit, holder)
             finally:
-                loop.call_soon_threadsafe(q.put_nowait, None)
+                _close_response(holder.get("resp"))
+                if not holder["stop"] and not loop.is_closed():
+                    loop.call_soon_threadsafe(q.put_nowait, None)
 
         threading.Thread(target=run, daemon=True).start()
         cancel_wait = asyncio.ensure_future(cancel.wait()) if cancel else None
@@ -268,7 +277,7 @@ class OpenAICompatible:
                 getter = asyncio.ensure_future(q.get())
                 waiters = {getter} | ({cancel_wait} if cancel_wait else set())
                 done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-                if getter not in done:
+                if getter not in done or cancel_wait in done:
                     getter.cancel()
                     return
                 ev = getter.result()
@@ -281,10 +290,9 @@ class OpenAICompatible:
                 cancel_wait.cancel()
             resp = holder.get("resp")
             if resp is not None:
-                try:
-                    resp.close()
-                except Exception:
-                    pass
+                # Closing BufferedReader can wait for a blocked reader's lock. Shutdown the socket
+                # first on a daemon so cancellation never blocks the event loop.
+                threading.Thread(target=_close_response, args=(resp,), daemon=True).start()
 
     async def complete(self, profile: dict, api_key: str | None, messages: list,
                        cancel: asyncio.Event | None = None) -> str:
@@ -295,6 +303,20 @@ class OpenAICompatible:
             elif ev["type"] == "error":
                 raise ProviderError(ev["message"])
         return "".join(text)
+
+
+def _close_response(resp) -> None:
+    if resp is None:
+        return
+    try:
+        sock = resp.fp.raw._sock
+        sock.shutdown(socket.SHUT_RDWR)
+    except (AttributeError, OSError):
+        pass
+    try:
+        resp.close()
+    except Exception:
+        pass
 
 
 def get_provider(kind: str) -> OpenAICompatible:

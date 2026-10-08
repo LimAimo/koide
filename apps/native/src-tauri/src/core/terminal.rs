@@ -39,6 +39,7 @@ fn emit(app: &AppHandle, event: &str, data: Value) {
 #[derive(Clone)]
 pub struct TerminalManager {
     commands: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
+    command_cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     #[cfg(not(target_os = "android"))]
     sessions: Arc<Mutex<HashMap<String, Arc<PtySession>>>>,
     last_session: Arc<Mutex<Option<String>>>,
@@ -60,77 +61,126 @@ impl TerminalManager {
     pub fn new() -> Self {
         Self {
             commands: Arc::new(Mutex::new(HashMap::new())),
+            command_cancels: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(not(target_os = "android"))]
             sessions: Arc::new(Mutex::new(HashMap::new())),
             last_session: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub fn run(&self, app: &AppHandle, cwd: &Path, command: &str, timeout_seconds: f64) -> Result<Value, RuntimeError> {
+    pub fn run(
+        &self,
+        app: &AppHandle,
+        cwd: &Path,
+        command: &str,
+        timeout_seconds: f64,
+    ) -> Result<Value, RuntimeError> {
         if command.trim().is_empty() {
             return Err(RuntimeError::new("BAD_COMMAND", "命令不能为空"));
         }
         let id = unique_id("cmd-");
         let mut cmd = shell_command(command);
-        cmd.current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
             .map_err(|e| RuntimeError::new("PROCESS_START_FAILED", format!("无法启动命令：{e}")))?;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let shared = Arc::new(Mutex::new(child));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.command_cancels
+            .lock()
+            .map_err(|_| RuntimeError::new("LOCK_POISONED", "命令状态锁已损坏"))?
+            .insert(id.clone(), cancelled.clone());
         self.commands
             .lock()
             .map_err(|_| RuntimeError::new("LOCK_POISONED", "命令状态锁已损坏"))?
             .insert(id.clone(), shared.clone());
 
-        emit(app, "terminal.start", json!({"source":"user","id":id,"command":command}));
+        emit(
+            app,
+            "terminal.start",
+            json!({"source":"user","id":id,"command":command}),
+        );
+        let mut readers = Vec::new();
         if let Some(out) = stdout {
-            stream_pipe(app.clone(), id.clone(), "stdout", out);
+            readers.push(stream_pipe(app.clone(), id.clone(), "stdout", out));
         }
         if let Some(err) = stderr {
-            stream_pipe(app.clone(), id.clone(), "stderr", err);
+            readers.push(stream_pipe(app.clone(), id.clone(), "stderr", err));
         }
 
         let app2 = app.clone();
         let id2 = id.clone();
         let commands = self.commands.clone();
+        let cancels = self.command_cancels.clone();
         let timeout = Duration::from_secs_f64(timeout_seconds.clamp(1.0, 3600.0));
         thread::spawn(move || {
             let started = Instant::now();
-            let exit_code = loop {
-                let status = shared.lock().ok().and_then(|mut child| child.try_wait().ok().flatten());
+            let (exit_code, timed_out) = loop {
+                let status = shared
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok().flatten());
                 if let Some(status) = status {
-                    break status.code().unwrap_or(-1);
+                    break (status.code().unwrap_or(-1), false);
                 }
                 if started.elapsed() >= timeout {
                     if let Ok(mut child) = shared.lock() {
-                        let _ = child.kill();
+                        terminate_command(&mut child);
+                        let _ = child.wait();
                     }
-                    break -1;
+                    break (-1, true);
                 }
                 thread::sleep(Duration::from_millis(50));
             };
+            for reader in readers {
+                let _ = reader.join();
+            }
             if let Ok(mut map) = commands.lock() {
                 map.remove(&id2);
             }
-            emit(&app2, "terminal.exit", json!({"source":"user","id":id2,"exit_code":exit_code}));
+            if let Ok(mut map) = cancels.lock() {
+                map.remove(&id2);
+            }
+            emit(
+                &app2,
+                "terminal.exit",
+                json!({"source":"user","id":id2,"exit_code":exit_code,"timed_out":timed_out,"cancelled":cancelled.load(Ordering::SeqCst)}),
+            );
         });
 
         Ok(json!({"id":id}))
     }
 
     pub fn kill(&self, id: &str) -> Result<Value, RuntimeError> {
+        if let Some(cancel) = self
+            .command_cancels
+            .lock()
+            .ok()
+            .and_then(|m| m.get(id).cloned())
+        {
+            cancel.store(true, Ordering::SeqCst);
+        }
         if let Some(child) = self.commands.lock().ok().and_then(|m| m.get(id).cloned()) {
             if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
+                terminate_command(&mut child);
             }
         }
         Ok(json!({}))
     }
 
     #[cfg(target_os = "android")]
-    pub fn open(&self, _app: &AppHandle, _cwd: &Path, _cols: u16, _rows: u16) -> Result<Value, RuntimeError> {
+    pub fn open(
+        &self,
+        _app: &AppHandle,
+        _cwd: &Path,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<Value, RuntimeError> {
         Err(RuntimeError::new(
             "NO_PTY",
             "Android 原生壳当前不提供交互式 PTY；一次性命令模式仍可用",
@@ -138,17 +188,27 @@ impl TerminalManager {
     }
 
     #[cfg(not(target_os = "android"))]
-    pub fn open(&self, app: &AppHandle, cwd: &Path, cols: u16, rows: u16) -> Result<Value, RuntimeError> {
+    pub fn open(
+        &self,
+        app: &AppHandle,
+        cwd: &Path,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Value, RuntimeError> {
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-        let alive = self.sessions
+        let alive = self
+            .sessions
             .lock()
             .map_err(|_| RuntimeError::new("LOCK_POISONED", "终端状态锁已损坏"))?
             .values()
             .filter(|s| s.alive.load(Ordering::SeqCst))
             .count();
         if alive >= MAX_SESSIONS {
-            return Err(RuntimeError::new("TOO_MANY", format!("最多同时打开 {MAX_SESSIONS} 个终端")));
+            return Err(RuntimeError::new(
+                "TOO_MANY",
+                format!("最多同时打开 {MAX_SESSIONS} 个终端"),
+            ));
         }
 
         let pair = native_pty_system()
@@ -207,7 +267,11 @@ impl TerminalManager {
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]).into_owned();
                         append_history(&read_session.history, &text);
-                        emit(&app_reader, "terminal.data", json!({"id":read_session.id,"data":text}));
+                        emit(
+                            &app_reader,
+                            "terminal.data",
+                            json!({"id":read_session.id,"data":text}),
+                        );
                     }
                 }
             }
@@ -288,10 +352,15 @@ impl TerminalManager {
     }
 
     pub fn close_all(&self) {
+        if let Ok(cancels) = self.command_cancels.lock() {
+            for cancel in cancels.values() {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }
         if let Ok(commands) = self.commands.lock() {
             for child in commands.values() {
                 if let Ok(mut child) = child.lock() {
-                    let _ = child.kill();
+                    terminate_command(&mut child);
                 }
             }
         }
@@ -313,17 +382,20 @@ impl TerminalManager {
         }
         #[cfg(not(target_os = "android"))]
         {
-            let sessions = self.sessions
+            let sessions = self
+                .sessions
                 .lock()
                 .ok()
                 .map(|m| {
                     m.values()
-                        .map(|s| json!({
-                            "id":s.id,
-                            "pid":s.pid,
-                            "alive":s.alive.load(Ordering::SeqCst),
-                            "shell":s.shell
-                        }))
+                        .map(|s| {
+                            json!({
+                                "id":s.id,
+                                "pid":s.pid,
+                                "alive":s.alive.load(Ordering::SeqCst),
+                                "shell":s.shell
+                            })
+                        })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -340,7 +412,11 @@ impl TerminalManager {
         #[cfg(not(target_os = "android"))]
         {
             let session = self.session(id)?;
-            let data = session.history.lock().map(|h| h.clone()).unwrap_or_default();
+            let data = session
+                .history
+                .lock()
+                .map(|h| h.clone())
+                .unwrap_or_default();
             Ok(json!({"data":data,"alive":session.alive.load(Ordering::SeqCst)}))
         }
     }
@@ -384,7 +460,12 @@ fn append_history(history: &Mutex<String>, text: &str) {
     }
 }
 
-fn stream_pipe<R: Read + Send + 'static>(app: AppHandle, id: String, stream: &'static str, mut reader: R) {
+fn stream_pipe<R: Read + Send + 'static>(
+    app: AppHandle,
+    id: String,
+    stream: &'static str,
+    mut reader: R,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -392,11 +473,15 @@ fn stream_pipe<R: Read + Send + 'static>(app: AppHandle, id: String, stream: &'s
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let text = String::from_utf8_lossy(&buf[..n]).into_owned();
-                    emit(&app, "terminal.output", json!({"source":"user","id":id,"stream":stream,"data":text}));
+                    emit(
+                        &app,
+                        "terminal.output",
+                        json!({"source":"user","id":id,"stream":stream,"data":text}),
+                    );
                 }
             }
         }
-    });
+    })
 }
 
 fn shell_command(command: &str) -> Command {
@@ -425,7 +510,9 @@ fn shell_command(command: &str) -> Command {
     }
     #[cfg(all(unix, not(target_os = "android")))]
     {
-        let shell = find_on_path("bash").or_else(|| find_on_path("sh")).unwrap_or_else(|| PathBuf::from("/bin/sh"));
+        let shell = find_on_path("bash")
+            .or_else(|| find_on_path("sh"))
+            .unwrap_or_else(|| PathBuf::from("/bin/sh"));
         let mut cmd = Command::new(shell);
         cmd.args(["-c", command]);
         cmd
@@ -446,7 +533,9 @@ fn interactive_shell() -> String {
     }
     #[cfg(unix)]
     {
-        std::env::var("SHELL").ok().filter(|s| !s.is_empty())
+        std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.is_empty())
             .or_else(|| find_on_path("bash").map(|p| p.to_string_lossy().into_owned()))
             .or_else(|| find_on_path("sh").map(|p| p.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "/bin/sh".into())
@@ -483,22 +572,37 @@ pub fn listening_ports() -> Vec<Value> {
                 }
             }
         }
-        return ports.into_iter().map(|(port,family)| json!({"port":port,"family":family})).collect();
+        return ports
+            .into_iter()
+            .map(|(port, family)| json!({"port":port,"family":family}))
+            .collect();
     }
     #[cfg(windows)]
     {
-        let out = Command::new("netstat").args(["-ano","-p","tcp"]).output().ok();
+        let out = Command::new("netstat")
+            .args(["-ano", "-p", "tcp"])
+            .output()
+            .ok();
         let mut ports = BTreeSet::new();
-        if let Some(out)=out {
+        if let Some(out) = out {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
-                let fields=line.split_whitespace().collect::<Vec<_>>();
-                if fields.len() < 4 || fields[3] != "LISTENING" { continue; }
-                if let Some(port)=fields[1].rsplit(':').next().and_then(|p|p.parse::<u16>().ok()) {
+                let fields = line.split_whitespace().collect::<Vec<_>>();
+                if fields.len() < 4 || fields[3] != "LISTENING" {
+                    continue;
+                }
+                if let Some(port) = fields[1]
+                    .rsplit(':')
+                    .next()
+                    .and_then(|p| p.parse::<u16>().ok())
+                {
                     ports.insert(port);
                 }
             }
         }
-        return ports.into_iter().map(|port|json!({"port":port,"family":"TCP"})).collect();
+        return ports
+            .into_iter()
+            .map(|port| json!({"port":port,"family":"TCP"}))
+            .collect();
     }
     #[allow(unreachable_code)]
     Vec::new()
@@ -514,59 +618,157 @@ pub fn run_capture(
         return Err(RuntimeError::new("BAD_COMMAND", "命令不能为空"));
     }
     let mut cmd = shell_command(command);
-    cmd.current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
         .map_err(|e| RuntimeError::new("PROCESS_START_FAILED", format!("无法启动命令：{e}")))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let capture = Arc::new(Mutex::new(String::new()));
-    for pipe in [stdout.map(Pipe::Stdout), stderr.map(Pipe::Stderr)].into_iter().flatten() {
+    let mut readers = Vec::new();
+    for pipe in [stdout.map(Pipe::Stdout), stderr.map(Pipe::Stderr)]
+        .into_iter()
+        .flatten()
+    {
         let out = capture.clone();
-        thread::spawn(move || {
+        readers.push(thread::spawn(move || {
             let mut reader: Box<dyn Read + Send> = match pipe {
                 Pipe::Stdout(r) => Box::new(r),
                 Pipe::Stderr(r) => Box::new(r),
             };
-            let mut buf=[0u8;4096];
+            let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0)|Err(_)=>break,
-                    Ok(n)=>{
-                        if let Ok(mut text)=out.lock() {
-                            if text.len()<MAX_CAPTURE {
-                                let remain=MAX_CAPTURE-text.len();
-                                let piece=String::from_utf8_lossy(&buf[..n]);
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if let Ok(mut text) = out.lock() {
+                            if text.len() < MAX_CAPTURE {
+                                let remain = MAX_CAPTURE - text.len();
+                                let piece = String::from_utf8_lossy(&buf[..n]);
                                 text.extend(piece.chars().take(remain));
                             }
                         }
                     }
                 }
             }
-        });
+        }));
     }
-    let started=Instant::now();
-    let (code,timed_out,cancelled)=loop {
+    let started = Instant::now();
+    let (code, timed_out, cancelled) = loop {
         if cancel.load(Ordering::SeqCst) {
-            let _=child.kill();
-            break (-1,false,true);
+            terminate_command(&mut child);
+            break (-1, false, true);
         }
-        if started.elapsed()>=timeout {
-            let _=child.kill();
-            break (-1,true,false);
+        if started.elapsed() >= timeout {
+            terminate_command(&mut child);
+            break (-1, true, false);
         }
-        if let Some(status)=child.try_wait().map_err(|e|RuntimeError::new("PROCESS_WAIT_FAILED",e.to_string()))? {
-            break (status.code().unwrap_or(-1),false,false);
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| RuntimeError::new("PROCESS_WAIT_FAILED", e.to_string()))?
+        {
+            break (status.code().unwrap_or(-1), false, false);
         }
         thread::sleep(Duration::from_millis(50));
     };
-    let _=child.wait();
-    thread::sleep(Duration::from_millis(30));
-    let output=capture.lock().map(|s|s.clone()).unwrap_or_default();
+    let _ = child.wait();
+    for reader in readers {
+        let _ = reader.join();
+    }
+    let output = capture.lock().map(|s| s.clone()).unwrap_or_default();
     Ok(json!({"exit_code":code,"output":output,"timed_out":timed_out,"cancelled":cancelled}))
 }
 
 enum Pipe {
     Stdout(std::process::ChildStdout),
     Stderr(std::process::ChildStderr),
+}
+
+/// Only terminate a process owned by this command; Windows shells can otherwise leave children
+/// holding stdout/stderr open and prevent completion after a timeout or explicit stop.
+fn terminate_command(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .creation_flags(0x08000000)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    #[test]
+    fn fast_command_drains_all_output_before_returning() {
+        let command = if cfg!(windows) {
+            "Write-Output ('x' * 30000); Write-Output 'terminal_tail'"
+        } else {
+            "printf '%30000s\\n' x; printf 'terminal_tail\\n'"
+        };
+        let result = run_capture(
+            &std::env::temp_dir(),
+            command,
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["exit_code"], 0);
+        assert!(
+            result["output"]
+                .as_str()
+                .unwrap()
+                .ends_with("terminal_tail\n")
+                || result["output"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("terminal_tail\r\n")
+        );
+        assert!(result["output"].as_str().unwrap().len() >= 30000);
+        assert_eq!(result["timed_out"], false);
+        assert_eq!(result["cancelled"], false);
+    }
+    #[test]
+    fn nonzero_exit_and_timeout_are_explicit() {
+        let command = if cfg!(windows) {
+            "Write-Output 'before_nonzero'; exit 7"
+        } else {
+            "printf 'before_nonzero\\n'; exit 7"
+        };
+        let result = run_capture(
+            &std::env::temp_dir(),
+            command,
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["exit_code"], 7);
+        assert!(result["output"]
+            .as_str()
+            .unwrap()
+            .contains("before_nonzero"));
+        let command = if cfg!(windows) {
+            "Start-Sleep -Seconds 5"
+        } else {
+            "sleep 5"
+        };
+        let started = Instant::now();
+        let result = run_capture(
+            &std::env::temp_dir(),
+            command,
+            Duration::from_millis(200),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["timed_out"], true);
+        assert_eq!(result["cancelled"], false);
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
 }

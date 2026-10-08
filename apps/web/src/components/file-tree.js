@@ -66,21 +66,37 @@ export function createFileTree({ onOpen, onNavigate }) {
     }
     const cancel = () => { clearTimeout(timer); timer = null; };
     row.addEventListener("pointerdown", (e) => {
+      cancel();
       long = false; sx = e.clientX; sy = e.clientY;
-      timer = setTimeout(() => { long = true; timer = null; navigator.vibrate && navigator.vibrate(12); menuFor(n); }, 450);
+      if (e.pointerType === "mouse" || (e.button !== undefined && e.button !== 0)) return;
+      timer = setTimeout(() => { long = true; timer = null; navigator.vibrate && navigator.vibrate(12); menuFor(n, row); }, 450);
     });
     row.addEventListener("pointermove", (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
     row.addEventListener("pointerup", cancel);
     row.addEventListener("pointercancel", cancel);
-    row.addEventListener("contextmenu", (e) => { e.preventDefault(); cancel(); menuFor(n); });
-    row.addEventListener("click", () => {
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault(); cancel(); row.focus();
+      const anchor = e.clientX || e.clientY ? { element: row, getBoundingClientRect: () => ({ left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY, width: 1, height: 1 }) } : row;
+      menuFor(n, anchor);
+    });
+    row.addEventListener("click", (event) => {
       if (long) { long = false; return; }
+      if (n.type === "dir" && event.detail > 1) return;
       selectedPath = n.path;
       paint();
       n.type === "dir" ? toggle(n.path) : onOpen(n.path, { preview: true });
       if (n.type !== "dir") onNavigate && onNavigate();
     });
-    row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); } });
+    row.addEventListener("dblclick", (event) => {
+      if (n.type === "dir") return;
+      event.preventDefault(); cancel(); selectedPath = n.path; paint();
+      onOpen(n.path, { preview: false });
+      onNavigate?.();
+    });
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); cancel(); menuFor(n, row); }
+      else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); }
+    });
   }
 
   function reconcile(container, nodes, depth) {
@@ -247,7 +263,7 @@ export function createFileTree({ onOpen, onNavigate }) {
     await createNamed(dir, name, kind);
   }
 
-  function menuFor(n) {
+  function menuFor(n, anchor) {
     const dir = n.type === "dir" ? n.path : parentOf(n.path);
     openMenu(n.name, [
       { label: "在此新建文件", icon: "add", onClick: () => createIn(dir, "file") },
@@ -269,7 +285,7 @@ export function createFileTree({ onOpen, onNavigate }) {
         if (!(await confirmDialog({ title: `删除 ${n.name}？`, message: "文件会先移到 Diffusion 回收站，之后可以在「设置 › 工作区」里恢复。", confirmLabel: "删除", danger: true }))) return;
         try { await runtime.files.delete({ path: n.path }); toast("已移到 Diffusion 回收站"); } catch (e) { toast(e.message); }
       } },
-    ]);
+    ], { anchor });
   }
 
   return { el, refresh, reset, create: () => openCreateDialog(), newFile: () => createIn(".", "file"), newFolder: () => createIn(".", "dir") };

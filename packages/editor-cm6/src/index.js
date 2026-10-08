@@ -106,6 +106,7 @@ class CM6Editor {
 
   getValue() { return this.view.state.doc.toString(); }
   getSelectionText() { const r = this.view.state.selection.main; return this.view.state.sliceDoc(r.from, r.to); }
+  getCaretOffset() { return this.view.state.selection.main.head; }
   getScroll() { return { top: this.view.scrollDOM.scrollTop, left: this.view.scrollDOM.scrollLeft }; }
   setScroll(s) { this.view.scrollDOM.scrollTop = s.top; this.view.scrollDOM.scrollLeft = s.left; }
   focus() { this.view.focus(); }
@@ -202,4 +203,4 @@ class CM6Editor {
 }
 
 export function createCM6Editor(options = {}) { return new CM6Editor(options); }
-export const version = "0.9.0";
+export const version = "1.0.0";

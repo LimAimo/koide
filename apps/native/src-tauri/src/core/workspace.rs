@@ -198,6 +198,16 @@ impl Workspace {
 
     pub fn info(&self) -> Value { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.info(), WorkspaceBackend::Saf(x) => x.info() } }
     pub fn location(&self) -> Value { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => json!({"kind":"local","path":x.root_path().to_string_lossy(),"name":x.info()["name"]}), WorkspaceBackend::Saf(x) => x.location() } }
+    pub fn terminal_directory(&self, raw: &str) -> Result<PathBuf, RuntimeError> {
+        match &*self.lock()? {
+            WorkspaceBackend::Local(x) => {
+                let path = if raw == "." || raw.is_empty() { x.root_path() } else { x.resolve_existing(raw)? };
+                if !path.is_dir() { return Err(RuntimeError::new("NOT_A_FOLDER", "命令工作目录不是文件夹")); }
+                Ok(path)
+            }
+            WorkspaceBackend::Saf(_) => Err(RuntimeError::new("WORKSPACE_CAPABILITY", "SAF 项目不能作为系统命令工作目录")),
+        }
+    }
     pub fn is_saf(&self) -> bool { matches!(&*self.lock().expect("workspace lock"), WorkspaceBackend::Saf(_)) }
     pub fn local_root_path(&self) -> Option<PathBuf> { match &*self.lock().ok()? { WorkspaceBackend::Local(x) => Some(x.root_path()), WorkspaceBackend::Saf(_) => None } }
     pub fn storage_key(&self) -> String { match &*self.lock().expect("workspace lock") { WorkspaceBackend::Local(x) => x.storage_key(), WorkspaceBackend::Saf(x) => x.storage_key() } }
@@ -226,6 +236,48 @@ impl Workspace {
     pub fn create(&self,p:&str,k:&str,c:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.create(p,k,c),WorkspaceBackend::Saf(x)=>x.create(p,k,c)}}
     pub fn patch(&self,p:&str,b:&str,e:&[Value])->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.patch(p,b,e),WorkspaceBackend::Saf(x)=>x.patch(p,b,e)}}
     pub fn delete(&self,p:&str)->Result<Mutation,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.delete(p),WorkspaceBackend::Saf(x)=>x.delete(p)}}
+    pub fn delete_if_revision(&self, p: &str, base: &str) -> Result<Mutation, RuntimeError> {
+        let backend = self.lock()?;
+        let current = match &*backend { WorkspaceBackend::Local(x) => x.hash(p)?, WorkspaceBackend::Saf(x) => x.hash(p)? };
+        if current["revision"].as_str() != Some(base) { return Err(RuntimeError::new("REVISION_CONFLICT", "删除前文件已变化").with_data(json!({"path":p,"current_revision":current["revision"]}))); }
+        match &*backend { WorkspaceBackend::Local(x) => x.delete(p), WorkspaceBackend::Saf(x) => x.delete(p) }
+    }
+    pub fn apply_text_edits(&self, files: &[Value], label: &str) -> Result<(Value, Vec<Value>), RuntimeError> {
+        if files.is_empty() || files.len() > 200 { return Err(RuntimeError::new("BAD_EDIT", "批量修改需要 1 到 200 个文件")); }
+        let backend = self.lock()?;
+        let cp = match &*backend { WorkspaceBackend::Local(x) => x.checkpoint_handle(), WorkspaceBackend::Saf(x) => x.checkpoint_handle() };
+        let mut checked = Vec::new();
+        let mut paths = std::collections::HashSet::new();
+        let mut resolved_paths = std::collections::HashSet::new();
+        for f in files {
+            let p = f["path"].as_str().ok_or_else(||RuntimeError::new("BAD_EDIT","缺少文件路径"))?;
+            super::policy::check_write_path(p)?;
+            if !paths.insert(p) { return Err(RuntimeError::new("BAD_EDIT","批量修改包含重复路径")); }
+            let revision = f["revision"].as_str().ok_or_else(||RuntimeError::new("BAD_EDIT","缺少基础 revision"))?;
+            let content = f["content"].as_str().ok_or_else(||RuntimeError::new("BAD_EDIT","缺少文件内容"))?;
+            if content.len() > MAX_READ_BYTES as usize { return Err(RuntimeError::new("TOO_LARGE","重命名文件超过大小上限")); }
+            let before = match &*backend { WorkspaceBackend::Local(x)=>x.read(p)?,WorkspaceBackend::Saf(x)=>x.read(p)? };
+            let canonical = before["path"].as_str().unwrap_or(p);
+            super::policy::check_write_path(canonical)?;
+            if !resolved_paths.insert(canonical.to_owned()) { return Err(RuntimeError::new("BAD_EDIT","批量修改的多个路径指向同一文件")); }
+            if before["revision"].as_str() != Some(revision) { return Err(RuntimeError::new("REVISION_CONFLICT","批量修改的基础版本已过期").with_data(json!({"path":p}))); }
+            if before["binary"].as_bool().unwrap_or(false) { return Err(RuntimeError::new("BAD_EDIT","不能对二进制文件执行语言重命名")); }
+            checked.push((p.to_owned(),revision.to_owned(),content.to_owned(),before["content"].as_str().unwrap_or("").to_owned()));
+        }
+        let task = cp.start_task(label,"edit")?;
+        let id = task["id"].as_str().unwrap_or_default();
+        let mut events = Vec::new();
+        for (p,revision,content,before) in checked {
+            cp.record_before(id,&p,Some(before.as_bytes()))?;
+            let mutation = match &*backend {WorkspaceBackend::Local(x)=>x.write_text(&p,&content,Some(&revision)),WorkspaceBackend::Saf(x)=>x.write_text(&p,&content,Some(&revision))};
+            match mutation {
+                Ok(m) => { if m.changed { let before_blob = cp.blob_for_event_before(Some(before.as_bytes()))?; cp.add_event(id,"edit",&format!("修改 {p}"),json!({"path":p,"before_blob":before_blob,"before_rev":revision,"after_rev":m.result["revision"]}))?; events.push(m.event); } }
+                Err(e) => { cp.finish_task(id,"error",&e.message)?; return Err(e.with_data(json!({"task_id":id,"partial":!events.is_empty(),"recovery":"checkpoint.revert_task"}))); }
+            }
+        }
+        cp.finish_task(id,"done",label)?;
+        Ok((json!({"task_id":id,"files":events.len()}),events))
+    }
     pub fn trash_list(&self)->Result<Vec<Value>,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.trash_list(),WorkspaceBackend::Saf(x)=>x.trash_list()}}
     pub fn trash_delete(&self,id:&str)->Result<(),RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.trash_delete(id),WorkspaceBackend::Saf(x)=>x.trash_delete(id)}}
     pub fn trash_empty(&self)->Result<usize,RuntimeError>{match &*self.lock()?{WorkspaceBackend::Local(x)=>x.trash_empty(),WorkspaceBackend::Saf(x)=>x.trash_empty()}}
@@ -2085,4 +2137,99 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), RuntimeError> {
 fn io_err(code: &'static str, subject: &str) -> impl FnOnce(std::io::Error) -> RuntimeError {
     let subject = subject.to_owned();
     move |e| RuntimeError::new(code, format!("{subject}: {e}"))
+}
+
+#[cfg(test)]
+mod studio_boundary_tests {
+    use super::*;
+
+    fn fixture() -> (Workspace, PathBuf) {
+        let temporary = std::env::temp_dir().join(unique_id("koide-workspace-boundary-"));
+        fs::create_dir_all(temporary.join("project")).unwrap();
+        fs::create_dir_all(temporary.join("data")).unwrap();
+        let workspace = Workspace::open(temporary.join("project").to_str().unwrap(), &temporary.join("data")).unwrap();
+        (workspace, temporary)
+    }
+
+    #[test]
+    fn batch_revision_conflict_never_writes_a_preceding_file() {
+        let (workspace, temporary) = fixture();
+        let first = workspace.write_text("a.ts", "export const first = 1;", None).unwrap();
+        let second = workspace.write_text("b.ts", "export const second = 2;", None).unwrap();
+        workspace.write_text("b.ts", "用户刚修改的内容", None).unwrap();
+        let task_count = workspace.checkpoint_tasks(100).unwrap().len();
+        let error = workspace.apply_text_edits(&[
+            json!({"path":"a.ts","revision":first.result["revision"],"content":"改名后内容"}),
+            json!({"path":"b.ts","revision":second.result["revision"],"content":"不应覆盖"}),
+        ], "符号重命名").unwrap_err();
+        assert_eq!(error.code, "REVISION_CONFLICT");
+        assert_eq!(workspace.read("a.ts").unwrap()["content"], "export const first = 1;");
+        assert_eq!(workspace.read("b.ts").unwrap()["content"], "用户刚修改的内容");
+        assert_eq!(workspace.checkpoint_tasks(100).unwrap().len(), task_count);
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn batch_checkpoint_restores_all_files_and_has_edit_events() {
+        let (workspace, temporary) = fixture();
+        let first = workspace.write_text("a.ts", "export const name = 1;", None).unwrap();
+        let second = workspace.write_text("b.ts", "import {name} from './a';", None).unwrap();
+        let (result, events) = workspace.apply_text_edits(&[
+            json!({"path":"a.ts","revision":first.result["revision"],"content":"export const renamed = 1;"}),
+            json!({"path":"b.ts","revision":second.result["revision"],"content":"import {renamed} from './a';"}),
+        ], "符号重命名").unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(result["files"], 2);
+        let task = workspace.checkpoint_task(result["task_id"].as_str().unwrap()).unwrap();
+        assert_eq!(task["status"], "done");
+        assert_eq!(task["events"].as_array().unwrap().iter().filter(|event|event["type"]=="edit").count(), 2);
+        workspace.checkpoint_revert_task(result["task_id"].as_str().unwrap()).unwrap();
+        assert_eq!(workspace.read("a.ts").unwrap()["content"], "export const name = 1;");
+        assert_eq!(workspace.read("b.ts").unwrap()["content"], "import {name} from './a';");
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn batch_rejects_duplicate_alias_and_hard_policy_before_writing() {
+        let (workspace, temporary) = fixture();
+        let first = workspace.write_text("src/a.ts", "one", None).unwrap();
+        let revision = first.result["revision"].clone();
+        let error = workspace.apply_text_edits(&[
+            json!({"path":"src/a.ts","revision":revision,"content":"two"}),
+            json!({"path":"src/./a.ts","revision":revision,"content":"three"}),
+        ], "符号重命名").unwrap_err();
+        assert_eq!(error.code, "BAD_EDIT");
+        assert_eq!(workspace.read("src/a.ts").unwrap()["content"], "one");
+        workspace.write_text(".env", "secret", None).unwrap();
+        let error = workspace.apply_text_edits(&[
+            json!({"path":"src/a.ts","revision":revision,"content":"two"}),
+            json!({"path":".env","revision":workspace.hash(".env").unwrap()["revision"],"content":"exposed"}),
+        ], "符号重命名").unwrap_err();
+        assert_eq!(error.code, "SENSITIVE_PATH");
+        assert_eq!(workspace.read("src/a.ts").unwrap()["content"], "one");
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn terminal_cwd_stays_in_workspace_and_rejects_files() {
+        let (workspace, temporary) = fixture();
+        workspace.create("nested", "dir", "").unwrap();
+        workspace.write_text("file.txt", "one", None).unwrap();
+        assert_eq!(workspace.terminal_directory(".").unwrap(), workspace.local_root_path().unwrap());
+        assert!(workspace.terminal_directory("nested").unwrap().ends_with("nested"));
+        assert_eq!(workspace.terminal_directory("file.txt").unwrap_err().code, "NOT_A_FOLDER");
+        assert_eq!(workspace.terminal_directory("../data").unwrap_err().code, "OUTSIDE_WORKSPACE");
+        assert_eq!(workspace.terminal_directory(temporary.join("data").to_str().unwrap()).unwrap_err().code, "OUTSIDE_WORKSPACE");
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn unchanged_batch_never_reports_fake_file_edits() {
+        let (workspace, temporary) = fixture();
+        let file = workspace.write_text("a.ts", "one", None).unwrap();
+        let (result, events) = workspace.apply_text_edits(&[json!({"path":"a.ts","revision":file.result["revision"],"content":"one"})], "符号重命名").unwrap();
+        assert_eq!(result["files"], 0);
+        assert!(events.is_empty());
+        fs::remove_dir_all(temporary).unwrap();
+    }
 }

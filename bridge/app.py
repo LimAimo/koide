@@ -38,8 +38,10 @@ from .security.devices import DeviceStore
 from .security.permissions import MODES, TOOL_SETTINGS, PermissionEngine
 from .security.policy import HardPolicy
 from .tools.builtin import build_registry
+from .studio import Studio
+from .preview import PreviewManager
 
-VERSION = "0.9.0"
+VERSION = "1.0.0"
 
 
 class Connection:
@@ -91,6 +93,7 @@ class BridgeApp:
         self.terminals = TerminalManager(self.emit)
         self.export_tokens: dict[str, tuple[str, float]] = {}
         self.workspace: Workspace | None = None
+        self._workspace_transition_lock = asyncio.Lock()
         self.connections: set[Connection] = set()
         self.agent: AgentRun | None = None
         self.pending_approvals: dict[str, dict] = {}
@@ -99,6 +102,7 @@ class BridgeApp:
         self._question_futures: dict[str, asyncio.Future] = {}
         self._terminals: dict[str, asyncio.Event] = {}
         self._watch_task: asyncio.Task | None = None
+        self.preview = PreviewManager(self.data_dir, lan=lan, blocked_ports=(port,))
 
     # ---- settings ----------------------------------------------------------------------------
     def _load_settings(self) -> dict:
@@ -198,7 +202,20 @@ class BridgeApp:
         if fn is None:
             return err("METHOD_NOT_FOUND", f"unknown method {method}")
         try:
-            conn.send({"type": "result", "id": mid, "result": await fn(params, conn)})
+            if not isinstance(params, dict):
+                raise WorkspaceError("BAD_REQUEST", "请求参数必须是对象")
+            async def dispatch():
+                if "workspace_key" in params:
+                    current = Studio(self.workspace).workspace_key if self.workspace else None
+                    if not isinstance(params["workspace_key"], str) or params["workspace_key"] != current:
+                        raise WorkspaceError("WORKSPACE_CHANGED", "项目已切换，此次请求已取消", current_workspace_key=current)
+                return await fn(params, conn)
+            if method in {"workspace.open", "workspace.close", "agent.start", "terminal.run", "terminal.open"}:
+                async with self._workspace_transition_lock:
+                    result = await dispatch()
+            else:
+                result = await dispatch()
+            conn.send({"type": "result", "id": mid, "result": result})
         except WorkspaceError as e:
             err(e.code, e.message, **e.data)
         except TrashError as e:
@@ -236,6 +253,8 @@ class BridgeApp:
 
     # ---- workspace ------------------------------------------------------------------------------------
     async def rpc_workspace_open(self, p, conn):
+        if self.agent:
+            raise WorkspaceError("AGENT_BUSY", "先停止当前 AI 任务，再切换项目")
         roots = [Path(x).expanduser() for x in (p.get("paths") or [p["path"]])]
 
         def build():
@@ -246,6 +265,11 @@ class BridgeApp:
             w.conversations = ConversationStore(self.data_dir / "conversations" / wid)
             return w
         ws = await self._call(build)
+        if self.agent:
+            raise WorkspaceError("AGENT_BUSY", "已有新的 AI 任务开始，未切换项目")
+        await self._call(self.preview.close_all)
+        for cancel in self._terminals.values():
+            cancel.set()
         self.terminals.close_all()
         if self.workspace:
             self.workspace.listeners.clear()
@@ -264,12 +288,26 @@ class BridgeApp:
     async def rpc_workspace_close(self, p, conn):
         if self.agent:
             self.agent.stop()
+        await self._call(self.preview.close_all)
+        for cancel in self._terminals.values():
+            cancel.set()
         self.terminals.close_all()
         if self._watch_task:
             self._watch_task.cancel()
         self.workspace = None
         self.emit("workspace.closed", {})
         return {}
+
+    async def shutdown(self) -> None:
+        """Release project previews when the compatibility server is stopped."""
+        if self.agent:
+            self.agent.stop()
+        if self._watch_task:
+            self._watch_task.cancel()
+        for cancel in self._terminals.values():
+            cancel.set()
+        self.terminals.close_all()
+        await self._call(self.preview.close_all)
 
     async def rpc_workspace_remove_recent(self, p, conn):
         path = str(Path(p["path"]).expanduser().resolve())
@@ -502,7 +540,10 @@ class BridgeApp:
         mode = p.get("mode", "agent")
         if mode not in MODE_CLASSES:
             raise ValueError(f"未知的模式：{mode}")
-        limits = {k: v for k, v in (p.get("limits") or {}).items() if k in ("max_tool_calls", "max_seconds", "max_repair_attempts")}
+        limits = {k: v for k, v in (p.get("limits") or {}).items() if k in ("max_tool_calls", "max_seconds", "max_repair_attempts", "max_tokens", "max_cost_usd", "max_repeated_failures")}
+        from .providers.media import validate_start
+        profile, _ = self.profiles.get(p["profile"])
+        attachments = validate_start(profile, p.get("attachments"), limits)
         store = self.workspace.conversations
         cid = p.get("conversation_id")
         if cid:
@@ -512,7 +553,7 @@ class BridgeApp:
                 cid = None
         if not cid:
             cid = store.create(p["goal"])["id"]
-        run = AgentRun(self, p["goal"], mode, p["profile"], limits, conversation_id=cid, reasoning=p.get("reasoning", "auto"), web_search=bool(p.get("web_search")))
+        run = AgentRun(self, p["goal"], mode, p["profile"], limits, conversation_id=cid, reasoning=p.get("reasoning", "auto"), web_search=bool(p.get("web_search")), attachments=attachments)
         self.agent = run
 
         async def go():
@@ -529,21 +570,115 @@ class BridgeApp:
         return {"stopping": bool(self.agent)}
 
     # ---- terminal (user-run commands) ---------------------------------------------------------------------------------
+    async def rpc_studio_read(self, p, conn):
+        return await self._call(Studio(self._ws()).read)
+
+    async def rpc_studio_write(self, p, conn):
+        return await self._call(Studio(self._ws()).write, p.get("data"), p.get("base_revision"))
+
+    async def rpc_studio_revision(self, p, conn):
+        return await self._call(Studio(self._ws()).revision)
+
+    async def rpc_launch_inspect(self, p, conn):
+        return await self._call(Studio(self._ws()).inspect_launch)
+
+    async def rpc_experiments_list(self, p, conn):
+        return await self._call(Studio(self._ws()).experiments_list)
+
+    async def rpc_experiments_create(self, p, conn):
+        return await self._call(Studio(self._ws()).experiments_create, p["name"], p.get("baseline_id"))
+
+    async def rpc_experiments_diff(self, p, conn):
+        return await self._call(Studio(self._ws()).experiments_diff, p["id"])
+
+    async def rpc_experiments_apply(self, p, conn):
+        if self.agent:
+            raise WorkspaceError("BUSY", "先停止 AI 任务再应用方案")
+        return await self._call(Studio(self._ws()).experiments_apply, p["id"])
+
+    async def rpc_preview_open(self, p, conn):
+        self._ws()
+        return await self._call(self.preview.open, p["url"], p.get("public_host"))
+
+    async def rpc_preview_close(self, p, conn):
+        return await self._call(self.preview.close, p["id"])
+
+    async def rpc_preview_capture(self, p, conn):
+        return await self._call(self.preview.capture, p["id"], p.get("width", 1280), p.get("height", 800))
+
+    async def rpc_studio_apply_edits(self, p, conn):
+        if self.agent:
+            raise WorkspaceError("AGENT_BUSY", "先停止 AI 任务再应用语言服务修改")
+        ws = self._ws()
+        files = p.get("files")
+        if not isinstance(files, list) or not 1 <= len(files) <= 200:
+            raise WorkspaceError("BAD_EDIT", "批量修改需要 1 到 200 个文件")
+        def apply():
+            with ws._lock:
+                if self.workspace is not ws:
+                    raise WorkspaceError("CONFLICT", "项目已切换，语言服务修改已取消")
+                if self.agent:
+                    raise WorkspaceError("AGENT_BUSY", "先停止 AI 任务再应用语言服务修改")
+                seen: set[Path] = set()
+                checked: list[dict] = []
+                for f in files:
+                    if not isinstance(f, dict) or not isinstance(f.get("content"), str) or not isinstance(f.get("revision"), str):
+                        raise WorkspaceError("BAD_EDIT", "修改内容和基础版本无效")
+                    path = f.get("path")
+                    if not isinstance(path, str):
+                        raise WorkspaceError("BAD_EDIT", "路径无效或重复")
+                    target = ws.resolve(path, "write")
+                    verdict = ws.policy.check_path(target, "write")
+                    if verdict:
+                        raise WorkspaceError("POLICY_DENIED", verdict.reason, path=path)
+                    if target in seen:
+                        raise WorkspaceError("BAD_EDIT", "批量修改的多个路径指向同一文件", path=path)
+                    seen.add(target)
+                    if len(f["content"].encode("utf-8")) > 8 * 1024 * 1024:
+                        raise WorkspaceError("TOO_LARGE", "单个修改文件超过 8 MiB")
+                    before = ws.read(path)
+                    if before.get("binary"):
+                        raise WorkspaceError("BAD_EDIT", "不能对二进制文件执行语言重命名", path=path)
+                    if before["revision"] != f["revision"]:
+                        raise WorkspaceError("REVISION_CONFLICT", "批量修改的基础版本已过期", path=path)
+                    checked.append({**f, "path": ws.display(target)})
+                task = ws.checkpoints.start_task(p.get("label", "语言服务重命名"), "edit")
+                try:
+                    for f in checked:
+                        ws.write(f["path"], f["content"], f["revision"], Ctx("user", task["id"]))
+                    ws.checkpoints.finish_task(task["id"], "done", "语言服务修改已应用")
+                except Exception:
+                    ws.checkpoints.finish_task(task["id"], "error", "部分修改可能已应用，可从任务检查点恢复")
+                    raise
+                return {"task_id": task["id"], "files": len(files)}
+        return await self._call(apply)
+
     async def rpc_terminal_run(self, p, conn):
         ws = self._ws()
         cmd = p["command"]
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise WorkspaceError("BAD_COMMAND", "命令不能为空，且必须是字符串")
         verdict = self.policy.check_command(cmd)
         if verdict and verdict.action == "deny":
             raise WorkspaceError("POLICY_DENIED", verdict.reason)
+        cwd = ws.resolve(p.get("cwd") or ".", "read")
+        if not cwd.is_dir():
+            raise WorkspaceError("BAD_PATH", "命令工作目录必须是工作区内的文件夹")
         tid, cancel = uuid.uuid4().hex[:8], asyncio.Event()
         self._terminals[tid] = cancel
 
         async def go():
             self.emit("terminal.start", {"source": "user", "id": tid, "command": cmd})
-            res = await run_shell(cmd, str(ws.primary), float(p.get("timeout_seconds", 600)), cancel,
-                                  lambda s, t: self.emit("terminal.output", {"source": "user", "id": tid, "stream": s, "data": t}))
-            self.emit("terminal.exit", {"source": "user", "id": tid, "exit_code": res["exit_code"]})
-            self._terminals.pop(tid, None)
+            try:
+                res = await run_shell(cmd, str(cwd), float(p.get("timeout_seconds", 600)), cancel,
+                                      lambda s, t: self.emit("terminal.output", {"source": "user", "id": tid, "stream": s, "data": t}))
+                self.emit("terminal.exit", {"source": "user", "id": tid, "exit_code": res["exit_code"],
+                                            "timed_out": res["timed_out"], "cancelled": res["cancelled"]})
+            except Exception as error:
+                self.emit("terminal.exit", {"source": "user", "id": tid, "exit_code": -1, "timed_out": False,
+                                            "cancelled": cancel.is_set(), "error": {"code": "PROCESS_START_FAILED", "message": str(error)}})
+            finally:
+                self._terminals.pop(tid, None)
         asyncio.create_task(go())
         return {"id": tid}
 

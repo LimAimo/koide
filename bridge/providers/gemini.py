@@ -5,6 +5,7 @@ import json
 import urllib.request
 
 from .sse_base import SseProvider
+from .media import converted_content, ensure_vision, normalize_usage
 
 
 def clean_schema(schema):
@@ -32,7 +33,7 @@ def convert_messages(messages: list) -> tuple[str, list]:
             system_parts.append(str(m.get("content") or ""))
         elif role == "user":
             flush()
-            contents.append({"role": "user", "parts": [{"text": str(m.get("content") or "")}]})
+            contents.append({"role": "user", "parts": converted_content(m.get("content"), True)})
         elif role == "assistant":
             flush()
             parts = []
@@ -44,7 +45,10 @@ def convert_messages(messages: list) -> tuple[str, list]:
                     args = json.loads(tc["function"].get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                parts.append({"functionCall": {"name": tc["function"]["name"], "args": args}})
+                part = {"functionCall": {"name": tc["function"]["name"], "args": args}}
+                if tc.get("thought_signature"):
+                    part["thoughtSignature"] = tc["thought_signature"]
+                parts.append(part)
             if parts:
                 contents.append({"role": "model", "parts": parts})
         elif role == "tool":
@@ -79,6 +83,7 @@ class GeminiProvider(SseProvider):
         return sorted(dict.fromkeys(ids), key=str.lower)
 
     def _request(self, profile, api_key, messages, tools):
+        ensure_vision(profile, messages)
         system, contents = convert_messages(messages)
         body: dict = {"contents": contents}
         if system:
@@ -114,6 +119,8 @@ class GeminiProvider(SseProvider):
         return urllib.request.Request(url, json.dumps(body).encode("utf-8"), headers, method="POST")
 
     def handle(self, chunk, emit, state):
+        if isinstance(chunk.get("usageMetadata"), dict):
+            emit({"type": "usage", "usage": normalize_usage("gemini_native", chunk["usageMetadata"])})
         if chunk.get("error"):
             emit({"type": "error", "message": str(chunk["error"])[:500], "truncated": False})
             return "abort"
@@ -126,7 +133,8 @@ class GeminiProvider(SseProvider):
                 elif "functionCall" in part:
                     fc = part["functionCall"]
                     idx = len(state["calls"])
-                    state["calls"][idx] = {"id": None, "name": fc.get("name", ""), "args": json.dumps(fc.get("args") or {})}
+                    state["calls"][idx] = {"id": None, "name": fc.get("name", ""), "args": json.dumps(fc.get("args") or {}),
+                                           "extra_tc": {"thought_signature": part["thoughtSignature"]} if part.get("thoughtSignature") else None}
                     emit({"type": "tool_call_delta", "index": idx, "id": None, "name": fc.get("name", ""), "args_chunk": ""})
             if cand.get("finishReason"):
                 self.complete_calls(state, emit, cand["finishReason"])
