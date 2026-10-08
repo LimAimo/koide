@@ -40,3 +40,5 @@ Koide 是一个本地优先的 AI IDE。`apps/native/` 是 Tauri 2 + Rust Native
 - Rust：业务错误必须映射为稳定 `RuntimeError` code；平台不支持能力应显式返回错误/capability，而不是假成功。
 - 编辑器只能通过适配器接口使用（见 `docs/editor-adapters.md`）。
 - 每次行为变化都补测试；安全语义变化必须有回归覆盖。
+- 完成更改后，请使用中文提交信息，提交到本地
+- 需要升级版本号和更新更新日志时，请在 `CHANGELOG.md` 中添加条目
